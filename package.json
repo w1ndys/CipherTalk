@@ -8,6 +8,8 @@
   "scripts": {
     "dev": "vite",
     "prebuild": "node scripts/update-readme-version.js",
+    "native:macos": "bash native-dlls/build-macos.sh",
+    "native:macos:check": "node scripts/check-macos-native.js",
     "build:full": "node scripts/build-full.js",
     "build": "tsc && vite build && electron-builder && node scripts/add-size-to-yml.js",
     "build:pro": "node scripts/build-full.js",
