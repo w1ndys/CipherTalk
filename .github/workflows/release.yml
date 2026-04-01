@@ -1,0 +1,119 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    env:
+      FORCE_UPDATE_MIN_VERSION: ${{ vars.FORCE_UPDATE_MIN_VERSION }}
+      FORCE_UPDATE_BLOCKED_VERSIONS: ${{ vars.FORCE_UPDATE_BLOCKED_VERSIONS }}
+      FORCE_UPDATE_TITLE: ${{ vars.FORCE_UPDATE_TITLE }}
+      FORCE_UPDATE_MESSAGE: ${{ vars.FORCE_UPDATE_MESSAGE }}
+      FORCE_UPDATE_RELEASE_NOTES: ${{ vars.FORCE_UPDATE_RELEASE_NOTES }}
+      R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+      R2_BUCKET_NAME: ${{ secrets.R2_BUCKET_NAME }}
+      R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+      R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 18
+          cache: npm
+
+      - name: Read package version
+        id: version
+        shell: pwsh
+        run: |
+          $pkg = Get-Content package.json -Raw | ConvertFrom-Json
+          "version=$($pkg.version)" >> $env:GITHUB_OUTPUT
+          "tag=${env:GITHUB_REF_NAME}" >> $env:GITHUB_OUTPUT
+
+      - name: Validate tag matches package version
+        shell: pwsh
+        run: |
+          $expectedTag = "v${{ steps.version.outputs.version }}"
+          $actualTag = "${{ steps.version.outputs.tag }}"
+          if ($actualTag -ne $expectedTag) {
+            Write-Error "Tag $actualTag does not match package.json version $expectedTag"
+            exit 1
+          }
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Rebuild native modules
+        run: npx electron-rebuild
+
+      - name: Build app
+        run: npm run build
+
+      - name: Generate force update manifest
+        run: npm run build:force-update-manifest
+
+      - name: Ensure AWS CLI
+        shell: pwsh
+        run: |
+          if (-not (Get-Command aws -ErrorAction SilentlyContinue)) {
+            choco install awscli -y
+          }
+          aws --version
+
+      - name: Validate release files
+        shell: pwsh
+        run: |
+          $version = "${{ steps.version.outputs.version }}"
+          $installer = "release/CipherTalk-$version-Setup.exe"
+          if (-not (Test-Path $installer)) {
+            Write-Error "Installer not found: $installer"
+            exit 1
+          }
+          if (-not (Test-Path "release/latest.yml")) {
+            Write-Error "latest.yml not found"
+            exit 1
+          }
+          if (-not (Test-Path "release/force-update.json")) {
+            Write-Error "force-update.json not found"
+            exit 1
+          }
+
+      - name: Create or update GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          generate_release_notes: true
+          fail_on_unmatched_files: false
+          files: |
+            release/CipherTalk-${{ steps.version.outputs.version }}-Setup.exe
+            release/latest.yml
+            release/force-update.json
+            release/*.blockmap
+
+      - name: Upload mirrored files to R2
+        shell: pwsh
+        run: |
+          if (-not $env:R2_ACCOUNT_ID -or -not $env:R2_BUCKET_NAME -or -not $env:R2_ACCESS_KEY_ID -or -not $env:R2_SECRET_ACCESS_KEY) {
+            Write-Error "R2 secrets are required"
+            exit 1
+          }
+
+          $env:AWS_ACCESS_KEY_ID = $env:R2_ACCESS_KEY_ID
+          $env:AWS_SECRET_ACCESS_KEY = $env:R2_SECRET_ACCESS_KEY
+          $env:AWS_DEFAULT_REGION = "auto"
+          $endpoint = "https://$($env:R2_ACCOUNT_ID).r2.cloudflarestorage.com"
+          $bucket = "s3://$($env:R2_BUCKET_NAME)"
+          $version = "${{ steps.version.outputs.version }}"
+
+          aws s3 cp "release/CipherTalk-$version-Setup.exe" "$bucket/CipherTalk-$version-Setup.exe" --endpoint-url $endpoint
+          aws s3 cp "release/latest.yml" "$bucket/latest.yml" --endpoint-url $endpoint
+          aws s3 cp "release/force-update.json" "$bucket/force-update.json" --endpoint-url $endpoint

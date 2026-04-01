@@ -252,6 +252,28 @@ FORCE_UPDATE_MIN_VERSION=2.2.15 npm run build:force-update-manifest
 - **自定义源可上传**：`force-update.json`
 - 自定义源不再承担安装包和 `latest.yml` 分发
 
+### 自动发布
+
+仓库使用 GitHub Actions 自动发布。
+
+触发方式：
+
+1. 修改 `package.json.version`
+2. 提交并推送代码
+3. 推送同版本 Git 标签，例如：
+
+```bash
+git tag v2.2.14
+git push origin v2.2.14
+```
+
+只有推送 `v*` 标签时才会正式构建并发布，不会在普通 `push main` 时自动发版。
+
+自动发布内容：
+
+- GitHub Release：安装包、`latest.yml`、`force-update.json`
+- Cloudflare R2：安装包、`latest.yml`、`force-update.json`
+
 ### v1 工具
 
 - `health_check`
