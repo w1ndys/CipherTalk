@@ -81,12 +81,62 @@ export interface ElectronAPI {
       cwd: string
       mode: 'dev' | 'packaged'
     } | null>
-    checkForUpdates: () => Promise<{ hasUpdate: boolean; version?: string; releaseNotes?: string }>
+    getUpdateState: () => Promise<{
+      hasUpdate: boolean
+      forceUpdate: boolean
+      currentVersion: string
+      version?: string
+      releaseNotes?: string
+      title?: string
+      message?: string
+      minimumSupportedVersion?: string
+      reason?: 'minimum-version' | 'blocked-version'
+      checkedAt: number
+      updateSource: 'github' | 'custom' | 'none'
+      policySource: 'github' | 'custom' | 'none'
+    } | null>
+    getUpdateSourceInfo: () => Promise<{
+      primaryUpdateSource: 'github'
+      githubRepository: {
+        owner: string
+        repo: string
+      }
+      policySources: Array<'github' | 'custom'>
+      policyPrecedence: 'github'
+      forceUpdatePolicyFallbackUrl: string
+    }>
+    checkForUpdates: () => Promise<{
+      hasUpdate: boolean
+      forceUpdate: boolean
+      currentVersion: string
+      version?: string
+      releaseNotes?: string
+      title?: string
+      message?: string
+      minimumSupportedVersion?: string
+      reason?: 'minimum-version' | 'blocked-version'
+      checkedAt: number
+      updateSource: 'github' | 'custom' | 'none'
+      policySource: 'github' | 'custom' | 'none'
+    }>
     downloadAndInstall: () => Promise<void>
     getStartupDbConnected?: () => Promise<boolean>
     setAppIcon: (iconName: string) => Promise<void>
     onDownloadProgress: (callback: (progress: number) => void) => () => void
-    onUpdateAvailable: (callback: (info: { version: string; releaseNotes: string }) => void) => () => void
+    onUpdateAvailable: (callback: (info: {
+      hasUpdate: boolean
+      forceUpdate: boolean
+      currentVersion: string
+      version?: string
+      releaseNotes?: string
+      title?: string
+      message?: string
+      minimumSupportedVersion?: string
+      reason?: 'minimum-version' | 'blocked-version'
+      checkedAt: number
+      updateSource: 'github' | 'custom' | 'none'
+      policySource: 'github' | 'custom' | 'none'
+    }) => void) => () => void
   }
   httpApi: {
     getStatus: () => Promise<{

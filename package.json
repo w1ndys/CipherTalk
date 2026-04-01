@@ -12,6 +12,7 @@
     "build": "tsc && vite build && electron-builder && node scripts/add-size-to-yml.js",
     "build:mcp": "tsc && vite build",
     "build:pro": "node scripts/build-full.js",
+    "build:force-update-manifest": "node scripts/generate-force-update-manifest.js",
     "mcp": "node scripts/mcp-runner.js",
     "mcp:probe": "node scripts/mcp-probe.js",
     "preview": "vite preview",
@@ -88,8 +89,9 @@
       "output": "release"
     },
     "publish": {
-      "provider": "generic",
-      "url": "https://miyuapp.aiqji.com"
+      "provider": "github",
+      "owner": "ILoveBingLu",
+      "repo": "CipherTalk"
     },
     "win": {
       "icon": "public/xinnian.ico",

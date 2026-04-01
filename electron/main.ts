@@ -3,6 +3,7 @@ import { join } from 'path'
 import { readFileSync, existsSync, mkdirSync } from 'fs'
 import { autoUpdater } from 'electron-updater'
 import { DatabaseService } from './services/database'
+import { appUpdateService } from './services/appUpdateService'
 
 import { wechatDecryptService } from './services/decryptService'
 import { ConfigService } from './services/config'
@@ -60,29 +61,6 @@ protocol.registerSchemesAsPrivileged([
 autoUpdater.autoDownload = false
 autoUpdater.autoInstallOnAppQuit = true
 autoUpdater.disableDifferentialDownload = true  // 禁用差分更新，强制全量下载
-
-/**
- * 比较两个语义化版本号
- * @param version1 版本1
- * @param version2 版本2
- * @returns version1 > version2 返回 true
- */
-function isNewerVersion(version1: string, version2: string): boolean {
-  const v1Parts = version1.split('.').map(Number)
-  const v2Parts = version2.split('.').map(Number)
-
-  // 补齐版本号位数
-  const maxLength = Math.max(v1Parts.length, v2Parts.length)
-  while (v1Parts.length < maxLength) v1Parts.push(0)
-  while (v2Parts.length < maxLength) v2Parts.push(0)
-
-  for (let i = 0; i < maxLength; i++) {
-    if (v1Parts[i] > v2Parts[i]) return true
-    if (v1Parts[i] < v2Parts[i]) return false
-  }
-
-  return false // 版本相同
-}
 
 // 单例服务
 let dbService: DatabaseService | null = null
@@ -237,6 +215,12 @@ function createWindow() {
 
   // 监听窗口关闭事件
   win.on('close', (event) => {
+    const updateInfo = appUpdateService.getCachedUpdateInfo()
+    if (updateInfo?.forceUpdate) {
+      app.isQuitting = true
+      return
+    }
+
     // 如果是真正退出应用，不阻止
     if (app.isQuitting) {
       return
@@ -1297,25 +1281,20 @@ function registerIpcHandlers() {
   })
 
   ipcMain.handle('app:checkForUpdates', async () => {
-    try {
-      const result = await autoUpdater.checkForUpdates()
-      if (result && result.updateInfo) {
-        const currentVersion = app.getVersion()
-        const latestVersion = result.updateInfo.version
+    return appUpdateService.checkForUpdates()
+  })
 
-        // 使用语义化版本比较
-        if (isNewerVersion(latestVersion, currentVersion)) {
-          return {
-            hasUpdate: true,
-            version: latestVersion,
-            releaseNotes: result.updateInfo.releaseNotes as string || ''
-          }
-        }
-      }
-      return { hasUpdate: false }
-    } catch (error) {
-      console.error('检查更新失败:', error)
-      return { hasUpdate: false }
+  ipcMain.handle('app:getUpdateState', async () => {
+    return appUpdateService.getCachedUpdateInfo()
+  })
+
+  ipcMain.handle('app:getUpdateSourceInfo', async () => {
+    return {
+      primaryUpdateSource: 'github' as const,
+      githubRepository: appUpdateService.getGithubRepository(),
+      policySources: ['github', 'custom'] as const,
+      policyPrecedence: 'github' as const,
+      forceUpdatePolicyFallbackUrl: appUpdateService.getForceUpdatePolicyFallbackUrl()
     }
   })
 
@@ -3708,19 +3687,9 @@ function checkForUpdatesOnStartup() {
   // 延迟3秒检测，等待窗口完全加载
   setTimeout(async () => {
     try {
-      const result = await autoUpdater.checkForUpdates()
-      if (result && result.updateInfo) {
-        const currentVersion = app.getVersion()
-        const latestVersion = result.updateInfo.version
-
-        // 使用语义化版本比较
-        if (isNewerVersion(latestVersion, currentVersion) && mainWindow) {
-          // 通知渲染进程有新版本
-          mainWindow.webContents.send('app:updateAvailable', {
-            version: latestVersion,
-            releaseNotes: result.updateInfo.releaseNotes || ''
-          })
-        }
+      const result = await appUpdateService.checkForUpdates()
+      if (result.hasUpdate && mainWindow) {
+        mainWindow.webContents.send('app:updateAvailable', result)
       }
     } catch (error) {
       console.error('启动时检查更新失败:', error)

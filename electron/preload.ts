@@ -71,6 +71,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     getDownloadsPath: () => ipcRenderer.invoke('app:getDownloadsPath'),
     getVersion: () => ipcRenderer.invoke('app:getVersion'),
     getMcpLaunchConfig: () => getMcpLaunchConfigSafe(),
+    getUpdateState: () => ipcRenderer.invoke('app:getUpdateState'),
+    getUpdateSourceInfo: () => ipcRenderer.invoke('app:getUpdateSourceInfo'),
     checkForUpdates: () => ipcRenderer.invoke('app:checkForUpdates'),
     downloadAndInstall: () => ipcRenderer.invoke('app:downloadAndInstall'),
     getStartupDbConnected: () => ipcRenderer.invoke('app:getStartupDbConnected'),
@@ -79,7 +81,20 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.on('app:downloadProgress', (_, progress) => callback(progress))
       return () => ipcRenderer.removeAllListeners('app:downloadProgress')
     },
-    onUpdateAvailable: (callback: (info: { version: string; releaseNotes: string }) => void) => {
+    onUpdateAvailable: (callback: (info: {
+      hasUpdate: boolean
+      forceUpdate: boolean
+      currentVersion: string
+      version?: string
+      releaseNotes?: string
+      title?: string
+      message?: string
+      minimumSupportedVersion?: string
+      reason?: 'minimum-version' | 'blocked-version'
+      checkedAt: number
+      updateSource: 'github' | 'custom' | 'none'
+      policySource: 'github' | 'custom' | 'none'
+    }) => void) => {
       ipcRenderer.on('app:updateAvailable', (_, info) => callback(info))
       return () => ipcRenderer.removeAllListeners('app:updateAvailable')
     }

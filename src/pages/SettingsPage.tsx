@@ -98,7 +98,30 @@ function SettingsPage() {
   const [isDownloading, setIsDownloading] = useState(false)
   const [downloadProgress, setDownloadProgress] = useState(0)
   const [appVersion, setAppVersion] = useState('')
-  const [updateInfo, setUpdateInfo] = useState<{ hasUpdate: boolean; version?: string; releaseNotes?: string } | null>(null)
+  const [updateInfo, setUpdateInfo] = useState<{
+    hasUpdate: boolean
+    forceUpdate: boolean
+    currentVersion: string
+    version?: string
+    releaseNotes?: string
+    title?: string
+    message?: string
+    minimumSupportedVersion?: string
+    reason?: 'minimum-version' | 'blocked-version'
+    checkedAt: number
+    updateSource: 'github' | 'custom' | 'none'
+    policySource: 'github' | 'custom' | 'none'
+  } | null>(null)
+  const [updateSourceInfo, setUpdateSourceInfo] = useState<{
+    primaryUpdateSource: 'github'
+    githubRepository: {
+      owner: string
+      repo: string
+    }
+    policySources: Array<'github' | 'custom'>
+    policyPrecedence: 'github'
+    forceUpdatePolicyFallbackUrl: string
+  } | null>(null)
   const [keyStatus, setKeyStatus] = useState('')
   const [message, setMessage] = useState<{ text: string; success: boolean } | null>(null)
   const [showDecryptKey, setShowDecryptKey] = useState(false)
@@ -466,7 +489,7 @@ function SettingsPage() {
       const result = await window.electronAPI.app.checkForUpdates()
       if (result.hasUpdate) {
         setUpdateInfo(result)
-        showMessage(`发现新版本 ${result.version}`, true)
+        showMessage(result.forceUpdate ? `检测到强制更新 ${result.version}` : `发现新版本 ${result.version}`, true)
       } else {
         showMessage('当前已是最新版本', true)
       }
@@ -2646,6 +2669,14 @@ function SettingsPage() {
     }
   }, [location.state])
 
+  useEffect(() => {
+    window.electronAPI.app.getUpdateSourceInfo?.().then((info) => {
+      setUpdateSourceInfo(info)
+    }).catch((error) => {
+      console.error('获取更新源信息失败:', error)
+    })
+  }, [])
+
   const renderAboutTab = () => (
     <div className="tab-content about-tab">
       <div className="about-card">
@@ -2657,9 +2688,24 @@ function SettingsPage() {
         <p className="about-version">v{appVersion || '...'}</p>
 
         <div className="about-update">
+          {updateSourceInfo && (
+            <div className="update-hint" style={{ marginBottom: '10px' }}>
+              主更新源：GitHub Release ({updateSourceInfo.githubRepository.owner}/{updateSourceInfo.githubRepository.repo})<br />
+              策略补充源：{updateSourceInfo.forceUpdatePolicyFallbackUrl}
+            </div>
+          )}
           {updateInfo?.hasUpdate ? (
             <>
-              <p className="update-hint">新版本 v{updateInfo.version} 可用</p>
+              <p className="update-hint">
+                {updateInfo.forceUpdate ? '检测到强制更新' : `新版本 v${updateInfo.version} 可用`}
+              </p>
+              <p className="update-hint">
+                更新来源：{updateInfo.updateSource === 'github' ? 'GitHub Release' : '未知'} / 策略来源：
+                {updateInfo.policySource === 'github' ? 'GitHub' : updateInfo.policySource === 'custom' ? '自定义源' : '无'}
+              </p>
+              {updateInfo.forceUpdate && updateInfo.minimumSupportedVersion && (
+                <p className="update-hint">最低安全版本：v{updateInfo.minimumSupportedVersion}</p>
+              )}
               {isDownloading ? (
                 <div className="download-progress">
                   <div className="progress-bar">

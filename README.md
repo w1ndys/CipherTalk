@@ -206,6 +206,52 @@ npm run mcp
 
 安装版会附带 `ciphertalk-mcp.cmd` 伴随启动器，放在安装目录根部，可直接作为宿主的 `command` 使用。
 
+### 强制更新清单
+
+当前更新架构：
+
+- **主更新源**：GitHub Release（安装包、`latest.yml`）
+- **策略补充源**：`https://miyuapp.aiqji.com`
+- **策略优先级**：GitHub 优先，自定义源仅在 GitHub 策略不可用时作为回退
+
+应用启动时会按以下顺序请求 `force-update.json`，用于判定：
+
+1. `https://github.com/ILoveBingLu/CipherTalk/releases/latest/download/force-update.json`
+2. `https://miyuapp.aiqji.com/force-update.json`
+
+策略字段含义：
+
+- 最低安全版本 `minimumSupportedVersion`
+- 被封禁版本列表 `blockedVersions`
+- 强制更新提示文案 `title` / `message`
+
+可用以下命令在 `release/force-update.json` 生成清单：
+
+```bash
+FORCE_UPDATE_MIN_VERSION=2.2.15 npm run build:force-update-manifest
+```
+
+示例结构：
+
+```json
+{
+  "schemaVersion": 1,
+  "latestVersion": "2.2.15",
+  "minimumSupportedVersion": "2.2.14",
+  "blockedVersions": ["2.2.13"],
+  "title": "必须更新到最新版本",
+  "message": "当前版本存在安全风险，请立即更新。",
+  "releaseNotes": "修复关键安全问题",
+  "publishedAt": "2026-04-01T00:00:00.000Z"
+}
+```
+
+发布要求：
+
+- **GitHub Release 必须上传**：安装包、`latest.yml`、`force-update.json`
+- **自定义源可上传**：`force-update.json`
+- 自定义源不再承担安装包和 `latest.yml` 分发
+
 ### v1 工具
 
 - `health_check`
