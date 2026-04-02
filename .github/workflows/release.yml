@@ -103,12 +103,17 @@ jobs:
         run: |
           $version = "${{ needs.prepare-meta.outputs.version }}"
           $installer = "release/CipherTalk-$version-Setup.exe"
+          $blockmaps = Get-ChildItem "release" -Filter "*.blockmap" -ErrorAction SilentlyContinue
           if (-not (Test-Path $installer)) {
             Write-Error "Installer not found: $installer"
             exit 1
           }
           if (-not (Test-Path "release/latest.yml")) {
             Write-Error "latest.yml not found"
+            exit 1
+          }
+          if (-not $blockmaps -or $blockmaps.Count -lt 1) {
+            Write-Error "blockmap not found"
             exit 1
           }
 
@@ -206,6 +211,7 @@ jobs:
         run: |
           $version = "${{ needs.prepare-meta.outputs.version }}"
           $installer = "release/CipherTalk-$version-Setup.exe"
+          $blockmaps = Get-ChildItem "release" -Filter "*.blockmap" -ErrorAction SilentlyContinue
           if (-not (Test-Path $installer)) {
             Write-Error "Installer not found: $installer"
             exit 1
@@ -220,6 +226,10 @@ jobs:
           }
           if (-not (Test-Path "release/release-body.md")) {
             Write-Error "release-body.md not found"
+            exit 1
+          }
+          if (-not $blockmaps -or $blockmaps.Count -lt 1) {
+            Write-Error "blockmap not found"
             exit 1
           }
 
@@ -282,10 +292,23 @@ jobs:
           $bucket = "s3://$($env:R2_BUCKET_NAME)"
           $version = "${{ needs.prepare-meta.outputs.version }}"
           $currentInstaller = "CipherTalk-$version-Setup.exe"
+          $currentBlockmaps = Get-ChildItem "release" -Filter "*.blockmap" -ErrorAction SilentlyContinue
+
+          if (-not $currentBlockmaps -or $currentBlockmaps.Count -lt 1) {
+            Write-Error "blockmap not found"
+            exit 1
+          }
 
           $existingInstallers = aws s3 ls $bucket --endpoint-url $endpoint | ForEach-Object {
             $line = $_.ToString().Trim()
             if ($line -match 'CipherTalk-.*-Setup\.exe$') {
+              ($line -split '\s+')[-1]
+            }
+          } | Where-Object { $_ }
+
+          $existingBlockmaps = aws s3 ls $bucket --endpoint-url $endpoint | ForEach-Object {
+            $line = $_.ToString().Trim()
+            if ($line -match '\.blockmap$') {
               ($line -split '\s+')[-1]
             }
           } | Where-Object { $_ }
@@ -296,9 +319,18 @@ jobs:
             }
           }
 
+          foreach ($blockmap in $existingBlockmaps) {
+            if ($currentBlockmaps.Name -notcontains $blockmap) {
+              aws s3 rm "$bucket/$blockmap" --endpoint-url $endpoint
+            }
+          }
+
           aws s3 cp "release/$currentInstaller" "$bucket/$currentInstaller" --endpoint-url $endpoint
           aws s3 cp "release/latest.yml" "$bucket/latest.yml" --endpoint-url $endpoint
           aws s3 cp "release/force-update.json" "$bucket/force-update.json" --endpoint-url $endpoint
+          foreach ($blockmap in $currentBlockmaps) {
+            aws s3 cp $blockmap.FullName "$bucket/$($blockmap.Name)" --endpoint-url $endpoint
+          }
 
   notify-telegram-success:
     runs-on: windows-latest

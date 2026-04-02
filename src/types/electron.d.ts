@@ -94,6 +94,18 @@ export interface ElectronAPI {
       checkedAt: number
       updateSource: 'github' | 'custom' | 'none'
       policySource: 'github' | 'custom' | 'none'
+      diagnostics?: {
+        phase: 'idle' | 'checking' | 'available' | 'downloading' | 'downloaded' | 'installing' | 'failed'
+        strategy: 'unknown' | 'differential' | 'full'
+        fallbackToFull: boolean
+        lastError?: string
+        lastEvent?: string
+        progressPercent?: number
+        downloadedBytes?: number
+        totalBytes?: number
+        targetVersion?: string
+        lastUpdatedAt: number
+      }
     } | null>
     getUpdateSourceInfo: () => Promise<{
       primaryUpdateSource: 'github'
@@ -118,6 +130,18 @@ export interface ElectronAPI {
       checkedAt: number
       updateSource: 'github' | 'custom' | 'none'
       policySource: 'github' | 'custom' | 'none'
+      diagnostics?: {
+        phase: 'idle' | 'checking' | 'available' | 'downloading' | 'downloaded' | 'installing' | 'failed'
+        strategy: 'unknown' | 'differential' | 'full'
+        fallbackToFull: boolean
+        lastError?: string
+        lastEvent?: string
+        progressPercent?: number
+        downloadedBytes?: number
+        totalBytes?: number
+        targetVersion?: string
+        lastUpdatedAt: number
+      }
     }>
     downloadAndInstall: () => Promise<void>
     getStartupDbConnected?: () => Promise<boolean>
@@ -136,6 +160,18 @@ export interface ElectronAPI {
       checkedAt: number
       updateSource: 'github' | 'custom' | 'none'
       policySource: 'github' | 'custom' | 'none'
+      diagnostics?: {
+        phase: 'idle' | 'checking' | 'available' | 'downloading' | 'downloaded' | 'installing' | 'failed'
+        strategy: 'unknown' | 'differential' | 'full'
+        fallbackToFull: boolean
+        lastError?: string
+        lastEvent?: string
+        progressPercent?: number
+        downloadedBytes?: number
+        totalBytes?: number
+        targetVersion?: string
+        lastUpdatedAt: number
+      }
     }) => void) => () => void
   }
   httpApi: {

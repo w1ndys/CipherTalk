@@ -8,6 +8,8 @@ const FORCE_UPDATE_POLICY_FALLBACK_URL = 'https://miyuapp.aiqji.com'
 
 export type ForceUpdateReason = 'minimum-version' | 'blocked-version'
 export type AppUpdateSource = 'github' | 'custom' | 'none'
+export type UpdateDownloadPhase = 'idle' | 'checking' | 'available' | 'downloading' | 'downloaded' | 'installing' | 'failed'
+export type UpdateDownloadStrategy = 'unknown' | 'differential' | 'full'
 
 export interface ForceUpdateManifest {
   schemaVersion: number
@@ -33,6 +35,20 @@ export interface AppUpdateInfo {
   checkedAt: number
   updateSource: AppUpdateSource
   policySource: AppUpdateSource
+  diagnostics?: UpdateDiagnostics
+}
+
+export interface UpdateDiagnostics {
+  phase: UpdateDownloadPhase
+  strategy: UpdateDownloadStrategy
+  fallbackToFull: boolean
+  lastError?: string
+  lastEvent?: string
+  progressPercent?: number
+  downloadedBytes?: number
+  totalBytes?: number
+  targetVersion?: string
+  lastUpdatedAt: number
 }
 
 type ManifestLookupResult = {
@@ -114,6 +130,12 @@ async function resolveForceUpdateManifest(): Promise<ManifestLookupResult> {
 
 class AppUpdateService {
   private lastInfo: AppUpdateInfo | null = null
+  private diagnostics: UpdateDiagnostics = {
+    phase: 'idle',
+    strategy: 'unknown',
+    fallbackToFull: false,
+    lastUpdatedAt: Date.now()
+  }
 
   getCachedUpdateInfo(): AppUpdateInfo | null {
     return this.lastInfo
@@ -138,8 +160,66 @@ class AppUpdateService {
       checkedAt: Date.now(),
       updateSource: 'none',
       policySource: 'none',
+      diagnostics: this.diagnostics,
       ...payload
     }
+  }
+
+  resetDiagnostics(targetVersion?: string): void {
+    this.diagnostics = {
+      phase: 'idle',
+      strategy: 'unknown',
+      fallbackToFull: false,
+      targetVersion,
+      lastUpdatedAt: Date.now()
+    }
+  }
+
+  updateDiagnostics(patch: Partial<UpdateDiagnostics>): void {
+    this.diagnostics = {
+      ...this.diagnostics,
+      ...patch,
+      lastUpdatedAt: Date.now()
+    }
+
+    if (this.lastInfo) {
+      this.lastInfo = {
+        ...this.lastInfo,
+        diagnostics: this.diagnostics
+      }
+    }
+  }
+
+  noteUpdaterMessage(message: string, level: 'info' | 'warn' | 'error' = 'info'): void {
+    const normalized = message.toLowerCase()
+    const patch: Partial<UpdateDiagnostics> = { lastEvent: message }
+
+    if (normalized.includes('differential')) {
+      patch.strategy = 'differential'
+    }
+
+    if (
+      normalized.includes('fallback to full') ||
+      normalized.includes('fallback to full download') ||
+      normalized.includes('cannot download differentially') ||
+      normalized.includes('cannot download differentially, fallback to full download')
+    ) {
+      patch.strategy = 'full'
+      patch.fallbackToFull = true
+      patch.lastEvent = '差分更新失败，已回退到全量下载'
+      if (this.diagnostics.phase === 'idle') {
+        patch.phase = 'downloading'
+      }
+    }
+
+    if (level === 'error') {
+      patch.lastError = message
+      if (this.diagnostics.phase !== 'downloaded' && this.diagnostics.phase !== 'installing') {
+        patch.phase = 'failed'
+      }
+    }
+
+    this.updateDiagnostics(patch)
   }
 
   async checkForUpdates(): Promise<AppUpdateInfo> {
@@ -149,6 +229,12 @@ class AppUpdateService {
     let hasUpdate = false
     let updateSource: AppUpdateSource = 'none'
 
+    this.resetDiagnostics()
+    this.updateDiagnostics({
+      phase: 'checking',
+      lastEvent: '开始检查更新'
+    })
+
     try {
       const result = await autoUpdater.checkForUpdates()
       if (result?.updateInfo?.version) {
@@ -156,8 +242,23 @@ class AppUpdateService {
         releaseNotes = normalizeReleaseNotes(result.updateInfo.releaseNotes)
         hasUpdate = isNewerVersion(latestVersion, currentVersion)
         updateSource = hasUpdate ? 'github' : 'none'
+        this.updateDiagnostics({
+          phase: hasUpdate ? 'available' : 'idle',
+          targetVersion: latestVersion,
+          lastEvent: hasUpdate ? `检测到新版本 ${latestVersion}` : '当前已是最新版本'
+        })
+      } else {
+        this.updateDiagnostics({
+          phase: 'idle',
+          lastEvent: '未获取到远端版本信息'
+        })
       }
     } catch (error) {
+      this.updateDiagnostics({
+        phase: 'failed',
+        lastError: String(error),
+        lastEvent: '检查更新失败'
+      })
       console.error('[AppUpdate] 检查 GitHub 更新失败:', error)
     }
 

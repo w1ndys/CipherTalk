@@ -111,6 +111,18 @@ function SettingsPage() {
     checkedAt: number
     updateSource: 'github' | 'custom' | 'none'
     policySource: 'github' | 'custom' | 'none'
+    diagnostics?: {
+      phase: 'idle' | 'checking' | 'available' | 'downloading' | 'downloaded' | 'installing' | 'failed'
+      strategy: 'unknown' | 'differential' | 'full'
+      fallbackToFull: boolean
+      lastError?: string
+      lastEvent?: string
+      progressPercent?: number
+      downloadedBytes?: number
+      totalBytes?: number
+      targetVersion?: string
+      lastUpdatedAt: number
+    }
   } | null>(null)
   const [updateSourceInfo, setUpdateSourceInfo] = useState<{
     primaryUpdateSource: 'github'
@@ -2705,6 +2717,16 @@ function SettingsPage() {
               </p>
               {updateInfo.forceUpdate && updateInfo.minimumSupportedVersion && (
                 <p className="update-hint">最低安全版本：v{updateInfo.minimumSupportedVersion}</p>
+              )}
+              {updateInfo.diagnostics && (
+                <div className="update-hint" style={{ marginTop: '8px' }}>
+                  更新诊断：{updateInfo.diagnostics.phase}
+                  {updateInfo.diagnostics.fallbackToFull ? ' / 已从差分回退到全量' : ''}
+                  {updateInfo.diagnostics.lastEvent ? <><br />最近事件：{updateInfo.diagnostics.lastEvent}</> : null}
+                  {updateInfo.diagnostics.lastError ? <><br />最近错误：{updateInfo.diagnostics.lastError}</> : null}
+                  <br />
+                  详细诊断请查看日志文件中的 AppUpdate 记录。
+                </div>
               )}
               {isDownloading ? (
                 <div className="download-progress">

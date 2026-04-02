@@ -60,7 +60,7 @@ protocol.registerSchemesAsPrivileged([
 // 配置自动更新
 autoUpdater.autoDownload = false
 autoUpdater.autoInstallOnAppQuit = true
-autoUpdater.disableDifferentialDownload = true  // 禁用差分更新，强制全量下载
+autoUpdater.disableDifferentialDownload = false  // 启用差分更新，失败时由 electron-updater 回退完整包
 
 // 单例服务
 let dbService: DatabaseService | null = null
@@ -201,6 +201,24 @@ function createWindow() {
   dbService = new DatabaseService()
 
   logService = new LogService(configService)
+  autoUpdater.logger = {
+    info(message: string) {
+      logService?.info('AppUpdate', message)
+      appUpdateService.noteUpdaterMessage(String(message), 'info')
+    },
+    warn(message: string) {
+      logService?.warn('AppUpdate', message)
+      appUpdateService.noteUpdaterMessage(String(message), 'warn')
+    },
+    error(message: string) {
+      logService?.error('AppUpdate', message)
+      appUpdateService.noteUpdaterMessage(String(message), 'error')
+    },
+    debug(message: string) {
+      logService?.debug('AppUpdate', message)
+      appUpdateService.noteUpdaterMessage(String(message), 'info')
+    }
+  }
 
   // 记录应用启动日志
   logService.info('App', '应用启动', { version: app.getVersion() })
@@ -1346,24 +1364,76 @@ function registerIpcHandlers() {
   ipcMain.handle('app:downloadAndInstall', async (event) => {
     const win = BrowserWindow.fromWebContents(event.sender)
     isInstallingUpdate = true
+    const cachedUpdateInfo = appUpdateService.getCachedUpdateInfo()
+    const targetVersion = cachedUpdateInfo?.version
 
-    // 监听下载进度
-    autoUpdater.on('download-progress', (progress) => {
+    appUpdateService.updateDiagnostics({
+      phase: 'downloading',
+      targetVersion,
+      lastError: undefined,
+      progressPercent: 0,
+      downloadedBytes: 0,
+      totalBytes: undefined,
+      lastEvent: targetVersion ? `开始下载更新 ${targetVersion}` : '开始下载更新'
+    })
+    logService?.info('AppUpdate', '开始下载更新', { targetVersion, differentialEnabled: !autoUpdater.disableDifferentialDownload })
+
+    const onDownloadProgress = (progress: Electron.ProgressInfo) => {
       win?.webContents.send('app:downloadProgress', progress.percent)
-    })
+      appUpdateService.updateDiagnostics({
+        phase: 'downloading',
+        progressPercent: progress.percent,
+        downloadedBytes: progress.transferred,
+        totalBytes: progress.total,
+        lastEvent: `下载中 ${progress.percent.toFixed(1)}%`
+      })
+    }
 
-    // 下载完成后自动安装
-    autoUpdater.on('update-downloaded', () => {
+    const onUpdateDownloaded = () => {
+      appUpdateService.updateDiagnostics({
+        phase: 'downloaded',
+        progressPercent: 100,
+        lastEvent: '更新包下载完成，准备安装'
+      })
+      logService?.info('AppUpdate', '更新包下载完成，准备安装', {
+        targetVersion,
+        fallbackToFull: appUpdateService.getCachedUpdateInfo()?.diagnostics?.fallbackToFull || false
+      })
       app.isQuitting = true
+      appUpdateService.updateDiagnostics({
+        phase: 'installing',
+        lastEvent: '开始调用安装器'
+      })
       autoUpdater.quitAndInstall(false, true)
-    })
+    }
+
+    const onUpdaterError = (error: Error) => {
+      appUpdateService.updateDiagnostics({
+        phase: 'failed',
+        lastError: String(error),
+        lastEvent: '下载或安装更新失败'
+      })
+      logService?.error('AppUpdate', '下载或安装更新失败', {
+        targetVersion,
+        error: String(error),
+        fallbackToFull: appUpdateService.getCachedUpdateInfo()?.diagnostics?.fallbackToFull || false
+      })
+    }
+
+    autoUpdater.on('download-progress', onDownloadProgress)
+    autoUpdater.once('update-downloaded', onUpdateDownloaded)
+    autoUpdater.once('error', onUpdaterError)
 
     try {
       await autoUpdater.downloadUpdate()
     } catch (error) {
       isInstallingUpdate = false
-      console.error('下载更新失败:', error)
+      onUpdaterError(error as Error)
       throw error
+    } finally {
+      autoUpdater.removeListener('download-progress', onDownloadProgress)
+      autoUpdater.removeListener('update-downloaded', onUpdateDownloaded)
+      autoUpdater.removeListener('error', onUpdaterError)
     }
   })
 
@@ -3712,10 +3782,17 @@ function checkForUpdatesOnStartup() {
   setTimeout(async () => {
     try {
       const result = await appUpdateService.checkForUpdates()
+      logService?.info('AppUpdate', '启动时检查更新完成', {
+        hasUpdate: result.hasUpdate,
+        currentVersion: result.currentVersion,
+        version: result.version,
+        diagnostics: result.diagnostics
+      })
       if (result.hasUpdate && mainWindow) {
         mainWindow.webContents.send('app:updateAvailable', result)
       }
     } catch (error) {
+      logService?.error('AppUpdate', '启动时检查更新失败', { error: String(error) })
       console.error('启动时检查更新失败:', error)
     }
   }, 3000)
