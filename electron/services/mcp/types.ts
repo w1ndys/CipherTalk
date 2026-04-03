@@ -1,6 +1,7 @@
 export const MCP_TOOL_NAMES = [
   'health_check',
   'get_status',
+  'resolve_session',
   'list_sessions',
   'get_messages',
   'list_contacts',
@@ -49,6 +50,16 @@ export type McpToolName = (typeof MCP_TOOL_NAMES)[number]
 export type McpContactKind = (typeof MCP_CONTACT_KINDS)[number]
 export type McpMessageKind = (typeof MCP_MESSAGE_KINDS)[number]
 export type McpSearchMatchMode = 'substring' | 'exact'
+export type McpStreamEventType = 'meta' | 'progress' | 'partial' | 'complete' | 'error'
+export type McpStreamProgressStage =
+  | 'resolving_input'
+  | 'searching_contacts'
+  | 'searching_sessions'
+  | 'resolving_candidates'
+  | 'scanning_messages'
+  | 'streaming_hits'
+  | 'completed'
+  | 'failed'
 
 export type McpLaunchMode = 'dev' | 'packaged'
 export type McpLauncherMode = 'dev-runner' | 'packaged-launcher' | 'direct'
@@ -120,6 +131,23 @@ export interface McpSessionsPayload {
   offset: number
   limit: number
   hasMore: boolean
+}
+
+export interface McpResolvedSessionCandidate extends McpSessionRef {
+  score: number
+  confidence: 'high' | 'medium' | 'low'
+  aliases: string[]
+  evidence: string[]
+}
+
+export interface McpResolveSessionPayload {
+  query: string
+  resolved: boolean
+  exact: boolean
+  recommended?: McpResolvedSessionCandidate
+  candidates: McpResolvedSessionCandidate[]
+  suggestedNextAction: 'get_messages' | 'get_session_context' | 'search_messages' | 'list_contacts' | 'list_sessions'
+  message: string
 }
 
 export interface McpContactItem {
@@ -196,6 +224,12 @@ export interface McpSearchMessagesPayload {
   sessionsScanned: number
   messagesScanned: number
   truncated: boolean
+  sessionSummaries?: Array<{
+    session: McpSessionRef
+    hitCount: number
+    topScore: number
+    sampleExcerpts: string[]
+  }>
 }
 
 export interface McpTimeRange {
@@ -256,3 +290,79 @@ export interface McpSessionContextPayload {
   hasMoreBefore: boolean
   hasMoreAfter: boolean
 }
+
+export interface McpStreamMetaPayload {
+  toolName: McpToolName
+  requestId?: string
+  startedAt: number
+}
+
+export interface McpStreamProgressPayload {
+  stage: McpStreamProgressStage
+  message?: string
+  sessionsScanned?: number
+  messagesScanned?: number
+  candidates?: Array<Pick<McpSessionRef, 'sessionId' | 'displayName' | 'kind'>>
+  candidateCount?: number
+  truncated?: boolean
+}
+
+export interface McpStreamPartialPayloadMap {
+  resolve_session: Partial<McpResolveSessionPayload>
+  list_sessions: Partial<McpSessionsPayload>
+  list_contacts: Partial<McpContactsPayload>
+  get_messages: Partial<McpMessagesPayload>
+  search_messages: Partial<McpSearchMessagesPayload>
+  get_session_context: Partial<McpSessionContextPayload>
+}
+
+export type McpStreamPartialPayload =
+  | McpStreamPartialPayloadMap['list_sessions']
+  | McpStreamPartialPayloadMap['list_contacts']
+  | McpStreamPartialPayloadMap['get_messages']
+  | McpStreamPartialPayloadMap['search_messages']
+  | McpStreamPartialPayloadMap['get_session_context']
+
+export interface McpStreamMetaEvent {
+  event: 'meta'
+  data: McpStreamMetaPayload
+}
+
+export interface McpStreamProgressEvent {
+  event: 'progress'
+  data: McpStreamProgressPayload
+}
+
+export interface McpStreamPartialEvent {
+  event: 'partial'
+  data: {
+    toolName: McpToolName
+    chunkIndex: number
+    payload: McpStreamPartialPayload
+  }
+}
+
+export interface McpStreamCompleteEvent {
+  event: 'complete'
+  data: {
+    toolName: McpToolName
+    summary: string
+    payload: unknown
+    completedAt: number
+  }
+}
+
+export interface McpStreamErrorEvent {
+  event: 'error'
+  data: McpErrorShape & {
+    toolName: McpToolName
+    failedAt: number
+  }
+}
+
+export type McpStreamEvent =
+  | McpStreamMetaEvent
+  | McpStreamProgressEvent
+  | McpStreamPartialEvent
+  | McpStreamCompleteEvent
+  | McpStreamErrorEvent

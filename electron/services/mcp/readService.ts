@@ -24,8 +24,12 @@ import {
   type McpMessageMatchField,
   type McpSearchMatchMode,
   type McpMessagesPayload,
+  type McpStreamPartialPayloadMap,
+  type McpStreamProgressPayload,
   type McpSearchHit,
   type McpSearchMessagesPayload,
+  type McpResolveSessionPayload,
+  type McpResolvedSessionCandidate,
   type McpSessionContextPayload,
   type McpSessionItem,
   type McpSessionKind,
@@ -46,6 +50,11 @@ const listSessionsArgsSchema = z.object({
   offset: z.number().int().nonnegative().optional(),
   limit: z.number().int().positive().optional(),
   unreadOnly: z.boolean().optional()
+})
+
+const resolveSessionArgsSchema = z.object({
+  query: z.string().trim().min(1),
+  limit: z.number().int().positive().optional()
 })
 
 const getMessagesArgsSchema = z.object({
@@ -116,6 +125,7 @@ const getSessionContextArgsSchema = z.object({
 })
 
 type ListSessionsArgs = z.infer<typeof listSessionsArgsSchema>
+type ResolveSessionArgs = z.infer<typeof resolveSessionArgsSchema>
 type GetMessagesArgs = z.infer<typeof getMessagesArgsSchema>
 type ListContactsArgs = z.infer<typeof listContactsArgsSchema>
 type SearchMessagesArgs = z.infer<typeof searchMessagesArgsSchema>
@@ -137,12 +147,17 @@ type McpSessionLookupEntry = {
   session: McpSessionRef
   aliases: string[]
 }
+type ScoredSessionCandidate = { entry: McpSessionLookupEntry; score: number }
 type SearchRawHit = {
   session: McpSessionRef
   message: Message
   matchedField: McpMessageMatchField
   excerpt: string
   score: number
+}
+type McpStreamReporter = {
+  progress?: (payload: McpStreamProgressPayload) => void | Promise<void>
+  partial?: <K extends keyof McpStreamPartialPayloadMap>(toolName: K, payload: McpStreamPartialPayloadMap[K]) => void | Promise<void>
 }
 
 function toTimestampMs(value?: number | null): number {
@@ -471,6 +486,18 @@ function formatSessionCandidateHint(rawInput: string, candidates: McpSessionLook
   return `“${rawInput}”匹配到多个候选，请改用更具体的信息重试：\n${preview}`
 }
 
+async function reportProgress(reporter: McpStreamReporter | undefined, payload: McpStreamProgressPayload): Promise<void> {
+  await reporter?.progress?.(payload)
+}
+
+async function reportPartial<K extends keyof McpStreamPartialPayloadMap>(
+  reporter: McpStreamReporter | undefined,
+  toolName: K,
+  payload: McpStreamPartialPayloadMap[K]
+): Promise<void> {
+  await reporter?.partial?.(toolName, payload)
+}
+
 async function getContactCatalog(): Promise<{ items: McpContactRef[]; map: Map<string, McpContactRef> }> {
   const result = await chatService.getContacts()
   if (!result.success) {
@@ -499,9 +526,11 @@ function tryResolveContactRef(
   const exact = contactMap.get(normalized)
   if (exact) return exact
 
-  const partialMatches = Array.from(new Set(contactMap.values().filter((contact) =>
-    buildContactSearchKeys(contact).some((value) => normalizeQuery(value).includes(normalized))
-  )))
+  const partialMatches = Array.from(new Set(
+    Array.from(contactMap.values()).filter((contact) =>
+      buildContactSearchKeys(contact).some((value) => normalizeQuery(value).includes(normalized))
+    )
+  )) as McpContactRef[]
 
   return partialMatches.length === 1 ? partialMatches[0] : null
 }
@@ -510,7 +539,7 @@ function findSessionCandidates(
   rawInput: string,
   sessions: McpSessionItem[],
   contacts: McpContactRef[]
-): Array<{ entry: McpSessionLookupEntry; score: number }> {
+): ScoredSessionCandidate[] {
   const query = normalizeQuery(rawInput)
   if (!query) return []
 
@@ -521,6 +550,85 @@ function findSessionCandidates(
     }))
     .filter((item) => item.score > 0)
     .sort((a, b) => b.score - a.score || a.entry.session.displayName.localeCompare(b.entry.session.displayName, 'zh-CN'))
+}
+
+function toCandidateConfidence(score: number): 'high' | 'medium' | 'low' {
+  if (score >= 1000 || score >= 820) return 'high'
+  if (score >= 640) return 'medium'
+  return 'low'
+}
+
+function buildCandidateEvidence(candidate: ScoredSessionCandidate, query: string): string[] {
+  const normalizedQuery = normalizeQuery(query)
+  const evidence: string[] = []
+
+  for (const alias of candidate.entry.aliases) {
+    const normalizedAlias = normalizeQuery(alias)
+    if (!normalizedAlias) continue
+    if (normalizedAlias === normalizedQuery) {
+      evidence.push(`Exact alias match: ${alias}`)
+    } else if (normalizedAlias.startsWith(normalizedQuery)) {
+      evidence.push(`Prefix alias match: ${alias}`)
+    } else if (normalizedAlias.includes(normalizedQuery)) {
+      evidence.push(`Fuzzy alias match: ${alias}`)
+    } else if (isSubsequence(normalizedQuery, normalizedAlias)) {
+      evidence.push(`Subsequence alias match: ${alias}`)
+    }
+
+    if (evidence.length >= 3) break
+  }
+
+  if (candidate.score >= 1000) {
+    evidence.push('High-confidence score from exact resolution.')
+  } else if (candidate.score >= 820) {
+    evidence.push('High-confidence score from strong fuzzy match.')
+  } else if (candidate.score >= 640) {
+    evidence.push('Medium-confidence score from partial fuzzy match.')
+  }
+
+  return uniqueStrings(evidence).slice(0, 4)
+}
+
+function toResolvedCandidate(candidate: ScoredSessionCandidate, query: string): McpResolvedSessionCandidate {
+  return {
+    ...candidate.entry.session,
+    score: candidate.score,
+    confidence: toCandidateConfidence(candidate.score),
+    aliases: candidate.entry.aliases,
+    evidence: buildCandidateEvidence(candidate, query)
+  }
+}
+
+function buildSearchSessionSummaries(hits: McpSearchHit[]): McpSearchMessagesPayload['sessionSummaries'] {
+  const grouped = new Map<string, {
+    session: McpSessionRef
+    hitCount: number
+    topScore: number
+    sampleExcerpts: string[]
+  }>()
+
+  for (const hit of hits) {
+    const key = hit.session.sessionId
+    const existing = grouped.get(key)
+    if (!existing) {
+      grouped.set(key, {
+        session: hit.session,
+        hitCount: 1,
+        topScore: hit.score,
+        sampleExcerpts: hit.excerpt ? [hit.excerpt] : []
+      })
+      continue
+    }
+
+    existing.hitCount += 1
+    existing.topScore = Math.max(existing.topScore, hit.score)
+    if (hit.excerpt && existing.sampleExcerpts.length < 2 && !existing.sampleExcerpts.includes(hit.excerpt)) {
+      existing.sampleExcerpts.push(hit.excerpt)
+    }
+  }
+
+  return Array.from(grouped.values())
+    .sort((a, b) => b.hitCount - a.hitCount || b.topScore - a.topScore)
 }
 
 function resolveSessionRefStrict(
@@ -549,6 +657,49 @@ function resolveSessionRefStrict(
     rawInput,
     candidates.map((item) => item.entry)
   ))
+}
+
+async function resolveSessionRefStrictWithProgress(
+  rawInput: string,
+  sessions: McpSessionItem[],
+  sessionMap: Map<string, McpSessionRef>,
+  contacts: McpContactRef[],
+  contactMap: Map<string, McpContactRef>,
+  reporter?: McpStreamReporter
+): Promise<McpSessionRef> {
+  await reportProgress(reporter, {
+    stage: 'resolving_input',
+    message: `Resolving session reference from "${rawInput}".`
+  })
+  await reportProgress(reporter, {
+    stage: 'searching_contacts',
+    message: 'Searching contacts and aliases.'
+  })
+  await reportProgress(reporter, {
+    stage: 'searching_sessions',
+    message: 'Searching sessions and recent conversation entries.'
+  })
+
+  const direct = resolveSessionRef(rawInput, sessionMap, contactMap)
+  if (sessionMap.has(direct.sessionId)) {
+    await reportProgress(reporter, {
+      stage: 'resolving_candidates',
+      message: `Resolved to ${direct.displayName}.`,
+      candidates: [direct],
+      candidateCount: 1
+    })
+    return direct
+  }
+
+  const candidates = findSessionCandidates(rawInput, sessions, contacts)
+  await reportProgress(reporter, {
+    stage: 'resolving_candidates',
+    message: candidates.length > 0 ? `Found ${candidates.length} candidate sessions.` : 'No candidate sessions found.',
+    candidates: candidates.slice(0, 5).map((item) => item.entry.session),
+    candidateCount: candidates.length
+  })
+
+  return resolveSessionRefStrict(rawInput, sessions, sessionMap, contacts, contactMap)
 }
 
 function resolveSessionRef(
@@ -845,7 +996,71 @@ function messageMatchesFilters(
 }
 
 export class McpReadService {
-  async listSessions(rawArgs: ListSessionsArgs): Promise<McpSessionsPayload> {
+  async resolveSession(rawArgs: ResolveSessionArgs, reporter?: McpStreamReporter): Promise<McpResolveSessionPayload> {
+    const args = resolveSessionArgsSchema.safeParse(rawArgs)
+    if (!args.success) {
+      throw new McpToolError('BAD_REQUEST', 'Invalid resolve_session arguments.', args.error.message)
+    }
+
+    const limit = Math.min(args.data.limit ?? 5, 10)
+    const [{ items: sessions, map: sessionMap }, { items: contacts, map: contactMap }] = await Promise.all([
+      getSessionCatalog(),
+      getContactCatalog()
+    ])
+
+    await reportProgress(reporter, {
+      stage: 'resolving_input',
+      message: `Resolving session candidates for "${args.data.query}".`
+    })
+
+    const direct = resolveSessionRef(args.data.query, sessionMap, contactMap)
+    let candidates = findSessionCandidates(args.data.query, sessions, contacts)
+
+    if (sessionMap.has(direct.sessionId) && !candidates.some((item) => item.entry.session.sessionId === direct.sessionId)) {
+      const directEntry = buildSessionLookupEntries(sessions, contacts).find((entry) => entry.session.sessionId === direct.sessionId)
+      if (directEntry) {
+        candidates = [{ entry: directEntry, score: 1000 }, ...candidates]
+      }
+    }
+
+    const dedupedCandidates = Array.from(new Map(
+      candidates.map((candidate) => [candidate.entry.session.sessionId, candidate])
+    ).values()).slice(0, limit)
+
+    await reportProgress(reporter, {
+      stage: 'resolving_candidates',
+      message: dedupedCandidates.length > 0 ? `Found ${dedupedCandidates.length} session candidates.` : 'No session candidates found.',
+      candidates: dedupedCandidates.map((candidate) => candidate.entry.session),
+      candidateCount: dedupedCandidates.length
+    })
+
+    const recommended = dedupedCandidates[0] ? toResolvedCandidate(dedupedCandidates[0], args.data.query) : undefined
+    const exact = Boolean(recommended && recommended.score >= 1000)
+    const resolved = Boolean(recommended && (dedupedCandidates.length === 1 || recommended.confidence === 'high'))
+
+    const payload: McpResolveSessionPayload = {
+      query: args.data.query,
+      resolved,
+      exact,
+      recommended,
+      candidates: dedupedCandidates.map((candidate) => toResolvedCandidate(candidate, args.data.query)),
+      suggestedNextAction: resolved
+        ? 'get_session_context'
+        : dedupedCandidates.length > 0
+          ? 'search_messages'
+          : 'list_contacts',
+      message: resolved
+        ? `Resolved "${args.data.query}" to ${recommended?.displayName}.`
+        : dedupedCandidates.length > 0
+          ? `Found ${dedupedCandidates.length} plausible session candidates for "${args.data.query}".`
+          : `No session candidates found for "${args.data.query}".`
+    }
+
+    await reportPartial(reporter, 'resolve_session', payload)
+    return payload
+  }
+
+  async listSessions(rawArgs: ListSessionsArgs, reporter?: McpStreamReporter): Promise<McpSessionsPayload> {
     const args = listSessionsArgsSchema.safeParse(rawArgs)
     if (!args.success) {
       throw new McpToolError('BAD_REQUEST', 'Invalid list_sessions arguments.', args.error.message)
@@ -855,6 +1070,10 @@ export class McpReadService {
     const offset = Math.max(0, args.data.offset ?? 0)
     const limit = Math.min(args.data.limit ?? 100, MAX_LIST_LIMIT)
     const unreadOnly = Boolean(args.data.unreadOnly)
+    await reportProgress(reporter, {
+      stage: 'searching_sessions',
+      message: query ? `Searching sessions for "${args.data.q}".` : 'Listing sessions.'
+    })
 
     const [{ items: sessionItems }, { map: contactMap }] = await Promise.all([
       getSessionCatalog(),
@@ -887,6 +1106,13 @@ export class McpReadService {
 
     const total = sessions.length
     const items = sessions.slice(offset, offset + limit)
+    await reportPartial(reporter, 'list_sessions', {
+      items,
+      total,
+      offset,
+      limit,
+      hasMore: offset + items.length < total
+    })
 
     return {
       items,
@@ -897,7 +1123,7 @@ export class McpReadService {
     }
   }
 
-  async listContacts(rawArgs: ListContactsArgs): Promise<McpContactsPayload> {
+  async listContacts(rawArgs: ListContactsArgs, reporter?: McpStreamReporter): Promise<McpContactsPayload> {
     const args = listContactsArgsSchema.safeParse(rawArgs)
     if (!args.success) {
       throw new McpToolError('BAD_REQUEST', 'Invalid list_contacts arguments.', args.error.message)
@@ -907,6 +1133,10 @@ export class McpReadService {
     const offset = Math.max(0, args.data.offset ?? 0)
     const limit = Math.min(args.data.limit ?? 100, MAX_LIST_LIMIT)
     const typeSet = args.data.types?.length ? new Set(args.data.types) : null
+    await reportProgress(reporter, {
+      stage: 'searching_contacts',
+      message: query ? `Searching contacts for "${args.data.q}".` : 'Listing contacts.'
+    })
 
     const result = await chatService.getContacts()
     if (!result.success) {
@@ -936,6 +1166,13 @@ export class McpReadService {
 
     const total = contacts.length
     const items = contacts.slice(offset, offset + limit)
+    await reportPartial(reporter, 'list_contacts', {
+      items,
+      total,
+      offset,
+      limit,
+      hasMore: offset + items.length < total
+    })
 
     return {
       items,
@@ -1012,7 +1249,7 @@ export class McpReadService {
     }
   }
 
-  async getMessages(rawArgs: GetMessagesArgs, defaultIncludeMediaPaths: boolean): Promise<McpMessagesPayload> {
+  async getMessages(rawArgs: GetMessagesArgs, defaultIncludeMediaPaths: boolean, reporter?: McpStreamReporter): Promise<McpMessagesPayload> {
     const args = getMessagesArgsSchema.safeParse(rawArgs)
     if (!args.success) {
       throw new McpToolError('BAD_REQUEST', 'Invalid get_messages arguments.', args.error.message)
@@ -1035,8 +1272,14 @@ export class McpReadService {
       getSessionCatalog(),
       getContactCatalog()
     ])
-    const session = resolveSessionRefStrict(rawSessionId, sessions, sessionMap, contacts, contactMap)
+    const session = await resolveSessionRefStrictWithProgress(rawSessionId, sessions, sessionMap, contacts, contactMap, reporter)
     const sessionId = session.sessionId
+    await reportProgress(reporter, {
+      stage: 'scanning_messages',
+      message: `Scanning messages in ${session.displayName}.`,
+      sessionsScanned: 1,
+      messagesScanned: 0
+    })
 
     const matched: Message[] = []
     let scanOffset = 0
@@ -1064,6 +1307,12 @@ export class McpReadService {
 
       scanOffset += part.length
       scanned += part.length
+      await reportProgress(reporter, {
+        stage: 'scanning_messages',
+        message: `Scanned ${scanned} messages in ${session.displayName}.`,
+        sessionsScanned: 1,
+        messagesScanned: scanned
+      })
 
       if (!result.hasMore) {
         reachedEnd = true
@@ -1075,6 +1324,12 @@ export class McpReadService {
 
     const page = matched.slice(offset, offset + limit)
     const items = await normalizeMessages(sessionId, page, { includeMediaPaths, includeRaw })
+    await reportPartial(reporter, 'get_messages', {
+      items,
+      offset,
+      limit,
+      hasMore: reachedEnd ? matched.length > offset + items.length : true
+    })
 
     return {
       items,
@@ -1084,7 +1339,7 @@ export class McpReadService {
     }
   }
 
-  async searchMessages(rawArgs: SearchMessagesArgs, defaultIncludeMediaPaths: boolean): Promise<McpSearchMessagesPayload> {
+  async searchMessages(rawArgs: SearchMessagesArgs, defaultIncludeMediaPaths: boolean, reporter?: McpStreamReporter): Promise<McpSearchMessagesPayload> {
     const args = searchMessagesArgsSchema.safeParse(rawArgs)
     if (!args.success) {
       throw new McpToolError('BAD_REQUEST', 'Invalid search_messages arguments.', args.error.message)
@@ -1108,7 +1363,7 @@ export class McpReadService {
     }
 
     const targetSessions = sessionIdCandidates.length > 0
-      ? sessionIdCandidates.map((sessionId) => resolveSessionRefStrict(sessionId, sessions, sessionMap, contacts, contactMap))
+      ? await Promise.all(sessionIdCandidates.map((sessionId) => resolveSessionRefStrictWithProgress(sessionId, sessions, sessionMap, contacts, contactMap, reporter)))
       : sessions.map((session) => ({
           sessionId: session.sessionId,
           displayName: session.displayName,
@@ -1126,6 +1381,12 @@ export class McpReadService {
     let truncated = false
     let bestScore = Number.NEGATIVE_INFINITY
     let hitTargetReached = false
+    await reportProgress(reporter, {
+      stage: 'scanning_messages',
+      message: `Searching ${targetSessions.length} sessions for "${args.data.query}".`,
+      sessionsScanned: 0,
+      messagesScanned: 0
+    })
 
     for (const session of targetSessions) {
       sessionsScanned += 1
@@ -1159,6 +1420,12 @@ export class McpReadService {
         sessionOffset += part.length
         sessionScanned += part.length
         messagesScanned += part.length
+        await reportProgress(reporter, {
+          stage: 'scanning_messages',
+          message: `Scanned ${messagesScanned} messages across ${sessionsScanned} sessions.`,
+          sessionsScanned,
+          messagesScanned
+        })
 
         for (const message of part) {
           if (!messageMatchesFilters(message, {
@@ -1187,6 +1454,12 @@ export class McpReadService {
 
         if (rawHits.length >= limit * 3) {
           hitTargetReached = true
+          await reportProgress(reporter, {
+            stage: 'streaming_hits',
+            message: `Collected ${rawHits.length} candidate hits.`,
+            sessionsScanned,
+            messagesScanned
+          })
           if (roundBestScore === Number.NEGATIVE_INFINITY || roundBestScore <= bestScoreBeforeBatch) {
             truncated = true
             break
@@ -1218,17 +1491,27 @@ export class McpReadService {
       matchedField: hit.matchedField,
       score: hit.score
     })))
+    const sessionSummaries = buildSearchSessionSummaries(hits)
+    await reportPartial(reporter, 'search_messages', {
+      hits,
+      limit,
+      sessionsScanned,
+      messagesScanned,
+      truncated,
+      sessionSummaries
+    })
 
     return {
       hits,
       limit,
       sessionsScanned,
       messagesScanned,
-      truncated
+      truncated,
+      sessionSummaries
     }
   }
 
-  async getSessionContext(rawArgs: GetSessionContextArgs, defaultIncludeMediaPaths: boolean): Promise<McpSessionContextPayload> {
+  async getSessionContext(rawArgs: GetSessionContextArgs, defaultIncludeMediaPaths: boolean, reporter?: McpStreamReporter): Promise<McpSessionContextPayload> {
     const args = getSessionContextArgsSchema.safeParse(rawArgs)
     if (!args.success) {
       throw new McpToolError('BAD_REQUEST', 'Invalid get_session_context arguments.', args.error.message)
@@ -1238,13 +1521,18 @@ export class McpReadService {
       getSessionCatalog(),
       getContactCatalog()
     ])
-    const session = resolveSessionRefStrict(args.data.sessionId, sessions, sessionMap, contacts, contactMap)
+    const session = await resolveSessionRefStrictWithProgress(args.data.sessionId, sessions, sessionMap, contacts, contactMap, reporter)
     const resolvedSessionId = session.sessionId
     const includeRaw = args.data.includeRaw ?? false
     const includeMediaPaths = args.data.includeMediaPaths ?? defaultIncludeMediaPaths
 
     if (args.data.mode === 'latest') {
       const latestLimit = Math.min(args.data.beforeLimit ?? 30, MAX_CONTEXT_LIMIT)
+      await reportProgress(reporter, {
+        stage: 'scanning_messages',
+        message: `Loading latest context for ${session.displayName}.`,
+        sessionsScanned: 1
+      })
       const result = await chatService.getMessages(resolvedSessionId, 0, latestLimit)
       if (!result.success) {
         mapChatError(result.error)
@@ -1253,6 +1541,13 @@ export class McpReadService {
       const messages = await normalizeMessages(resolvedSessionId, result.messages || [], {
         includeMediaPaths,
         includeRaw
+      })
+      await reportPartial(reporter, 'get_session_context', {
+        session,
+        mode: 'latest',
+        items: messages,
+        hasMoreBefore: Boolean(result.hasMore),
+        hasMoreAfter: false
       })
 
       return {
@@ -1267,6 +1562,11 @@ export class McpReadService {
     const anchorCursor = args.data.anchorCursor!
     const beforeLimit = Math.min(args.data.beforeLimit ?? 20, MAX_CONTEXT_LIMIT)
     const afterLimit = Math.min(args.data.afterLimit ?? 20, MAX_CONTEXT_LIMIT)
+    await reportProgress(reporter, {
+      stage: 'scanning_messages',
+      message: `Loading context around anchor in ${session.displayName}.`,
+      sessionsScanned: 1
+    })
 
     const [beforeResult, anchorResult, afterResult] = await Promise.all([
       chatService.getMessagesBefore(
@@ -1315,6 +1615,14 @@ export class McpReadService {
         includeRaw
       })
     ])
+    await reportPartial(reporter, 'get_session_context', {
+      session,
+      mode: 'around',
+      anchor: anchorItem,
+      items: [...beforeItems, anchorItem, ...afterItems],
+      hasMoreBefore: Boolean(beforeResult.hasMore),
+      hasMoreAfter: Boolean(afterResult.hasMore)
+    })
 
     return {
       session,

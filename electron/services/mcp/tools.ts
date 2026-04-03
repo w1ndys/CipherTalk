@@ -31,6 +31,22 @@ export function registerCipherTalkMcpTools(server: any) {
     }
   })
 
+  server.registerTool('resolve_session', {
+    title: 'Resolve Session',
+    description: 'Resolve a fuzzy person/session clue into the most likely chat session, returning candidates, confidence, and recommended next action.',
+    inputSchema: {
+      query: z.string().trim().min(1).describe('Fuzzy person or session clue. Can be a partial name, nickname, remark fragment, institution fragment, or sessionId.'),
+      limit: z.number().int().positive().optional().describe('Maximum number of candidates to return.')
+    }
+  }, async (args: unknown) => {
+    try {
+      const payload = await readService.resolveSession((args || {}) as any)
+      return createToolSuccess(payload.message, payload)
+    } catch (error) {
+      return createToolError(error)
+    }
+  })
+
   server.registerTool('get_global_statistics', {
     title: 'Get Global Statistics',
     description: 'Return global private-chat statistics for agent-side analysis.',
@@ -82,7 +98,7 @@ export function registerCipherTalkMcpTools(server: any) {
 
   server.registerTool('list_sessions', {
     title: 'List Sessions',
-    description: 'List chat sessions with search and pagination.',
+    description: 'List chat sessions with search and pagination. Use as a fuzzy discovery entry point when the user only remembers part of a name, remark, institution, or recent clue.',
     inputSchema: {
       q: z.string().optional().describe('Optional search keyword.'),
       offset: z.number().int().nonnegative().optional().describe('Pagination offset.'),
@@ -124,7 +140,7 @@ export function registerCipherTalkMcpTools(server: any) {
 
   server.registerTool('list_contacts', {
     title: 'List Contacts',
-    description: 'List contacts, groups, and official accounts for agent-side resolution.',
+    description: 'List contacts, groups, and official accounts for agent-side resolution. Use as a broad fuzzy lookup entry point before guessing a specific sessionId.',
     inputSchema: {
       q: z.string().optional().describe('Optional search keyword.'),
       offset: z.number().int().nonnegative().optional().describe('Pagination offset.'),
@@ -142,7 +158,7 @@ export function registerCipherTalkMcpTools(server: any) {
 
   server.registerTool('search_messages', {
     title: 'Search Messages',
-    description: 'Search messages across one or more sessions and return agent-friendly hits.',
+    description: 'Search messages across one or more sessions and return agent-friendly hits. Use for broad clue hunting when the target session or keyword is still uncertain.',
     inputSchema: {
       query: z.string().trim().min(1).describe('Required full-text query.'),
       sessionId: z.string().trim().min(1).optional().describe('Single session identifier to search. Accepts sessionId, contactId, display name, remark, or nickname when uniquely resolvable.'),
