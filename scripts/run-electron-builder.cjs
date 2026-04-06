@@ -13,12 +13,13 @@ const configPath = path.join(__dirname, 'electron-builder.config.cjs')
 
 const result = spawnSync(
   process.execPath,
-  [cliPath, `--${target}`, '--config', configPath],
+  [cliPath, `--${target}`, '--config', configPath, '--publish', 'never'],
   {
     stdio: 'inherit',
     env: {
       ...process.env,
-      CIPHERTALK_BUILD_TARGET: target
+      CIPHERTALK_BUILD_TARGET: target,
+      CSC_IDENTITY_AUTO_DISCOVERY: 'false'
     }
   }
 )
