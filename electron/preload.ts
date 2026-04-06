@@ -158,16 +158,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
     }
   },
 
-  // Windows Hello 原生验证 (比 WebAuthn 更快)
-  windowsHello: {
-    isAvailable: () => ipcRenderer.invoke('windowsHello:isAvailable') as Promise<boolean>,
-    verify: (message?: string) => ipcRenderer.invoke('windowsHello:verify', message) as Promise<{
-      success: boolean
-      result: number  // WindowsHelloResult 枚举值
-      error?: string
-    }>
-  },
-
   systemAuth: {
     getStatus: () => ipcRenderer.invoke('systemAuth:getStatus') as Promise<{
       platform: string

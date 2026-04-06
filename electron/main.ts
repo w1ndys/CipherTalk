@@ -2,7 +2,7 @@ import { app, BrowserWindow, ipcMain, nativeImage, nativeTheme, protocol, net, T
 import { join } from 'path'
 import { randomBytes } from 'crypto'
 import { readFileSync, existsSync, mkdirSync } from 'fs'
-import { autoUpdater } from 'electron-updater'
+import { autoUpdater, type ProgressInfo } from 'electron-updater'
 import { DatabaseService } from './services/database'
 import { appUpdateService } from './services/appUpdateService'
 
@@ -26,7 +26,6 @@ import { videoService } from './services/videoService'
 
 import { voiceTranscribeService } from './services/voiceTranscribeService'
 import { voiceTranscribeServiceWhisper } from './services/voiceTranscribeServiceWhisper'
-import { windowsHelloService, WindowsHelloResult } from './services/windowsHelloService'
 import { systemAuthService } from './services/systemAuthService'
 import { shortcutService } from './services/shortcutService'
 import { httpApiService } from './services/httpApiService'
@@ -34,12 +33,11 @@ import { getBestCachePath, getRuntimePlatformInfo } from './services/platformSer
 import { getMcpLaunchConfig as getMcpLaunchConfigForUi, getMcpProxyConfig } from './services/mcp/runtime'
 import { mcpProxyService } from './services/mcp/proxyService'
 
-// 扩展 app 对象类型，添加 isQuitting 标志
-declare module 'electron' {
-  interface App {
-    isQuitting?: boolean
-  }
+type AppWithQuitFlag = typeof app & {
+  isQuitting?: boolean
 }
+
+const appWithQuitFlag = app as AppWithQuitFlag
 
 // 注册自定义协议为特权协议（必须在 app ready 之前）
 protocol.registerSchemesAsPrivileged([
@@ -219,23 +217,8 @@ function getTrayIconPath(): string {
   return getAppIconPath()
 }
 
-function getTrayTemplateIconPath(): string | null {
-  if (process.platform !== 'darwin') {
-    return null
-  }
-
-  const isDev = !!process.env.VITE_DEV_SERVER_URL
-  const iconName = configService?.get('appIcon') || 'default'
-  const devTemplatePath = iconName === 'xinnian'
-    ? join(__dirname, '../public/xinnian-tray-template.png')
-    : join(__dirname, '../public/tray-mac-template.png')
-
-  return isDev && existsSync(devTemplatePath) ? devTemplatePath : null
-}
-
 function getTrayImage() {
-  const templateIconPath = getTrayTemplateIconPath()
-  const iconPath = templateIconPath || getTrayIconPath()
+  const iconPath = getTrayIconPath()
   const image = nativeImage.createFromPath(iconPath)
 
   if (image.isEmpty()) {
@@ -243,11 +226,7 @@ function getTrayImage() {
   }
 
   if (process.platform === 'darwin') {
-    const resized = image.resize({ height: 26 })
-    if (templateIconPath) {
-      resized.setTemplateImage(true)
-    }
-    return resized
+    return image.resize({ height: 26 })
   }
 
   return image
@@ -283,7 +262,7 @@ function createTray() {
       label: '退出',
       click: () => {
         // 设置标志，允许真正退出
-        app.isQuitting = true
+        appWithQuitFlag.isQuitting = true
         app.quit()
       }
     }
@@ -375,17 +354,17 @@ function createWindow() {
   win.on('close', (event) => {
     const updateInfo = appUpdateService.getCachedUpdateInfo()
     if (updateInfo?.forceUpdate) {
-      app.isQuitting = true
+      appWithQuitFlag.isQuitting = true
       return
     }
 
     if (isInstallingUpdate) {
-      app.isQuitting = true
+      appWithQuitFlag.isQuitting = true
       return
     }
 
     // 如果是真正退出应用，不阻止
-    if (app.isQuitting) {
+    if (appWithQuitFlag.isQuitting) {
       return
     }
 
@@ -408,7 +387,7 @@ function createWindow() {
     // 配置为直接退出时，需要显式退出应用。
     // 否则主窗口关闭后托盘仍然存在，进程不会真正结束。
     event.preventDefault()
-    app.isQuitting = true
+    appWithQuitFlag.isQuitting = true
     app.quit()
   })
 
@@ -1486,7 +1465,7 @@ function registerIpcHandlers() {
 
         if (process.platform === 'darwin') {
           if (!image.isEmpty()) {
-            app.dock.setIcon(image)
+            app.dock?.setIcon(image)
           }
         } else {
           BrowserWindow.getAllWindows().forEach(win => {
@@ -1537,7 +1516,7 @@ function registerIpcHandlers() {
     })
     logService?.info('AppUpdate', '开始下载更新', { targetVersion, differentialEnabled: !autoUpdater.disableDifferentialDownload })
 
-    const onDownloadProgress = (progress: Electron.ProgressInfo) => {
+    const onDownloadProgress = (progress: ProgressInfo) => {
       const payload = {
         percent: progress.percent,
         transferred: progress.transferred,
@@ -1566,7 +1545,7 @@ function registerIpcHandlers() {
         targetVersion,
         fallbackToFull: appUpdateService.getCachedUpdateInfo()?.diagnostics?.fallbackToFull || false
       })
-      app.isQuitting = true
+      appWithQuitFlag.isQuitting = true
       appUpdateService.updateDiagnostics({
         phase: 'installing',
         lastEvent: '开始调用安装器'
@@ -1749,15 +1728,6 @@ function registerIpcHandlers() {
         // 忽略错误 - 某些窗口（如启动屏）没有启用 titleBarOverlay
       }
     }
-  })
-
-  // Windows Hello 原生验证 (比 WebAuthn 更快)
-  ipcMain.handle('windowsHello:isAvailable', async () => {
-    return windowsHelloService.isAvailable()
-  })
-
-  ipcMain.handle('windowsHello:verify', async (_, message?: string) => {
-    return windowsHelloService.verify(message)
   })
 
   ipcMain.handle('systemAuth:getStatus', async () => {
@@ -2079,7 +2049,7 @@ function registerIpcHandlers() {
       }
 
       for (const wxid of wxids) {
-        const result = await wcdbService.testConnection(dbPath, hexKey, wxid, true)
+        const result = await wcdbService.testConnection(dbPath, hexKey, wxid)
         if (result.success) {
           return { success: true, wxid }
         }
@@ -4170,7 +4140,7 @@ app.whenReady().then(async () => {
     if (existsSync(dockIconPath)) {
       const dockIcon = nativeImage.createFromPath(dockIconPath)
       if (!dockIcon.isEmpty()) {
-        app.dock.setIcon(dockIcon)
+        app.dock?.setIcon(dockIcon)
       }
     }
   }
@@ -4320,7 +4290,7 @@ app.on('window-all-closed', () => {
 
 app.on('before-quit', () => {
   // 设置退出标志
-  app.isQuitting = true
+  appWithQuitFlag.isQuitting = true
   
   httpApiService.stop().catch((e) => {
     console.error('[HttpApi] 停止失败:', e)

@@ -17,13 +17,6 @@ function TitleBar({ rightContent, title }: TitleBarProps) {
   const appIcon = useThemeStore(state => state.appIcon)
   const [platform, setPlatform] = useState<'win32' | 'darwin' | 'linux'>('win32')
 
-  // 调试：检查状态
-  useEffect(() => {
-    if (isUpdating) {
-      console.log('[TitleBar] 更新指示器显示')
-    }
-  }, [isUpdating])
-
   useEffect(() => {
     void window.electronAPI.app.getPlatformInfo().then((info) => {
       setPlatform((info.platform as 'win32' | 'darwin' | 'linux') || 'win32')

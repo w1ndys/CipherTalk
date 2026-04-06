@@ -1,6 +1,6 @@
 import { create } from 'zustand'
 import * as configService from '../services/config'
-import { toBase64Url, fromBase64Url } from '@/utils/base64'
+import { fromBase64Url } from '@/utils/base64'
 
 interface AuthState {
     isAuthEnabled: boolean
@@ -37,7 +37,6 @@ async function isWindowsPlatform(): Promise<boolean> {
 function isNativeCredential(credentialId: string | null): boolean {
     return credentialId === 'native-windows-hello'
         || credentialId === 'native-macos-touchid'
-        || credentialId === 'native-system-auth'
 }
 
 // WebAuthn 错误消息映射
