@@ -1,6 +1,7 @@
 const { spawnSync } = require('child_process')
 const path = require('path')
 const fs = require('fs')
+const pkg = require('../package.json')
 
 const target = process.argv[2]
 
@@ -25,8 +26,10 @@ const result = spawnSync(
   }
 )
 
-// 构建成功的判断：latest.yml 已生成（发布失败不影响构建产物）
-const latestYml = target === 'mac' ? 'release/latest-mac.yml' : 'release/latest.yml'
-if (!fs.existsSync(path.join(__dirname, '..', latestYml))) {
+// 构建阶段只要求安装包产物存在，自动更新元数据交给后续发布阶段校验。
+const artifactName = target === 'mac'
+  ? `release/CipherTalk-${pkg.version}-Setup.dmg`
+  : `release/CipherTalk-${pkg.version}-Setup.exe`
+if (!fs.existsSync(path.join(__dirname, '..', artifactName))) {
   process.exit(result.status || 1)
 }

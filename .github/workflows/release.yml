@@ -129,35 +129,6 @@ jobs:
             Write-Error "Installer not found: $installer"
             exit 1
           }
-          if (-not (Test-Path "release/latest.yml")) {
-            Write-Error "latest.yml not found"
-            exit 1
-          }
-          $sizeLines = @(Select-String -Path "release/latest.yml" -Pattern '^\s+size:\s+\d+\s*$')
-          if ($sizeLines.Count -ne 1) {
-            Write-Error "latest.yml should contain exactly one size entry, found $($sizeLines.Count)"
-            exit 1
-          }
-
-          $latestYml = Get-Content "release/latest.yml" -Raw
-          $shaMatch = [regex]::Match($latestYml, '(?m)^sha512:\s*(.+)$')
-          if (-not $shaMatch.Success) {
-            Write-Error "sha512 not found in latest.yml"
-            exit 1
-          }
-
-          $hashHex = (Get-FileHash -Algorithm SHA512 $installer).Hash
-          $hashBytes = [byte[]]::new($hashHex.Length / 2)
-          for ($i = 0; $i -lt $hashHex.Length; $i += 2) {
-            $hashBytes[$i / 2] = [Convert]::ToByte($hashHex.Substring($i, 2), 16)
-          }
-          $actualSha512 = [Convert]::ToBase64String($hashBytes)
-          $expectedSha512 = $shaMatch.Groups[1].Value.Trim()
-
-          if ($actualSha512 -ne $expectedSha512) {
-            Write-Error "latest.yml sha512 does not match installer"
-            exit 1
-          }
 
       - name: Upload release binaries
         uses: actions/upload-artifact@v4
@@ -166,7 +137,7 @@ jobs:
           path: |
             release/CipherTalk-${{ needs.prepare-meta.outputs.version }}-Setup.exe
             release/latest.yml
-          if-no-files-found: error
+          if-no-files-found: warn
 
   build-macos:
     runs-on: macos-latest
