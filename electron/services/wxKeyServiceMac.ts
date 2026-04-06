@@ -81,16 +81,8 @@ export class WxKeyServiceMac {
   }
 
   async initialize(): Promise<boolean> {
-    if (this.initialized) return true
-
     try {
-      this.koffi = require('koffi')
-      const dylibPath = this.getDylibPath()
-      this.lib = this.koffi.load(dylibPath)
-      this.GetDbKey = this.lib.func('const char* GetDbKey()')
-      this.ListWeChatProcesses = this.lib.func('const char* ListWeChatProcesses()')
-      this.initialized = true
-      return true
+      return this.initializeFromRuntime()
     } catch (e) {
       console.error('[WxKeyServiceMac] 初始化失败:', e)
       return false
@@ -128,6 +120,16 @@ export class WxKeyServiceMac {
     }
 
     try {
+      if (this.initializeFromRuntime()) {
+        const raw = this.ListWeChatProcesses?.()
+        const parsed = this.parseWeChatProcessList(typeof raw === 'string' ? raw : '')
+        if (parsed.length > 0) return Math.max(...parsed)
+      }
+    } catch {
+      // ignore
+    }
+
+    try {
       const output = execSync('/bin/ps -A -o pid,comm,command', { encoding: 'utf8' })
       const lines = output.split(/\r?\n/).slice(1)
       const candidates: number[] = []
@@ -156,6 +158,39 @@ export class WxKeyServiceMac {
     return null
   }
 
+  private initializeFromRuntime(): boolean {
+    if (this.initialized) return true
+
+    try {
+      this.koffi = require('koffi')
+      const dylibPath = this.getDylibPath()
+      this.lib = this.koffi.load(dylibPath)
+      this.GetDbKey = this.lib.func('const char* GetDbKey()')
+      this.ListWeChatProcesses = this.lib.func('const char* ListWeChatProcesses()')
+      this.initialized = true
+      return true
+    } catch {
+      return false
+    }
+  }
+
+  private parseWeChatProcessList(raw: string): number[] {
+    return String(raw || '')
+      .split(';')
+      .map(item => item.trim())
+      .filter(Boolean)
+      .map(item => {
+        const lastColon = item.lastIndexOf(':')
+        if (lastColon < 0) return null
+        const name = item.slice(0, lastColon)
+        const pid = Number(item.slice(lastColon + 1))
+        if (!Number.isFinite(pid) || pid <= 0) return null
+        if (name.includes('Helper') || name.includes('crashpad_handler') || name.includes('WeChatAppEx')) return null
+        return pid
+      })
+      .filter((pid): pid is number => pid !== null)
+  }
+
   killWeChat(): boolean {
     try {
       execSync('/usr/bin/pkill -x WeChat', { stdio: 'ignore' })
@@ -163,6 +198,16 @@ export class WxKeyServiceMac {
     } catch {
       return false
     }
+  }
+
+  async waitForWeChatExit(maxWaitSeconds = 15): Promise<boolean> {
+    for (let i = 0; i < maxWaitSeconds * 2; i++) {
+      if (!this.isWeChatRunning()) {
+        return true
+      }
+      await new Promise(resolve => setTimeout(resolve, 500))
+    }
+    return !this.isWeChatRunning()
   }
 
   async launchWeChat(customPath?: string): Promise<boolean> {
@@ -198,18 +243,20 @@ export class WxKeyServiceMac {
       if (sipStatus.enabled) {
         return {
           success: false,
-          error: 'SIP 已开启，无法抓取 macOS 微信数据库密钥。请先关闭 SIP 后重试。'
+          error: 'SIP (系统完整性保护) 已开启，无法获取密钥。请关闭 SIP 后重试。\n\n关闭方法：\n1. Intel 芯片：重启 Mac 并按住 Command + R 进入恢复模式\n2. Apple 芯片（M 系列）：关机后长按开机（指纹）键，选择“设置（选项）”进入恢复模式\n3. 打开终端，输入: csrutil disable\n4. 重启电脑'
         }
       }
 
-      onStatus?.('正在请求管理员授权并启动 helper...', 0)
+      onStatus?.('正在获取数据库密钥...', 0)
+      onStatus?.('正在请求管理员授权并执行 helper...', 0)
       let parsed: { success: boolean; key?: string; code?: string; detail?: string; raw: string }
 
       try {
         const helperResult = await this.getDbKeyByHelperElevated(timeoutMs, onStatus)
         parsed = this.parseDbKeyResult(helperResult)
+        console.log('[WxKeyServiceMac] GetDbKey elevated returned:', parsed.raw)
       } catch (e: any) {
-        const msg = String(e?.message || e)
+        const msg = `${e?.message || e}`
         if (msg.includes('(-128)') || msg.includes('User canceled')) {
           return { success: false, error: '已取消管理员授权' }
         }
@@ -217,9 +264,11 @@ export class WxKeyServiceMac {
       }
 
       if (!parsed.success) {
+        const errorMsg = this.mapDbKeyErrorMessage(parsed.code, parsed.detail)
+        onStatus?.(errorMsg, 2)
         return {
           success: false,
-          error: this.mapDbKeyErrorMessage(parsed.code, parsed.detail)
+          error: errorMsg
         }
       }
 
@@ -227,8 +276,9 @@ export class WxKeyServiceMac {
       return { success: true, key: parsed.key }
     } catch (e: any) {
       console.error('[WxKeyServiceMac] 获取密钥失败:', e)
+      console.error('[WxKeyServiceMac] Stack:', e.stack)
       onStatus?.(`获取失败: ${e.message}`, 2)
-      return { success: false, error: e.message || String(e) }
+      return { success: false, error: e.message }
     }
   }
 
@@ -251,7 +301,7 @@ export class WxKeyServiceMac {
       `set timeoutSec to ${timeoutSec}`,
       'try',
       'with timeout of timeoutSec seconds',
-      'set outText to do shell script (cmd & " 2>&1") with administrator privileges',
+      'set outText to do shell script cmd with administrator privileges',
       'end timeout',
       'return "WF_OK::" & outText',
       'on error errMsg number errNum partial result pr',
@@ -259,42 +309,47 @@ export class WxKeyServiceMac {
       'end try'
     ]
 
-    onStatus?.(`已找到微信进程 PID=${pid}，正在请求管理员授权...`, 0)
+    onStatus?.('已准备就绪，现在登录微信或退出登录后重新登录微信', 0)
 
-    const result = await execFileAsync(
-      '/usr/bin/osascript',
-      scriptLines.flatMap(line => ['-e', line]),
-      { timeout: waitMs + 20_000 }
-    )
-
-    const lines = String(result.stdout || '').split(/\r?\n/).map(x => x.trim()).filter(Boolean)
-    if (lines.length === 0) {
-      throw new Error('helper 返回空输出')
+    let stdout = ''
+    try {
+      const result = await execFileAsync('/usr/bin/osascript', scriptLines.flatMap(line => ['-e', line]), {
+        timeout: waitMs + 20_000
+      })
+      stdout = result.stdout
+    } catch (e: any) {
+      const msg = `${e?.stderr || ''}\n${e?.stdout || ''}\n${e?.message || ''}`.trim()
+      throw new Error(msg || 'elevated helper execution failed')
     }
+
+    const lines = String(stdout).split(/\r?\n/).map(x => x.trim()).filter(Boolean)
+    if (!lines.length) throw new Error('elevated helper returned empty output')
 
     const joined = lines.join('\n')
     if (joined.startsWith('WF_ERR::')) {
       const parts = joined.split('::')
-      throw new Error(`elevated helper failed: errNum=${parts[1] || 'unknown'}, errMsg=${parts[2] || 'unknown'}, partial=${parts.slice(3).join('::') || '(empty)'}`)
+      const errNum = parts[1] || 'unknown'
+      const errMsg = parts[2] || 'unknown'
+      const partial = parts.slice(3).join('::')
+      throw new Error(`elevated helper failed: errNum=${errNum}, errMsg=${errMsg}, partial=${partial || '(empty)'}`)
     }
 
     const normalizedOutput = joined.startsWith('WF_OK::') ? joined.slice('WF_OK::'.length) : joined
-    const payloads = normalizedOutput.match(/\{[^{}]*\}/g) ?? []
-    for (const item of payloads) {
-      try {
-        const parsed = JSON.parse(item)
-        if (parsed?.success === true && typeof parsed?.key === 'string') {
-          return parsed.key
-        }
-        if (typeof parsed?.result === 'string') {
-          return parsed.result
-        }
-      } catch {
-        // ignore
+    const extractJsonObjects = (s: string): any[] => {
+      const results: any[] = []
+      const re = /\{[^{}]*\}/g
+      let m: RegExpExecArray | null
+      while ((m = re.exec(s)) !== null) {
+        try { results.push(JSON.parse(m[0])) } catch { }
       }
+      return results
     }
-
-    throw new Error(`elevated helper returned invalid output: ${normalizedOutput}`)
+    const allJson = extractJsonObjects(normalizedOutput)
+    const successPayload = allJson.find(p => p?.success === true && typeof p?.key === 'string')
+    if (successPayload) return successPayload.key
+    const resultPayload = allJson.find(p => typeof p?.result === 'string')
+    if (resultPayload) return resultPayload.result
+    throw new Error('elevated helper returned invalid json: ' + lines[lines.length - 1])
   }
 
   private parseDbKeyResult(raw: any): { success: boolean; key?: string; code?: string; detail?: string; raw: string } {

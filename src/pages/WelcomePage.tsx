@@ -44,6 +44,7 @@ function WelcomePage({ standalone = false }: WelcomePageProps) {
   const [error, setError] = useState('')
 
   const [isScanningWxid, setIsScanningWxid] = useState(false)
+  const [isDetectingPath, setIsDetectingPath] = useState(false)
   const [isFetchingDbKey, setIsFetchingDbKey] = useState(false)
   const [isFetchingImageKey, setIsFetchingImageKey] = useState(false)
   const [showDecryptKey, setShowDecryptKey] = useState(false)
@@ -199,6 +200,14 @@ function WelcomePage({ standalone = false }: WelcomePageProps) {
   const rootClassName = `welcome-page${isClosing ? ' is-closing' : ''}${standalone ? ' is-standalone' : ''}`
   const showWindowControls = standalone
 
+  useEffect(() => {
+    if (currentStep.id !== 'db') return
+    if (dbPath) return
+    if (isDetectingPath) return
+
+    void handleAutoDetectPath(true)
+  }, [currentStep.id, dbPath, isDetectingPath])
+
   const handleMinimize = () => {
     window.electronAPI.window.minimize()
   }
@@ -234,6 +243,48 @@ function WelcomePage({ standalone = false }: WelcomePageProps) {
     }
   }
 
+  const handleAutoDetectPath = async (silent = false) => {
+    if (isDetectingPath) return
+
+    setIsDetectingPath(true)
+    if (!silent) setError('')
+
+    try {
+      const result = await window.electronAPI.dbPath.autoDetect()
+      if (result.success && result.path) {
+        setDbPath(result.path)
+        setError('')
+        return
+      }
+
+      if (!silent) {
+        setError(result.error || '未能自动检测到微信数据库目录')
+      }
+    } catch (e) {
+      if (!silent) {
+        setError(`自动检测失败: ${e}`)
+      }
+    } finally {
+      setIsDetectingPath(false)
+    }
+  }
+
+  const handleOpenDetectedPath = async () => {
+    if (!dbPath) {
+      setError('当前没有可打开的数据库目录')
+      return
+    }
+
+    try {
+      const result = await window.electronAPI.shell.openPath(dbPath)
+      if (result) {
+        setError(result)
+      }
+    } catch (e) {
+      setError(`打开目录失败: ${e}`)
+    }
+  }
+
 
 
   const handleSelectCachePath = async () => {
@@ -265,11 +316,38 @@ function WelcomePage({ standalone = false }: WelcomePageProps) {
       setWxidOptions(wxids)
       setIsAccountVerified(false)
       if (wxids.length > 0) {
-        // 密钥前仅做候选识别，默认优先 wxid_ 前缀目录
-        const wxidAccount = wxids.find(id => id.startsWith('wxid_'))
-        const selectedWxid = wxidAccount || wxids[0]
-        setWxid(selectedWxid)
-        if (!silent) setError('')
+        let selectedWxid = ''
+
+        if (decryptKey.length === 64) {
+          const resolved = await window.electronAPI.wcdb.resolveValidWxid(dbPath, decryptKey)
+          if (resolved.success && resolved.wxid && wxids.includes(resolved.wxid)) {
+            selectedWxid = resolved.wxid
+          }
+        }
+
+        if (!selectedWxid) {
+          let accountInfo: { wxid: string; dbPath: string } | null = null
+          accountInfo = await window.electronAPI.wxKey.detectCurrentAccount(dbPath, 10)
+          if (!accountInfo) {
+            accountInfo = await window.electronAPI.wxKey.detectCurrentAccount(dbPath, 60)
+          }
+
+          if (accountInfo && wxids.includes(accountInfo.wxid)) {
+            selectedWxid = accountInfo.wxid
+          }
+        }
+
+        if (!selectedWxid) {
+          const wxidAccount = wxids.find(id => id.startsWith('wxid_'))
+          selectedWxid = wxidAccount || wxids[0]
+        }
+
+        if (selectedWxid) {
+          setWxid(selectedWxid)
+          if (!silent) setError('')
+        } else {
+          if (!silent) setError('未能自动确定正确账号目录，请手动选择')
+        }
       } else {
         if (!silent) setError('未检测到账号目录，请检查路径')
       }
@@ -288,12 +366,28 @@ function WelcomePage({ standalone = false }: WelcomePageProps) {
     setError('')
     setDbKeyStatus('正在准备获取密钥...')
     try {
-      const result = await window.electronAPI.wxKey.startGetKey(wechatPath)
+      const result = await window.electronAPI.wxKey.startGetKey(wechatPath, dbPath || undefined)
       if (result.success && result.key) {
         setDecryptKey(result.key)
         setDbKeyStatus('密钥获取成功，正在验证账号目录...')
         setError('')
         setShowWechatPathPrompt(false)
+
+        if (dbPath) {
+          const resolved = await window.electronAPI.wcdb.resolveValidWxid(dbPath, result.key)
+          if (resolved.success && resolved.wxid) {
+            setWxid(resolved.wxid)
+            setIsAccountVerified(true)
+            setDbKeyStatus(`密钥获取成功，已验证账号目录: ${resolved.wxid}`)
+            return
+          }
+        }
+
+        if (result.validatedWxid) {
+          setWxid(result.validatedWxid)
+          setDbKeyStatus(`密钥获取成功，已验证账号目录: ${result.validatedWxid}`)
+          return
+        }
 
         // 先尝试当前登录账号检测（强信号）
         let accountInfo: { wxid: string; dbPath: string } | null = null
@@ -593,11 +687,11 @@ function WelcomePage({ standalone = false }: WelcomePageProps) {
     <div className={rootClassName}>
       {showWindowControls && (
         <div className="window-controls">
-          <button type="button" className="window-btn" onClick={handleMinimize} aria-label="最小化">
-            <Minus size={14} />
-          </button>
           <button type="button" className="window-btn is-close" onClick={handleCloseWindow} aria-label="关闭">
             <X size={14} />
+          </button>
+          <button type="button" className="window-btn" onClick={handleMinimize} aria-label="最小化">
+            <Minus size={14} />
           </button>
         </div>
       )}
@@ -678,20 +772,12 @@ function WelcomePage({ standalone = false }: WelcomePageProps) {
 
             {currentStep.id === 'db' && (
               <div className="info-content">
-                <h3>数据库目录说明</h3>
-                <p>这是微信存储聊天记录的根目录，通常位于：</p>
+                <h3>自动获取数据库目录</h3>
+                <p>系统会优先自动识别当前设备上的微信数据存储目录。</p>
                 <ul className="info-list">
-                  {isMac ? (
-                    <li><code>~/Library/Containers/com.tencent.xinWeChat/Data/Library/Application Support/com.tencent.xinWeChat/&lt;version&gt;</code> 或旧版 <code>xwechat_files</code></li>
-                  ) : (
-                    <li>微信 → 设置 → 账号与存储 → 存储位置</li>
-                  )}
-                  {isMac ? (
-                    <li>支持 4.0.5+ 新路径和旧版 <code>xwechat_files</code> 路径</li>
-                  ) : (
-                    <li>按照上面的路径找到 <code>xwechat_files</code> 目录</li>
-                  )}
-                  <li>{isMac ? '建议优先选择版本目录或账号根目录' : '路径中不能包含中文字符'}</li>
+                  <li>进入本步骤后会先尝试自动检测</li>
+                  <li>检测到结果后可直接打开文件夹确认</li>
+                  <li>{isMac ? '若未命中，再手动选择版本目录或账号目录' : '若未命中，再按微信存储位置手动选择'}</li>
                 </ul>
                 {!isMac && (
                   <div className="info-warning">
@@ -718,15 +804,15 @@ function WelcomePage({ standalone = false }: WelcomePageProps) {
             {currentStep.id === 'key' && (
               <div className="info-content">
                 <h3>解密密钥说明</h3>
-                <p>用于解密微信数据库的64位十六进制密钥。</p>
+                <p>此步骤会在本机完成密钥识别与账号校验。</p>
                 <ul className="info-list">
-                  <li>{isMac ? 'macOS 通过 helper + 断点捕获获取 DbKey' : '点击"自动获取"会自动启动微信'}</li>
-                  <li>{isMac ? '此流程要求先关闭 SIP，并允许管理员提权' : '等待提示"hook安装成功"后登录'}</li>
-                  <li>{isMac ? '成功后会自动回填 64 位 DbKey 并尝试识别账号' : '登录后会自动识别账号'}</li>
+                  <li>{isMac ? '建议先启动微信，并按界面提示完成授权' : '点击“自动获取”后按提示操作'}</li>
+                  <li>{isMac ? '识别完成后会自动尝试匹配账号目录' : '完成后会自动识别账号目录'}</li>
+                  <li>密钥仅保存在本地配置中</li>
                 </ul>
                 <div className="info-warning">
                   <ShieldCheck size={16} />
-                  <span>{isMac ? '若 SIP 未关闭，自动获取会直接失败并给出提示' : '密钥仅保存在本地，不会上传'}</span>
+                  <span>{isMac ? '若系统环境不满足要求，界面会直接给出提示' : '密钥不会上传到服务器'}</span>
                 </div>
               </div>
             )}
@@ -822,9 +908,25 @@ function WelcomePage({ standalone = false }: WelcomePageProps) {
                     value={dbPath}
                     onChange={(e) => setDbPath(e.target.value)}
                   />
-                  <button className="btn btn-primary btn-full" onClick={handleSelectPath}>
-                    <FolderOpen size={16} /> 浏览选择目录
-                  </button>
+                  <div className="button-row">
+                    <button
+                      className="btn btn-primary"
+                      onClick={() => handleAutoDetectPath()}
+                      disabled={isDetectingPath}
+                    >
+                      <Wand2 size={16} /> {isDetectingPath ? '自动检测中...' : '自动检测'}
+                    </button>
+                    <button className="btn btn-secondary" onClick={handleSelectPath}>
+                      <FolderOpen size={16} /> 浏览选择目录
+                    </button>
+                  </div>
+                  {dbPath && (
+                    <div className="button-row">
+                      <button className="btn btn-secondary" onClick={handleOpenDetectedPath}>
+                        <FolderOpen size={16} /> 打开此文件夹
+                      </button>
+                    </div>
+                  )}
                   <div className="field-hint">{isMac ? '请选择微信版本目录或账号根目录' : '请选择微信-设置-存储位置对应的目录'}</div>
                   {!isMac && (
                     <div className="field-hint" style={{ color: '#ff6b6b', marginTop: '4px' }}>⚠️ 目录路径不可包含中文，如有中文请去微信-设置-存储位置点击更改，迁移至全英文目录</div>

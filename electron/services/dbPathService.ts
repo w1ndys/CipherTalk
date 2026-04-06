@@ -2,19 +2,19 @@ import { basename, join } from 'path'
 import { existsSync, readdirSync, statSync } from 'fs'
 import { homedir } from 'os'
 
+type PathCandidate = {
+  path: string
+  accountCount: number
+  latestModified: number
+  score: number
+}
+
 export class DbPathService {
   async autoDetect(): Promise<{ success: boolean; path?: string; error?: string }> {
     try {
-      for (const candidate of this.getPossibleRoots()) {
-        if (!existsSync(candidate)) continue
-
-        if (this.isAccountDir(candidate)) {
-          return { success: true, path: candidate }
-        }
-
-        if (this.findAccountDirs(candidate).length > 0) {
-          return { success: true, path: candidate }
-        }
+      const candidates = this.collectCandidates()
+      if (candidates.length > 0) {
+        return { success: true, path: candidates[0].path }
       }
 
       return { success: false, error: '未能自动检测到微信数据库目录' }
@@ -36,6 +36,9 @@ export class DbPathService {
 
   getDefaultPath(): string {
     const home = homedir()
+    const detected = this.collectCandidates()[0]
+    if (detected) return detected.path
+
     if (process.platform === 'darwin') {
       const appSupportBase = join(
         home,
@@ -94,6 +97,95 @@ export class DbPathService {
       join(home, 'Documents', 'xwechat_files'),
       join(home, 'Documents', 'WeChat Files')
     ]
+  }
+
+  private collectCandidates(): PathCandidate[] {
+    const candidates: PathCandidate[] = []
+    const seen = new Set<string>()
+
+    const pushCandidate = (candidatePath: string) => {
+      const normalized = String(candidatePath || '').replace(/[\\/]+$/, '')
+      if (!normalized || seen.has(normalized) || !existsSync(normalized)) return
+      seen.add(normalized)
+
+      if (this.isAccountDir(normalized)) {
+        const latestModified = this.getAccountModifiedTime(normalized)
+        candidates.push({
+          path: normalized,
+          accountCount: 1,
+          latestModified,
+          score: 1_000_000 + latestModified
+        })
+        return
+      }
+
+      const accounts = this.findAccountDirs(normalized)
+      if (accounts.length === 0) return
+
+      let latestModified = 0
+      for (const account of accounts) {
+        latestModified = Math.max(latestModified, this.getAccountModifiedTime(join(normalized, account)))
+      }
+
+      const rootName = basename(normalized).toLowerCase()
+      const rootBonus =
+        process.platform === 'darwin' && this.isMacVersionDir(rootName) ? 50_000 :
+          rootName === 'xwechat_files' ? 30_000 :
+            rootName === 'wechat files' ? 20_000 :
+              0
+
+      candidates.push({
+        path: normalized,
+        accountCount: accounts.length,
+        latestModified,
+        score: rootBonus + accounts.length * 10_000 + latestModified
+      })
+    }
+
+    for (const candidate of this.getPossibleRoots()) {
+      pushCandidate(candidate)
+    }
+
+    if (process.platform === 'darwin') {
+      for (const candidate of this.getMacNestedRoots()) {
+        pushCandidate(candidate)
+      }
+    }
+
+    return candidates.sort((a, b) => {
+      if (b.score !== a.score) return b.score - a.score
+      return a.path.localeCompare(b.path)
+    })
+  }
+
+  private getMacNestedRoots(): string[] {
+    const home = homedir()
+    const appSupportBase = join(
+      home,
+      'Library',
+      'Containers',
+      'com.tencent.xinWeChat',
+      'Data',
+      'Library',
+      'Application Support',
+      'com.tencent.xinWeChat'
+    )
+
+    const nestedRoots: string[] = []
+
+    for (const entry of this.safeReadDir(appSupportBase)) {
+      if (!this.isMacVersionDir(entry)) continue
+
+      const versionDir = join(appSupportBase, entry)
+      nestedRoots.push(versionDir)
+
+      for (const child of this.safeReadDir(versionDir)) {
+        if (!this.isPotentialAccountName(child)) continue
+        nestedRoots.push(join(versionDir, child))
+      }
+    }
+
+    return nestedRoots
   }
 
   private findAccountDirs(rootPath: string): string[] {

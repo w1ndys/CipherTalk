@@ -294,7 +294,7 @@ export interface ElectronAPI {
     killWeChat: () => Promise<boolean>
     launchWeChat: () => Promise<boolean>
     waitForWindow: (maxWaitSeconds?: number) => Promise<boolean>
-    startGetKey: (customWechatPath?: string) => Promise<{ success: boolean; key?: string; error?: string; needManualPath?: boolean }>
+    startGetKey: (customWechatPath?: string, dbPath?: string) => Promise<{ success: boolean; key?: string; error?: string; needManualPath?: boolean; validatedWxid?: string }>
     cancel: () => Promise<boolean>
     detectCurrentAccount: (dbPath?: string, maxTimeDiffMinutes?: number) => Promise<{ wxid: string; dbPath: string } | null>
     onStatus: (callback: (data: { status: string; level: number }) => void) => () => void
@@ -307,6 +307,7 @@ export interface ElectronAPI {
   }
   wcdb: {
     testConnection: (dbPath: string, hexKey: string, wxid: string, isAutoConnect?: boolean) => Promise<{ success: boolean; error?: string; sessionCount?: number }>
+    resolveValidWxid: (dbPath: string, hexKey: string) => Promise<{ success: boolean; wxid?: string; error?: string }>
     open: (dbPath: string, hexKey: string, wxid: string) => Promise<boolean>
     close: () => Promise<boolean>
     decryptDatabase: (dbPath: string, hexKey: string, wxid: string) => Promise<{ success: boolean; error?: string; totalFiles?: number; successCount?: number; failCount?: number }>

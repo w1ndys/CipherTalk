@@ -7,6 +7,10 @@ export class WcdbService {
   private koffi: any = null
   private initialized = false
   private handle: number | null = null
+  private currentPath: string | null = null
+  private currentKey: string | null = null
+  private currentWxid: string | null = null
+  private currentDbStoragePath: string | null = null
 
   private wcdbInit: any = null
   private wcdbShutdown: any = null
@@ -37,8 +41,8 @@ export class WcdbService {
     return join(baseDir, 'WCDB.dll')
   }
 
-  private findSessionDb(dir: string, depth = 0): string | null {
-    if (depth > 5) return null
+  private findSessionDbs(dir: string, depth = 0, results: string[] = []): string[] {
+    if (depth > 5) return results
 
     try {
       const entries = readdirSync(dir)
@@ -46,8 +50,8 @@ export class WcdbService {
       for (const entry of entries) {
         if (entry.toLowerCase() === 'session.db') {
           const fullPath = join(dir, entry)
-          if (statSync(fullPath).isFile()) {
-            return fullPath
+          if (statSync(fullPath).isFile() && !results.includes(fullPath)) {
+            results.push(fullPath)
           }
         }
       }
@@ -56,8 +60,7 @@ export class WcdbService {
         const fullPath = join(dir, entry)
         try {
           if (statSync(fullPath).isDirectory()) {
-            const found = this.findSessionDb(fullPath, depth + 1)
-            if (found) return found
+            this.findSessionDbs(fullPath, depth + 1, results)
           }
         } catch {
           // ignore
@@ -67,92 +70,89 @@ export class WcdbService {
       console.error('查找 session.db 失败:', e)
     }
 
-    return null
+    return results
   }
 
-  private normalizeWxid(wxid: string): string {
-    const trimmed = String(wxid || '').trim()
-    if (!trimmed) return ''
-
-    if (trimmed.toLowerCase().startsWith('wxid_')) {
-      const match = trimmed.match(/^(wxid_[^_]+)/i)
-      return match?.[1] || trimmed
-    }
-
-    const suffixMatch = trimmed.match(/^(.+)_([a-zA-Z0-9]{4})$/)
-    return suffixMatch ? suffixMatch[1] : trimmed
+  private scoreSessionDbPath(filePath: string): number {
+    const normalized = filePath.replace(/\\/g, '/').toLowerCase()
+    let score = 0
+    if (normalized.endsWith('/session/session.db')) score += 40
+    if (normalized.includes('/db_storage/session/')) score += 20
+    if (normalized.includes('/db_storage/')) score += 10
+    return score
   }
 
-  private isAccountDir(dirPath: string): boolean {
-    return (
-      existsSync(join(dirPath, 'db_storage')) ||
-      existsSync(join(dirPath, 'FileStorage', 'Image')) ||
-      existsSync(join(dirPath, 'FileStorage', 'Image2')) ||
-      existsSync(join(dirPath, 'msg', 'attach'))
-    )
+  private getCandidateSessionDbs(dbStoragePath: string): string[] {
+    return this.findSessionDbs(dbStoragePath)
+      .sort((a, b) => this.scoreSessionDbPath(b) - this.scoreSessionDbPath(a) || a.localeCompare(b))
   }
 
-  private resolveAccountRoot(dbPath: string, wxid: string): string | null {
-    const normalizedDbPath = dbPath.replace(/[\\/]+$/, '')
-    const direct = join(normalizedDbPath, wxid)
-    if (existsSync(direct) && this.isAccountDir(direct)) {
-      return direct
-    }
+  private tryOpenWithCandidates(sessionDbPaths: string[], hexKey: string): { success: boolean; handle?: number; matchedPath?: string; errors: string[] } {
+    const errors: string[] = []
 
-    const normalizedWxid = this.normalizeWxid(wxid)
-    const directNormalized = join(normalizedDbPath, normalizedWxid)
-    if (existsSync(directNormalized) && this.isAccountDir(directNormalized)) {
-      return directNormalized
-    }
-
-    if (this.isAccountDir(normalizedDbPath) && basename(normalizedDbPath) === wxid) {
-      return normalizedDbPath
-    }
-
-    if (this.isAccountDir(normalizedDbPath) && basename(normalizedDbPath) === normalizedWxid) {
-      return normalizedDbPath
-    }
-
-    try {
-      for (const entry of readdirSync(normalizedDbPath, { withFileTypes: true })) {
-        if (!entry.isDirectory()) continue
-        const entryPath = join(normalizedDbPath, entry.name)
-        if (!this.isAccountDir(entryPath)) continue
-
-        const lowerEntry = entry.name.toLowerCase()
-        const lowerWxid = wxid.toLowerCase()
-        const lowerNormalizedWxid = normalizedWxid.toLowerCase()
-        const cleanedEntry = this.normalizeWxid(entry.name).toLowerCase()
-
-        if (
-          lowerEntry === lowerWxid ||
-          lowerEntry === lowerNormalizedWxid ||
-          cleanedEntry === lowerWxid ||
-          cleanedEntry === lowerNormalizedWxid ||
-          lowerEntry.startsWith(`${lowerWxid}_`) ||
-          lowerEntry.startsWith(`${lowerNormalizedWxid}_`)
-        ) {
-          return entryPath
+    for (const sessionDbPath of sessionDbPaths) {
+      const handleOut = [0]
+      const result = this.wcdbOpenAccount(sessionDbPath, hexKey, handleOut)
+      if (result === 0 && handleOut[0] > 0) {
+        return {
+          success: true,
+          handle: handleOut[0],
+          matchedPath: sessionDbPath,
+          errors
         }
       }
-    } catch {
-      // ignore
+
+      errors.push(`${sessionDbPath} => ${this.mapStatusCode(result)}`)
     }
 
-    return null
+    return { success: false, errors }
   }
 
   private resolveDbStoragePath(dbPath: string, wxid: string): string | null {
+    if (!dbPath) return null
+
     const normalizedDbPath = dbPath.replace(/[\\/]+$/, '')
     if (basename(normalizedDbPath).toLowerCase() === 'db_storage' && existsSync(normalizedDbPath)) {
       return normalizedDbPath
     }
 
-    const accountRoot = this.resolveAccountRoot(normalizedDbPath, wxid)
-    if (!accountRoot) return null
+    const direct = join(normalizedDbPath, 'db_storage')
+    if (existsSync(direct)) {
+      return direct
+    }
 
-    const dbStoragePath = join(accountRoot, 'db_storage')
-    return existsSync(dbStoragePath) ? dbStoragePath : null
+    if (wxid) {
+      const viaWxid = join(normalizedDbPath, wxid, 'db_storage')
+      if (existsSync(viaWxid)) {
+        return viaWxid
+      }
+
+      try {
+        const lowerWxid = wxid.toLowerCase()
+        for (const entry of readdirSync(normalizedDbPath)) {
+          const entryPath = join(normalizedDbPath, entry)
+          try {
+            if (!statSync(entryPath).isDirectory()) continue
+          } catch {
+            continue
+          }
+
+          const lowerEntry = entry.toLowerCase()
+          if (lowerEntry !== lowerWxid && !lowerEntry.startsWith(`${lowerWxid}_`)) {
+            continue
+          }
+
+          const candidate = join(entryPath, 'db_storage')
+          if (existsSync(candidate)) {
+            return candidate
+          }
+        }
+      } catch {
+        // ignore
+      }
+    }
+
+    return null
   }
 
   private async initialize(): Promise<{ success: boolean; error?: string }> {
@@ -201,6 +201,20 @@ export class WcdbService {
 
   async testConnection(dbPath: string, hexKey: string, wxid: string): Promise<{ success: boolean; error?: string; sessionCount?: number }> {
     try {
+      if (
+        this.handle !== null &&
+        this.currentPath === dbPath &&
+        this.currentKey === hexKey &&
+        this.currentWxid === wxid
+      ) {
+        return { success: true, sessionCount: 0 }
+      }
+
+      const hadActiveConnection = this.handle !== null
+      const prevPath = this.currentPath
+      const prevKey = this.currentKey
+      const prevWxid = this.currentWxid
+
       const initRes = await this.initialize()
       if (!initRes.success) {
         return { success: false, error: initRes.error || 'WCDB 初始化失败' }
@@ -211,24 +225,45 @@ export class WcdbService {
         return { success: false, error: `未找到账号目录或 db_storage: ${dbPath}` }
       }
 
-      const sessionDbPath = this.findSessionDb(dbStoragePath)
-      if (!sessionDbPath) {
-        return { success: false, error: '未找到 session.db 文件' }
+      const sessionDbPaths = this.getCandidateSessionDbs(dbStoragePath)
+      if (sessionDbPaths.length === 0) {
+        return { success: false, error: `未找到 session.db 文件: ${dbStoragePath}` }
       }
 
-      const handleOut = [0]
-      const result = this.wcdbOpenAccount(sessionDbPath, hexKey, handleOut)
-      if (result !== 0) {
-        await this.printLogs()
-        return { success: false, error: this.mapStatusCode(result) }
+      const openResult = this.tryOpenWithCandidates(sessionDbPaths, hexKey)
+      if (!openResult.success || !openResult.handle || !openResult.matchedPath) {
+        const logs = await this.printLogs()
+        return {
+          success: false,
+          error: `数据库打开失败 | db_storage=${dbStoragePath} | tried=${sessionDbPaths.join(', ')}${openResult.errors.length ? ` | details=${openResult.errors.join(' ; ')}` : ''}${logs ? ` | logs=${logs}` : ''}`
+        }
       }
 
-      const handle = handleOut[0]
-      if (handle <= 0) {
+      const tempHandle = openResult.handle
+      if (tempHandle <= 0) {
         return { success: false, error: '无效的数据库句柄' }
       }
 
-      this.handle = handle
+      try {
+        this.wcdbShutdown()
+        this.handle = null
+        this.currentPath = null
+        this.currentKey = null
+        this.currentWxid = null
+        this.currentDbStoragePath = null
+        this.initialized = false
+      } catch (e) {
+        console.error('关闭测试数据库时出错:', e)
+      }
+
+      if (hadActiveConnection && prevPath && prevKey && prevWxid) {
+        try {
+          await this.open(prevPath, prevKey, prevWxid)
+        } catch {
+          // ignore restore failure
+        }
+      }
+
       return { success: true, sessionCount: 0 }
     } catch (e) {
       console.error('测试连接异常:', e)
@@ -237,8 +272,63 @@ export class WcdbService {
   }
 
   async open(dbPath: string, hexKey: string, wxid: string): Promise<boolean> {
-    const result = await this.testConnection(dbPath, hexKey, wxid)
-    return result.success
+    try {
+      if (
+        this.handle !== null &&
+        this.currentPath === dbPath &&
+        this.currentKey === hexKey &&
+        this.currentWxid === wxid
+      ) {
+        return true
+      }
+
+      const initRes = await this.initialize()
+      if (!initRes.success) {
+        return false
+      }
+
+      if (this.handle !== null) {
+        this.close()
+        const reinitRes = await this.initialize()
+        if (!reinitRes.success) {
+          return false
+        }
+      }
+
+      const dbStoragePath = this.resolveDbStoragePath(dbPath, wxid)
+      if (!dbStoragePath) {
+        console.error('数据库目录不存在:', dbPath)
+        return false
+      }
+
+      const sessionDbPaths = this.getCandidateSessionDbs(dbStoragePath)
+      if (sessionDbPaths.length === 0) {
+        console.error('未找到 session.db 文件:', dbStoragePath)
+        return false
+      }
+
+      const openResult = this.tryOpenWithCandidates(sessionDbPaths, hexKey)
+      if (!openResult.success || !openResult.handle) {
+        await this.printLogs()
+        return false
+      }
+
+      const handle = openResult.handle
+      if (handle <= 0) {
+        return false
+      }
+
+      this.handle = handle
+      this.currentPath = dbPath
+      this.currentKey = hexKey
+      this.currentWxid = wxid
+      this.currentDbStoragePath = dbStoragePath
+      this.initialized = true
+      return true
+    } catch (e) {
+      console.error('打开数据库异常:', e)
+      return false
+    }
   }
 
   close(): void {
@@ -261,6 +351,10 @@ export class WcdbService {
     this.handle = null
     this.initialized = false
     this.lib = null
+    this.currentPath = null
+    this.currentKey = null
+    this.currentWxid = null
+    this.currentDbStoragePath = null
   }
 
   shutdown(): void {
@@ -330,19 +424,21 @@ export class WcdbService {
     return encryptedData
   }
 
-  private async printLogs(): Promise<void> {
+  private async printLogs(): Promise<string> {
     try {
-      if (!this.wcdbGetLogs) return
+      if (!this.wcdbGetLogs) return ''
       const outPtr = [null as any]
       const result = this.wcdbGetLogs(outPtr)
       if (result === 0 && outPtr[0]) {
         const jsonStr = this.koffi.decode(outPtr[0], 'char', -1)
         console.error('WCDB 内部日志:', jsonStr)
         this.wcdbFreeString(outPtr[0])
+        return jsonStr
       }
     } catch (e) {
       console.error('获取 WCDB 日志失败:', e)
     }
+    return ''
   }
 
   private mapStatusCode(code: number): string {

@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, nativeTheme, protocol, net, Tray, Menu } from 'electron'
+import { app, BrowserWindow, ipcMain, nativeImage, nativeTheme, protocol, net, Tray, Menu } from 'electron'
 import { join } from 'path'
 import { randomBytes } from 'crypto'
 import { readFileSync, existsSync, mkdirSync } from 'fs'
@@ -183,14 +183,53 @@ function getAppIconPath(): string {
   }
 }
 
+function getDockIconPath(): string {
+  const isDev = !!process.env.VITE_DEV_SERVER_URL
+  const iconName = configService?.get('appIcon') || 'default'
+
+  if (iconName === 'xinnian') {
+    const devPaddedPath = join(__dirname, '../public/xinnian-dock.png')
+    const devFallbackPath = join(__dirname, '../public/xinnian.png')
+    return isDev
+      ? (existsSync(devPaddedPath) ? devPaddedPath : devFallbackPath)
+      : join(process.resourcesPath, 'icon.png')
+  }
+
+  const devPaddedPath = join(__dirname, '../public/icon-dock.png')
+  const devFallbackPath = join(__dirname, '../public/logo.png')
+  return isDev
+    ? (existsSync(devPaddedPath) ? devPaddedPath : devFallbackPath)
+    : join(process.resourcesPath, 'icon.png')
+}
+
+function getTrayIconPath(): string {
+  if (process.platform === 'darwin') {
+    const isDev = !!process.env.VITE_DEV_SERVER_URL
+    const iconName = configService?.get('appIcon') || 'default'
+    const devTrayPath = iconName === 'xinnian'
+      ? join(__dirname, '../public/xinnian-tray.png')
+      : join(__dirname, '../public/tray-mac.png')
+
+    if (isDev && existsSync(devTrayPath)) {
+      return devTrayPath
+    }
+  }
+
+  return getAppIconPath()
+}
+
 /**
  * 创建系统托盘
  */
 function createTray() {
   if (tray) return tray
 
-  const iconPath = getAppIconPath()
+  const iconPath = getTrayIconPath()
   tray = new Tray(iconPath)
+
+  if (process.platform === 'darwin') {
+    tray.setIgnoreDoubleClickEvents(true)
+  }
 
   const contextMenu = Menu.buildFromTemplate([
     {
@@ -1406,14 +1445,20 @@ function registerIpcHandlers() {
 
   ipcMain.handle('app:setAppIcon', async (_, iconName: string) => {
     try {
-      const iconPath = getAppIconPath()
+      const iconPath = process.platform === 'darwin' ? getDockIconPath() : getAppIconPath()
 
       if (existsSync(iconPath)) {
-        const { nativeImage } = require('electron')
         const image = nativeImage.createFromPath(iconPath)
-        BrowserWindow.getAllWindows().forEach(win => {
-          win.setIcon(image)
-        })
+
+        if (process.platform === 'darwin') {
+          if (!image.isEmpty()) {
+            app.dock.setIcon(image)
+          }
+        } else {
+          BrowserWindow.getAllWindows().forEach(win => {
+            win.setIcon(image)
+          })
+        }
 
         // 尝试更新桌面快捷方式图标 (不阻塞主线程)
         shortcutService.updateDesktopShortcutIcon(iconPath).catch(err => {
@@ -1713,20 +1758,111 @@ function registerIpcHandlers() {
     return wxKeyService.waitForWeChatWindow(maxWaitSeconds)
   })
 
-  ipcMain.handle('wxkey:startGetKey', async (event, customWechatPath?: string) => {
+  ipcMain.handle('wxkey:startGetKey', async (event, customWechatPath?: string, dbPath?: string) => {
     logService?.info('WxKey', '开始获取微信密钥', { customWechatPath })
     if (process.platform === 'darwin') {
       try {
+        const isRunning = wxKeyServiceMac.isWeChatRunning()
+        if (isRunning) {
+          event.sender.send('wxkey:status', { status: '检测到微信正在运行，正在关闭微信...', level: 0 })
+          wxKeyServiceMac.killWeChat()
+
+          const exited = await wxKeyServiceMac.waitForWeChatExit(20)
+          if (!exited) {
+            return { success: false, error: '未能自动关闭微信，请先手动退出微信后重试' }
+          }
+
+          event.sender.send('wxkey:status', { status: '微信已关闭，正在重新启动微信...', level: 0 })
+          const relaunched = await wxKeyServiceMac.launchWeChat(customWechatPath)
+          if (!relaunched) {
+            return { success: false, error: '微信关闭后自动重启失败' }
+          }
+
+          event.sender.send('wxkey:status', { status: '微信已重新启动，等待主进程就绪...', level: 0 })
+          const ready = await wxKeyServiceMac.waitForWeChatWindow(20)
+          if (!ready) {
+            return { success: false, error: '微信已重新启动，但未检测到可用主进程，请确认微信已完成启动并显示主窗口' }
+          }
+        } else {
+          event.sender.send('wxkey:status', { status: '未检测到微信主进程，正在尝试启动微信...', level: 0 })
+
+          const launched = await wxKeyServiceMac.launchWeChat(customWechatPath)
+          if (!launched) {
+            return { success: false, error: '未找到微信主进程，且自动启动微信失败' }
+          }
+
+          event.sender.send('wxkey:status', { status: '微信已启动，等待主进程就绪...', level: 0 })
+          const ready = await wxKeyServiceMac.waitForWeChatWindow(20)
+          if (!ready) {
+            return { success: false, error: '微信已启动，但未检测到可用主进程，请确认微信已完成启动并显示主窗口' }
+          }
+        }
+
         const result = await wxKeyServiceMac.autoGetDbKey(180_000, (status, level) => {
           event.sender.send('wxkey:status', { status, level })
         })
 
-        if (result.success) {
-          logService?.info('WxKey', 'macOS 数据库密钥获取成功', { keyLength: result.key?.length || 0 })
-        } else {
+        if (!result.success) {
           logService?.warn('WxKey', 'macOS 数据库密钥获取失败', { error: result.error })
+          return result
         }
 
+        if (result.key && dbPath) {
+          event.sender.send('wxkey:status', { status: '已获取候选密钥，正在验证数据库...', level: 0 })
+
+          const wxidCandidates: string[] = []
+          const pushWxid = (value?: string | null) => {
+            const wxid = String(value || '').trim()
+            if (!wxid || wxidCandidates.includes(wxid)) return
+            wxidCandidates.push(wxid)
+          }
+
+          let currentAccount = wxKeyServiceMac.detectCurrentAccount(dbPath, 10)
+          if (!currentAccount) {
+            currentAccount = wxKeyServiceMac.detectCurrentAccount(dbPath, 60)
+          }
+          pushWxid(currentAccount?.wxid)
+
+          try {
+            const scannedWxids = dbPathService.scanWxids(dbPath)
+            for (const wxid of scannedWxids) {
+              pushWxid(wxid)
+            }
+          } catch {
+            // ignore
+          }
+
+          let validatedWxid = ''
+          let lastError = ''
+          for (const wxid of wxidCandidates) {
+            event.sender.send('wxkey:status', { status: `正在验证账号目录: ${wxid}`, level: 0 })
+            const testResult = await wcdbService.testConnection(dbPath, result.key, wxid)
+            if (testResult.success) {
+              validatedWxid = wxid
+              break
+            }
+            lastError = testResult.error || ''
+          }
+
+          if (!validatedWxid) {
+            logService?.warn('WxKey', 'macOS 候选密钥未通过数据库验证', {
+              dbPath,
+              candidateCount: wxidCandidates.length
+            })
+            return {
+              success: false,
+              error: lastError || '已捕获到候选密钥，但未通过数据库验证。请在微信完成登录后进入任意聊天，让数据库访问真正触发，再重试。'
+            }
+          }
+
+          logService?.info('WxKey', 'macOS 候选密钥已通过数据库验证', { dbPath, wxid: validatedWxid })
+          return {
+            ...result,
+            validatedWxid
+          }
+        }
+
+        logService?.info('WxKey', 'macOS 数据库密钥获取成功', { keyLength: result.key?.length || 0 })
         return result
       } catch (e) {
         wxKeyServiceMac.dispose()
@@ -1887,6 +2023,26 @@ function registerIpcHandlers() {
       }
     }
     return result
+  })
+
+  ipcMain.handle('wcdb:resolveValidWxid', async (_, dbPath: string, hexKey: string) => {
+    try {
+      const wxids = dbPathService.scanWxids(dbPath)
+      if (wxids.length === 0) {
+        return { success: false, error: '未检测到账号目录' }
+      }
+
+      for (const wxid of wxids) {
+        const result = await wcdbService.testConnection(dbPath, hexKey, wxid, true)
+        if (result.success) {
+          return { success: true, wxid }
+        }
+      }
+
+      return { success: false, error: '未找到可通过当前密钥验证的账号目录' }
+    } catch (e) {
+      return { success: false, error: String(e) }
+    }
   })
 
   ipcMain.handle('wcdb:open', async (_, dbPath: string, hexKey: string, wxid: string) => {
@@ -3961,6 +4117,16 @@ app.on('certificate-error', (event, webContents, url, error, certificate, callba
 app.whenReady().then(async () => {
   if (!configService) {
     configService = new ConfigService()
+  }
+
+  if (process.platform === 'darwin') {
+    const dockIconPath = getDockIconPath()
+    if (existsSync(dockIconPath)) {
+      const dockIcon = nativeImage.createFromPath(dockIconPath)
+      if (!dockIcon.isEmpty()) {
+        app.dock.setIcon(dockIcon)
+      }
+    }
   }
 
   if (!configService.get('mcpProxyToken')) {

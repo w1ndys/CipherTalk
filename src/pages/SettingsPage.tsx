@@ -691,12 +691,33 @@ function SettingsPage() {
           setKeyStatus(status)
         })
 
-        const result = await window.electronAPI.wxKey.startGetKey()
+        const result = await window.electronAPI.wxKey.startGetKey(undefined, dbPath || undefined)
         removeListener()
 
         if (result.success && result.key) {
           setDecryptKey(result.key)
           await configService.setDecryptKey(result.key)
+
+          if (dbPath) {
+            const resolved = await window.electronAPI.wcdb.resolveValidWxid(dbPath, result.key)
+            if (resolved.success && resolved.wxid) {
+              setWxid(resolved.wxid)
+              setIsAccountVerified(true)
+              await configService.setMyWxid(resolved.wxid)
+              showMessage(`密钥获取成功！已验证账号: ${resolved.wxid}`, true)
+              setKeyStatus('')
+              return
+            }
+          }
+
+          if (result.validatedWxid) {
+            setWxid(result.validatedWxid)
+            setIsAccountVerified(true)
+            await configService.setMyWxid(result.validatedWxid)
+            showMessage(`密钥获取成功！已验证账号: ${result.validatedWxid}`, true)
+            setKeyStatus('')
+            return
+          }
 
           setKeyStatus('正在检测当前登录账号...')
 
@@ -771,7 +792,7 @@ function SettingsPage() {
       })
 
       setKeyStatus('Hook 已安装，请登录微信...')
-      const result = await window.electronAPI.wxKey.startGetKey()
+      const result = await window.electronAPI.wxKey.startGetKey(undefined, dbPath || undefined)
       removeListener()
 
       if (result.success && result.key) {
@@ -893,10 +914,36 @@ function SettingsPage() {
         setWxidOptions([])
         setShowWxidDropdown(false)
       } else {
-        // 多个账号，显示选择下拉框
+        let selectedWxid = ''
+
+        if (decryptKey.length === 64) {
+          const resolved = await window.electronAPI.wcdb.resolveValidWxid(dbPath, decryptKey)
+          if (resolved.success && resolved.wxid && wxids.includes(resolved.wxid)) {
+            selectedWxid = resolved.wxid
+            setWxid(selectedWxid)
+          }
+        }
+
+        if (!selectedWxid) {
+          let accountInfo = await window.electronAPI.wxKey.detectCurrentAccount(dbPath, 10)
+          if (!accountInfo) {
+            accountInfo = await window.electronAPI.wxKey.detectCurrentAccount(dbPath, 60)
+          }
+
+          if (accountInfo && wxids.includes(accountInfo.wxid)) {
+            selectedWxid = accountInfo.wxid
+            setWxid(selectedWxid)
+          }
+        }
+
         setWxidOptions(wxids)
         setShowWxidDropdown(true)
-        showMessage(`检测到 ${wxids.length} 个候选账号目录，请选择后验证`, true)
+        showMessage(
+          selectedWxid
+            ? `检测到 ${wxids.length} 个候选账号目录，已按最新活动优先选择：${selectedWxid}`
+            : `检测到 ${wxids.length} 个候选账号目录，请选择后验证`,
+          true
+        )
       }
     } catch (e) {
       showMessage(`扫描失败: ${e}`, false)

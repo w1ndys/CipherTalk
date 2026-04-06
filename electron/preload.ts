@@ -176,7 +176,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     killWeChat: () => ipcRenderer.invoke('wxkey:killWeChat'),
     launchWeChat: () => ipcRenderer.invoke('wxkey:launchWeChat'),
     waitForWindow: (maxWaitSeconds?: number) => ipcRenderer.invoke('wxkey:waitForWindow', maxWaitSeconds),
-    startGetKey: (customWechatPath?: string) => ipcRenderer.invoke('wxkey:startGetKey', customWechatPath),
+    startGetKey: (customWechatPath?: string, dbPath?: string) => ipcRenderer.invoke('wxkey:startGetKey', customWechatPath, dbPath),
     cancel: () => ipcRenderer.invoke('wxkey:cancel'),
     detectCurrentAccount: (dbPath?: string, maxTimeDiffMinutes?: number) => ipcRenderer.invoke('wxkey:detectCurrentAccount', dbPath, maxTimeDiffMinutes),
     onStatus: (callback: (data: { status: string; level: number }) => void) => {
@@ -197,6 +197,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   wcdb: {
     testConnection: (dbPath: string, hexKey: string, wxid: string, isAutoConnect?: boolean) =>
       ipcRenderer.invoke('wcdb:testConnection', dbPath, hexKey, wxid, isAutoConnect),
+    resolveValidWxid: (dbPath: string, hexKey: string) =>
+      ipcRenderer.invoke('wcdb:resolveValidWxid', dbPath, hexKey),
     open: (dbPath: string, hexKey: string, wxid: string) =>
       ipcRenderer.invoke('wcdb:open', dbPath, hexKey, wxid),
     close: () => ipcRenderer.invoke('wcdb:close'),
