@@ -12,7 +12,7 @@ const WINDOW_CHROME_HEIGHT = '40px'
 const WINDOW_CHROME_METRICS: Record<WindowPlatform, WindowChromeMetrics> = {
   win32: {
     controlsLeftSafe: '16px',
-    controlsRightSafe: '144px',
+    controlsRightSafe: '176px',
     toolbarGap: '10px'
   },
   darwin: {

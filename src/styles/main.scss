@@ -44,7 +44,7 @@
   // 独立窗口标题栏安全区
   --window-chrome-height: 40px;
   --window-controls-left-safe: 16px;
-  --window-controls-right-safe: 144px;
+  --window-controls-right-safe: 176px;
   --window-toolbar-gap: 10px;
 }
 
@@ -56,6 +56,12 @@
 
 :root[data-window-platform="linux"],
 :root[data-window-platform="win32"] {
+  --window-controls-left-safe: 16px;
+  --window-controls-right-safe: 176px;
+  --window-toolbar-gap: 10px;
+}
+
+:root[data-window-platform="linux"] {
   --window-controls-left-safe: 16px;
   --window-controls-right-safe: 144px;
   --window-toolbar-gap: 10px;
