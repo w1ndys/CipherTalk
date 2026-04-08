@@ -170,6 +170,10 @@
       {
         "from": ".tmp/release-announcement.json",
         "to": "release-announcement.json"
+      },
+      {
+        "from": "sikll/ct-mcp-copilot",
+        "to": "builtin-skills/ct-mcp-copilot"
       }
     ],
     "extraFiles": [

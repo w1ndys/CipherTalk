@@ -1339,14 +1339,6 @@ function registerIpcHandlers() {
     return { success: true, deleted: result.deleted, nextActiveAccountId: result.nextActiveAccountId }
   })
 
-  ipcMain.handle('skillInstaller:detectTargets', async (_, skillName: string) => {
-    return skillInstallerService.detectTargets(skillName)
-  })
-
-  ipcMain.handle('skillInstaller:installSkill', async (_, skillName: string, selectedSkillsDirs?: string[]) => {
-    return skillInstallerService.installSkill(skillName, selectedSkillsDirs)
-  })
-
   ipcMain.handle('skillInstaller:exportSkillZip', async (_, skillName: string) => {
     return skillInstallerService.exportSkillZip(skillName)
   })
