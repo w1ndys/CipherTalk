@@ -1,6 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import type { AccountProfile } from '../src/types/account'
-import type { SkillInstallTarget } from './services/skillInstallerService'
 
 function getMcpLaunchConfigSafe(): Promise<{
   command: string
@@ -47,9 +46,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
   },
 
   skillInstaller: {
-    detectTargets: (skillName: string) => ipcRenderer.invoke('skillInstaller:detectTargets', skillName) as Promise<SkillInstallTarget[]>,
-    installSkill: (skillName: string, selectedSkillsDirs?: string[]) =>
-      ipcRenderer.invoke('skillInstaller:installSkill', skillName, selectedSkillsDirs) as Promise<{ success: boolean; results: SkillInstallTarget[]; error?: string }>,
     exportSkillZip: (skillName: string) =>
       ipcRenderer.invoke('skillInstaller:exportSkillZip', skillName) as Promise<{ success: boolean; outputPath?: string; fileName?: string; version?: string; error?: string }>
   },

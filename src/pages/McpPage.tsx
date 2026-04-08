@@ -6,7 +6,6 @@ import {
   Card,
   CardContent,
   CardHeader,
-  Checkbox,
   Chip,
   Container,
   Snackbar,
@@ -15,9 +14,8 @@ import {
   TextField,
   Typography,
 } from '@mui/material'
-import { Check, Copy, Download, RefreshCw, Save, Sparkles } from 'lucide-react'
+import { Check, Copy, Download, Save } from 'lucide-react'
 import * as configService from '../services/config'
-import type { SkillInstallTarget } from '../types/electron'
 
 type ToastState = {
   text: string
@@ -94,58 +92,6 @@ const secondaryButtonSx = {
   },
 }
 
-const getChipSx = (tone: 'primary' | 'success' | 'warning' | 'neutral' = 'neutral') => {
-  if (tone === 'primary') {
-    return {
-      borderRadius: '999px',
-      border: '1px solid var(--primary)',
-      color: 'var(--primary)',
-      backgroundColor: 'var(--primary-light)',
-      fontWeight: 700,
-      '& .MuiChip-label': {
-        px: 1.1,
-      },
-    }
-  }
-
-  if (tone === 'success') {
-    return {
-      borderRadius: '999px',
-      border: '1px solid rgba(76, 175, 80, 0.28)',
-      color: '#4CAF50',
-      backgroundColor: 'rgba(76, 175, 80, 0.1)',
-      fontWeight: 700,
-      '& .MuiChip-label': {
-        px: 1.1,
-      },
-    }
-  }
-
-  if (tone === 'warning') {
-    return {
-      borderRadius: '999px',
-      border: '1px solid rgba(245, 158, 11, 0.28)',
-      color: '#f59e0b',
-      backgroundColor: 'rgba(245, 158, 11, 0.12)',
-      fontWeight: 700,
-      '& .MuiChip-label': {
-        px: 1.1,
-      },
-    }
-  }
-
-  return {
-    borderRadius: '999px',
-    border: '1px solid var(--border-color)',
-    color: 'var(--text-secondary)',
-    backgroundColor: 'var(--bg-secondary)',
-    fontWeight: 700,
-    '& .MuiChip-label': {
-      px: 1.1,
-    },
-  }
-}
-
 function McpPage() {
   const managedSkillName = 'ct-mcp-copilot'
   const [activeSection, setActiveSection] = useState<McpSection>('mcp')
@@ -153,10 +99,6 @@ function McpPage() {
   const [mcpExposeMediaPaths, setMcpExposeMediaPaths] = useState(true)
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
-  const [skillTargets, setSkillTargets] = useState<SkillInstallTarget[]>([])
-  const [selectedSkillDirs, setSelectedSkillDirs] = useState<string[]>([])
-  const [detectingSkills, setDetectingSkills] = useState(false)
-  const [installingSkill, setInstallingSkill] = useState(false)
   const [exportingSkillZip, setExportingSkillZip] = useState(false)
   const [toast, setToast] = useState<ToastState | null>(null)
   const [launchConfig, setLaunchConfig] = useState<McpLaunchConfig>({
@@ -186,14 +128,6 @@ function McpPage() {
           if (!message.includes("No handler registered for 'app:getMcpLaunchConfig'")) {
             console.error('获取 MCP 启动配置失败:', innerError)
           }
-        }
-
-        try {
-          const targets = await window.electronAPI.skillInstaller.detectTargets(managedSkillName)
-          setSkillTargets(targets)
-          setSelectedSkillDirs(targets.filter((item) => item.supported && (!item.installed || item.updateAvailable)).map((item) => item.skillsDir))
-        } catch (innerError) {
-          console.error('检测 Skills 安装目标失败:', innerError)
         }
       } catch (e) {
         console.error('加载 MCP 配置失败:', e)
@@ -246,44 +180,6 @@ function McpPage() {
     }
   }
 
-  const detectSkillTargets = async () => {
-    setDetectingSkills(true)
-    try {
-      const targets = await window.electronAPI.skillInstaller.detectTargets(managedSkillName)
-      setSkillTargets(targets)
-      setSelectedSkillDirs(targets.filter((item) => item.supported && (!item.installed || item.updateAvailable)).map((item) => item.skillsDir))
-      setToast({ text: '已刷新 Skills 安装目标', success: true })
-    } catch (e) {
-      console.error('检测 Skills 安装目标失败:', e)
-      setToast({ text: '检测 Skills 安装目标失败', success: false })
-    } finally {
-      setDetectingSkills(false)
-    }
-  }
-
-  const installManagedSkill = async () => {
-    if (selectedSkillDirs.length === 0) {
-      setToast({ text: '请先勾选要安装的 Agent 目标', success: false })
-      return
-    }
-    setInstallingSkill(true)
-    try {
-      const result = await window.electronAPI.skillInstaller.installSkill(managedSkillName, selectedSkillDirs)
-      setSkillTargets(result.results)
-      setSelectedSkillDirs(result.results.filter((item) => item.supported && (!item.installed || item.updateAvailable)).map((item) => item.skillsDir))
-      if (result.success) {
-        setToast({ text: `${managedSkillName} 已安装到选中的 Agent`, success: true })
-      } else {
-        setToast({ text: result.error || 'Skill 安装失败', success: false })
-      }
-    } catch (e) {
-      console.error('安装 Skill 失败:', e)
-      setToast({ text: '安装 Skill 失败', success: false })
-    } finally {
-      setInstallingSkill(false)
-    }
-  }
-
   const exportManagedSkillZip = async () => {
     setExportingSkillZip(true)
     try {
@@ -299,16 +195,6 @@ function McpPage() {
     } finally {
       setExportingSkillZip(false)
     }
-  }
-
-  const bundledSkillVersion = skillTargets[0]?.bundledVersion || '1.0.0'
-  const selectableTargets = skillTargets.filter((item) => item.supported)
-  const allSelectableChecked = selectableTargets.length > 0 && selectableTargets.every((item) => selectedSkillDirs.includes(item.skillsDir))
-
-  const toggleSkillDir = (skillsDir: string, checked: boolean) => {
-    setSelectedSkillDirs((current) => checked
-      ? Array.from(new Set([...current, skillsDir]))
-      : current.filter((item) => item !== skillsDir))
   }
 
   return (
@@ -573,9 +459,9 @@ function McpPage() {
               >
                 <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1.2} justifyContent="space-between" alignItems={{ xs: 'stretch', sm: 'center' }}>
                   <Box>
-                    <Typography sx={{ fontWeight: 600, color: 'var(--text-primary)' }}>内置 Skill 版本</Typography>
+                    <Typography sx={{ fontWeight: 600, color: 'var(--text-primary)' }}>导出 Skill</Typography>
                     <Typography sx={{ mt: 0.5, fontSize: 13, color: 'var(--text-secondary)' }}>
-                      当前内置版本：`{bundledSkillVersion}`。如果本机已安装版本更低，页面会提示可更新。
+                      导出 `ct-mcp-copilot` zip 包后，可手动导入到支持 Skills 的 Agent（Codex、Claude、Cursor、Kiro 等）。
                     </Typography>
                   </Box>
                   <Button
@@ -590,148 +476,8 @@ function McpPage() {
                 </Stack>
               </Box>
 
-              <Box
-                sx={{
-                  p: 2,
-                  borderRadius: '18px',
-                  border: '1px solid var(--border-color)',
-                  bgcolor: 'var(--bg-primary)',
-                }}
-              >
-                <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1.2} justifyContent="space-between" alignItems={{ xs: 'stretch', sm: 'center' }}>
-                  <Box>
-                    <Typography sx={{ fontWeight: 600, color: 'var(--text-primary)' }}>一键安装到本机 Agent</Typography>
-                    <Typography sx={{ mt: 0.5, fontSize: 13, color: 'var(--text-secondary)' }}>
-                      自动探测 Codex、`.agents` 以及主目录下更多可能的 skills 目录，并把 `ct-mcp-copilot` 复制安装进去。
-                    </Typography>
-                  </Box>
-                  <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1.2}>
-                    <Button
-                      variant="outlined"
-                      startIcon={<RefreshCw size={16} />}
-                      onClick={detectSkillTargets}
-                      disabled={detectingSkills || installingSkill}
-                      sx={secondaryButtonSx}
-                    >
-                      {detectingSkills ? '检测中...' : '检测目标'}
-                    </Button>
-                    <Button
-                      variant="contained"
-                      startIcon={<Sparkles size={16} />}
-                      onClick={installManagedSkill}
-                      disabled={installingSkill}
-                      sx={{
-                        minWidth: 140,
-                        borderRadius: '999px',
-                        textTransform: 'none',
-                        fontWeight: 700,
-                        background: 'var(--primary-gradient)',
-                        '&:hover': {
-                          background: 'var(--primary-gradient)',
-                          filter: 'brightness(0.98)',
-                        },
-                      }}
-                    >
-                      {installingSkill ? '安装中...' : '安装选中'}
-                    </Button>
-                  </Stack>
-                </Stack>
-                <Stack direction="row" spacing={1} sx={{ mt: 1.5 }}>
-                  <Button
-                    variant="outlined"
-                    onClick={() => setSelectedSkillDirs(selectableTargets.map((item) => item.skillsDir))}
-                    disabled={selectableTargets.length === 0}
-                    sx={secondaryButtonSx}
-                  >
-                    全选
-                  </Button>
-                  <Button
-                    variant="outlined"
-                    onClick={() => setSelectedSkillDirs([])}
-                    disabled={selectedSkillDirs.length === 0}
-                    sx={secondaryButtonSx}
-                  >
-                    清空选择
-                  </Button>
-                </Stack>
-              </Box>
-
-              <Stack spacing={1.2}>
-                {skillTargets.map((target) => (
-                  <Box
-                    key={`${target.agentKind}-${target.skillsDir}`}
-                    sx={{
-                      p: 2,
-                      borderRadius: '18px',
-                      border: '1px solid var(--border-color)',
-                      bgcolor: 'var(--bg-primary)',
-                    }}
-                  >
-                    <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1} justifyContent="space-between" alignItems={{ xs: 'flex-start', sm: 'center' }}>
-                      <Box sx={{ minWidth: 0 }}>
-                        <Stack direction="row" spacing={1} alignItems="center" useFlexGap flexWrap="wrap">
-                          <Checkbox
-                            checked={selectedSkillDirs.includes(target.skillsDir)}
-                            indeterminate={false}
-                            disabled={!target.supported}
-                            onChange={(event) => toggleSkillDir(target.skillsDir, event.target.checked)}
-                            sx={{
-                              color: 'var(--text-tertiary)',
-                              '&.Mui-checked': {
-                                color: 'var(--primary)',
-                              },
-                              p: 0.5,
-                              mr: 0.5,
-                            }}
-                          />
-                          <Typography sx={{ fontWeight: 600, color: 'var(--text-primary)' }}>
-                            {target.agentLabel}
-                          </Typography>
-                          <Chip
-                            label={target.installed ? '已安装' : target.supported ? '可安装' : '不支持'}
-                            size="small"
-                            variant="outlined"
-                            sx={target.installed ? getChipSx('success') : target.supported ? getChipSx('primary') : getChipSx('neutral')}
-                          />
-                          {target.updateAvailable && (
-                            <Chip
-                              label="可更新"
-                              size="small"
-                              variant="outlined"
-                              sx={getChipSx('warning')}
-                            />
-                          )}
-                          <Chip
-                            label={target.source === 'known' ? '内置规则' : '扫描发现'}
-                            size="small"
-                            variant="outlined"
-                            sx={getChipSx('neutral')}
-                          />
-                        </Stack>
-                        <Typography sx={{ mt: 0.75, fontSize: 13, color: 'var(--text-secondary)', wordBreak: 'break-all' }}>
-                          {target.installPath || target.skillsDir}
-                        </Typography>
-                        <Typography sx={{ mt: 0.5, fontSize: 12, color: 'var(--text-secondary)' }}>
-                          已安装版本：{target.installedVersion || '未安装'} / 内置版本：{target.bundledVersion}
-                        </Typography>
-                        {target.error && (
-                          <Typography sx={{ mt: 0.75, fontSize: 12, color: 'var(--danger)' }}>
-                            {target.error}
-                          </Typography>
-                        )}
-                      </Box>
-                    </Stack>
-                  </Box>
-                ))}
-                {skillTargets.length === 0 && (
-                  <Typography sx={{ fontSize: 13, color: 'var(--text-secondary)' }}>
-                    还没有检测到本机 Skill 目标，点击“检测目标”后可查看支持情况。
-                  </Typography>
-                )}
-              </Stack>
-
               <Typography sx={{ fontSize: 13, color: 'var(--text-secondary)' }}>
-                安装完成后，可在支持 Skills 的 Agent 中直接提到 `ct-mcp-copilot` 使用；也可以导出 `zip` 后手动导入。Cherry Studio 等 MCP 宿主仍然继续使用 `mcpServers` 配置，不属于 skills 目录安装模型。
+                导出 zip 后手动解压到对应 Agent 的 skills 目录即可使用。Cherry Studio 等 MCP 宿主继续使用 `mcpServers` 配置，无需安装 Skill。
               </Typography>
             </Stack>
           </CardContent>
