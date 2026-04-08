@@ -96,6 +96,29 @@ function getFiles(buildTarget) {
     )
   }
 
+  if (buildTarget === 'mac') {
+    return appendUnique(
+      withoutItems(baseFiles, [
+        'node_modules/koffi/build/**/*',
+        '!node_modules/sherpa-onnx-node/bin/!(win-x64)/**/*',
+        '!node_modules/ffmpeg-static/bin/!(win32-x64)/**/*'
+      ]),
+      [
+        ...commonFiles,
+        '!node_modules/onnxruntime-node/bin/**/linux/**/*',
+        '!node_modules/onnxruntime-node/bin/**/win32/**/*',
+        'node_modules/onnxruntime-node/bin/**/darwin/**/*',
+        '!node_modules/sherpa-onnx-win-*/**/*',
+        '!node_modules/sherpa-onnx-linux-*/**/*',
+        'node_modules/sherpa-onnx-darwin-*/**/*',
+        '!node_modules/sherpa-onnx-node/node_modules/sherpa-onnx-win-*/**/*',
+        '!node_modules/sherpa-onnx-node/node_modules/sherpa-onnx-linux-*/**/*',
+        'node_modules/sherpa-onnx-node/node_modules/sherpa-onnx-darwin-*/**/*',
+        'node_modules/koffi/build/koffi/darwin_*/**/*'
+      ]
+    )
+  }
+
   return appendUnique(baseFiles, commonFiles)
 }
 
@@ -106,6 +129,13 @@ function getAsarUnpack(buildTarget) {
     return appendUnique(
       withoutItems(baseAsarUnpack, ['node_modules/koffi/**/*']),
       ['node_modules/koffi/build/koffi/win32_x64/**/*']
+    )
+  }
+
+  if (buildTarget === 'mac') {
+    return appendUnique(
+      withoutItems(baseAsarUnpack, ['node_modules/koffi/**/*']),
+      ['node_modules/koffi/build/koffi/darwin_*/**/*']
     )
   }
 
