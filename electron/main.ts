@@ -3949,24 +3949,28 @@ function registerIpcHandlers() {
 
       // 计算时间范围
       const endTime = Math.floor(Date.now() / 1000)
-      const startTime = endTime - (timeRange * 24 * 60 * 60)
+      const startTime = timeRange > 0 ? endTime - (timeRange * 24 * 60 * 60) : undefined
 
-      // 获取消息（使用 getMessagesByDate 获取指定时间范围内的消息）
-      // 使用用户配置的条数限制（默认 3000）
+      // 获取指定时间范围内的消息，超出上限时优先保留范围内最新消息。
       const messageLimit = configService?.get('aiMessageLimit') || 3000
-      const messagesResult = await chatService.getMessagesByDate(sessionId, startTime, messageLimit)
+      const messagesResult = await chatService.getMessagesByTimeRangeForSummary(sessionId, {
+        startTime,
+        endTime,
+        limit: messageLimit
+      })
       if (!messagesResult.success || !messagesResult.messages) {
         return { success: false, error: '获取消息失败' }
       }
 
-      // 过滤时间范围内的消息 (getMessagesByDate 返回的是 >= startTime 的消息)
-      const filteredMessages = messagesResult.messages.filter((msg: any) =>
-        msg.createTime <= endTime
-      )
-
-      if (filteredMessages.length === 0) {
+      const summaryMessages = messagesResult.messages
+      if (summaryMessages.length === 0) {
         return { success: false, error: '该时间范围内没有消息' }
       }
+
+      const actualTimeRangeStart = startTime ?? summaryMessages[0].createTime
+      const inputMessageScopeNote = messagesResult.hasMore
+        ? `当前时间范围内消息较多，本次仅分析其中最新 ${summaryMessages.length} 条消息。请明确基于这批最新消息归纳重点，避免误判为已覆盖完整时间范围。`
+        : undefined
 
       // 获取消息中所有发送者的联系人信息
       const contacts = new Map()
@@ -3976,7 +3980,7 @@ function registerIpcHandlers() {
       senderSet.add(sessionId)
 
       // 添加所有消息发送者
-      filteredMessages.forEach((msg: any) => {
+      summaryMessages.forEach((msg: any) => {
         if (msg.senderUsername) {
           senderSet.add(msg.senderUsername)
         }
@@ -4013,11 +4017,14 @@ function registerIpcHandlers() {
 
       // 生成摘要（流式输出）
       const result = await aiService.generateSummary(
-        filteredMessages,
+        summaryMessages,
         contacts,
         {
           sessionId,
           timeRangeDays: timeRange,
+          timeRangeStart: actualTimeRangeStart,
+          timeRangeEnd: endTime,
+          inputMessageScopeNote,
           provider: options.provider,
           apiKey: options.apiKey,
           model: options.model,
@@ -4038,6 +4045,7 @@ function registerIpcHandlers() {
         console.log('[AI] 摘要生成完成，结果:', {
           sessionId: result.sessionId,
           messageCount: result.messageCount,
+          hasMore: Boolean(messagesResult.hasMore),
           summaryLength: result.summaryText?.length || 0
         })
       }
@@ -4046,6 +4054,52 @@ function registerIpcHandlers() {
     } catch (e) {
       console.error('[AI] 生成摘要失败:', e)
       logService?.error('AI', '生成摘要失败', { error: String(e) })
+      return { success: false, error: String(e) }
+    }
+  })
+
+  ipcMain.handle('ai:askSessionQuestion', async (event, options: {
+    sessionId: string
+    sessionName?: string
+    question: string
+    summaryText?: string
+    structuredAnalysis?: any
+    history?: Array<{ role: 'user' | 'assistant'; content: string }>
+    provider: string
+    apiKey: string
+    model: string
+    enableThinking?: boolean
+  }) => {
+    try {
+      const { aiService } = await import('./services/ai/aiService')
+
+      aiService.init()
+
+      const result = await aiService.answerSessionQuestion(
+        {
+          sessionId: options.sessionId,
+          sessionName: options.sessionName,
+          question: options.question,
+          summaryText: options.summaryText,
+          structuredAnalysis: options.structuredAnalysis,
+          history: options.history,
+          provider: options.provider,
+          apiKey: options.apiKey,
+          model: options.model,
+          enableThinking: options.enableThinking
+        },
+        (chunk: string) => {
+          event.sender.send('ai:sessionQaChunk', chunk)
+        },
+        (progress) => {
+          event.sender.send('ai:sessionQaProgress', progress)
+        }
+      )
+
+      return { success: true, result }
+    } catch (e) {
+      console.error('[AI] 单会话问答失败:', e)
+      logService?.error('AI', '单会话问答失败', { error: String(e) })
       return { success: false, error: String(e) }
     }
   })

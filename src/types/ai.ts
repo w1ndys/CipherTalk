@@ -60,6 +60,64 @@ export const SUMMARY_DETAIL_OPTIONS = [
   { value: 'detailed' as SummaryDetail, label: '详细' }
 ]
 
+export interface SummaryEvidenceRef {
+  sessionId: string
+  localId: number
+  createTime: number
+  sortSeq: number
+  senderUsername?: string
+  senderDisplayName?: string
+  previewText: string
+}
+
+export interface SummaryTopicFact {
+  name: string
+  importance: number
+}
+
+export interface SummaryDecisionFact {
+  text: string
+  confidence: number
+  evidenceRefs: SummaryEvidenceRef[]
+}
+
+export interface SummaryTodoFact {
+  owner?: string
+  task: string
+  deadline?: string
+  status: 'open' | 'done' | 'unknown'
+  confidence: number
+  evidenceRefs: SummaryEvidenceRef[]
+}
+
+export interface SummaryRiskFact {
+  text: string
+  severity: 'low' | 'medium' | 'high'
+  confidence: number
+  evidenceRefs: SummaryEvidenceRef[]
+}
+
+export interface SummaryEventFact {
+  text: string
+  date?: string
+  confidence: number
+  evidenceRefs: SummaryEvidenceRef[]
+}
+
+export interface SummaryOpenQuestionFact {
+  text: string
+}
+
+export interface SummaryStructuredAnalysis {
+  overview: string
+  topics: SummaryTopicFact[]
+  decisions: SummaryDecisionFact[]
+  todos: SummaryTodoFact[]
+  risks: SummaryRiskFact[]
+  events: SummaryEventFact[]
+  openQuestions: SummaryOpenQuestionFact[]
+}
+
 /**
  * 摘要结果
  */
@@ -77,6 +135,46 @@ export interface SummaryResult {
   model: string
   createdAt: number
   customName?: string
+  structuredAnalysis?: SummaryStructuredAnalysis
+}
+
+export interface SessionQAHistoryMessage {
+  role: 'user' | 'assistant'
+  content: string
+}
+
+export interface SessionQAToolCall {
+  toolName: 'get_session_context' | 'search_messages'
+  args: Record<string, unknown>
+  summary: string
+}
+
+export type SessionQAProgressStage = 'intent' | 'tool' | 'context' | 'answer'
+export type SessionQAProgressStatus = 'running' | 'completed' | 'failed'
+
+export interface SessionQAProgressEvent {
+  id: string
+  stage: SessionQAProgressStage
+  status: SessionQAProgressStatus
+  title: string
+  detail?: string
+  toolName?: SessionQAToolCall['toolName']
+  query?: string
+  count?: number
+  createdAt: number
+}
+
+export interface SessionQAResult {
+  sessionId: string
+  question: string
+  answerText: string
+  evidenceRefs: SummaryEvidenceRef[]
+  toolCalls: SessionQAToolCall[]
+  tokensUsed: number
+  cost: number
+  provider: string
+  model: string
+  createdAt: number
 }
 
 /**

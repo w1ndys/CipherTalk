@@ -1,5 +1,6 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import type { AccountProfile } from '../src/types/account'
+import type { SessionQAProgressEvent } from '../src/types/ai'
 
 function getMcpLaunchConfigSafe(): Promise<{
   command: string
@@ -509,9 +510,29 @@ contextBridge.exposeInMainWorld('electronAPI', {
       sessionName?: string
       enableThinking?: boolean
     }) => ipcRenderer.invoke('ai:generateSummary', sessionId, timeRange, options),
+    askSessionQuestion: (options: {
+      sessionId: string
+      sessionName?: string
+      question: string
+      summaryText?: string
+      structuredAnalysis?: any
+      history?: Array<{ role: 'user' | 'assistant'; content: string }>
+      provider: string
+      apiKey: string
+      model: string
+      enableThinking?: boolean
+    }) => ipcRenderer.invoke('ai:askSessionQuestion', options),
     onSummaryChunk: (callback: (chunk: string) => void) => {
       ipcRenderer.on('ai:summaryChunk', (_, chunk) => callback(chunk))
       return () => ipcRenderer.removeAllListeners('ai:summaryChunk')
+    },
+    onSessionQAChunk: (callback: (chunk: string) => void) => {
+      ipcRenderer.on('ai:sessionQaChunk', (_, chunk) => callback(chunk))
+      return () => ipcRenderer.removeAllListeners('ai:sessionQaChunk')
+    },
+    onSessionQAProgress: (callback: (event: SessionQAProgressEvent) => void) => {
+      ipcRenderer.on('ai:sessionQaProgress', (_, event) => callback(event))
+      return () => ipcRenderer.removeAllListeners('ai:sessionQaProgress')
     }
   }
 })
