@@ -1,6 +1,188 @@
 import Database from 'better-sqlite3'
 import { existsSync, mkdirSync } from 'fs'
 import { join, dirname } from 'path'
+import type {
+  AnalysisBlock,
+  ExtractedStructuredAnalysis,
+  StructuredAnalysis,
+  SummaryEvidenceRef
+} from '../ai-agent/types/analysis'
+import { parseStoredStructuredAnalysis } from '../ai-agent/types/analysis'
+
+type AnalysisRunStatus =
+  | 'completed'
+  | 'fallback_legacy'
+  | 'backfill_facts_only'
+  | 'legacy_placeholder'
+
+type AnalysisSourceKind =
+  | 'generate_summary'
+  | 'generate_summary_legacy'
+  | 'backfill_structured'
+  | 'backfill_legacy'
+
+export interface SaveAnalysisArtifactsInput {
+  summaryId: number
+  sessionId: string
+  timeRangeStart: number
+  timeRangeEnd: number
+  timeRangeDays: number
+  rawMessageCount: number
+  effectiveMessageCount?: number
+  blockCount: number
+  provider: string
+  model: string
+  status: AnalysisRunStatus
+  sourceKind: AnalysisSourceKind
+  evidenceResolved: boolean
+  blocksAvailable: boolean
+  blocks?: AnalysisBlock[]
+  blockAnalyses?: ExtractedStructuredAnalysis[]
+  finalAnalysis?: StructuredAnalysis
+  createdAt?: number
+  updatedAt?: number
+}
+
+interface SummaryBackfillRow {
+  id: number
+  session_id: string
+  time_range_start: number
+  time_range_end: number
+  time_range_days: number
+  message_count: number
+  provider: string
+  model: string
+  created_at: number
+  structured_result_json?: string | null
+}
+
+interface FactRecord {
+  factType: 'topic' | 'decision' | 'todo' | 'risk' | 'event' | 'open_question'
+  factKey: string
+  sortOrder: number
+  displayText: string
+  confidence?: number
+  importance?: number
+  severity?: string
+  owner?: string
+  deadline?: string
+  status?: string
+  eventDate?: string
+  payloadJson: string
+  evidenceRefs: SummaryEvidenceRef[]
+}
+
+const ANALYSIS_STORAGE_BOOTSTRAP_KEY = 'analysis_storage_bootstrap_v1_completed'
+
+function normalizeComparableText(value?: string): string {
+  return String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, '')
+    .replace(/[，。！？；：、“”‘’（）【】《》,.!?:;"'()\-_/\\[\]{}]+/g, '')
+}
+
+function hasAnyEvidenceRefs(analysis?: StructuredAnalysis): boolean {
+  if (!analysis) return false
+
+  return [
+    ...analysis.decisions,
+    ...analysis.todos,
+    ...analysis.risks,
+    ...analysis.events
+  ].some((item) => item.evidenceRefs.length > 0)
+}
+
+function buildTopicFactRecords(analysis: StructuredAnalysis): FactRecord[] {
+  return analysis.topics.map((item, index) => ({
+    factType: 'topic',
+    factKey: normalizeComparableText(item.name),
+    sortOrder: index,
+    displayText: item.name,
+    importance: item.importance,
+    payloadJson: JSON.stringify(item),
+    evidenceRefs: []
+  }))
+}
+
+function buildDecisionFactRecords(analysis: StructuredAnalysis): FactRecord[] {
+  return analysis.decisions.map((item, index) => ({
+    factType: 'decision',
+    factKey: normalizeComparableText(item.text),
+    sortOrder: index,
+    displayText: item.text,
+    confidence: item.confidence,
+    payloadJson: JSON.stringify(item),
+    evidenceRefs: item.evidenceRefs
+  }))
+}
+
+function buildTodoFactRecords(analysis: StructuredAnalysis): FactRecord[] {
+  return analysis.todos.map((item, index) => ({
+    factType: 'todo',
+    factKey: `${normalizeComparableText(item.owner)}|${normalizeComparableText(item.task)}|${normalizeComparableText(item.deadline)}`,
+    sortOrder: index,
+    displayText: item.task,
+    confidence: item.confidence,
+    owner: item.owner,
+    deadline: item.deadline,
+    status: item.status,
+    payloadJson: JSON.stringify(item),
+    evidenceRefs: item.evidenceRefs
+  }))
+}
+
+function buildRiskFactRecords(analysis: StructuredAnalysis): FactRecord[] {
+  return analysis.risks.map((item, index) => ({
+    factType: 'risk',
+    factKey: normalizeComparableText(item.text),
+    sortOrder: index,
+    displayText: item.text,
+    confidence: item.confidence,
+    severity: item.severity,
+    payloadJson: JSON.stringify(item),
+    evidenceRefs: item.evidenceRefs
+  }))
+}
+
+function buildEventFactRecords(analysis: StructuredAnalysis): FactRecord[] {
+  return analysis.events.map((item, index) => ({
+    factType: 'event',
+    factKey: `${normalizeComparableText(item.text)}|${normalizeComparableText(item.date)}`,
+    sortOrder: index,
+    displayText: item.text,
+    confidence: item.confidence,
+    eventDate: item.date,
+    payloadJson: JSON.stringify(item),
+    evidenceRefs: item.evidenceRefs
+  }))
+}
+
+function buildOpenQuestionFactRecords(analysis: StructuredAnalysis): FactRecord[] {
+  return analysis.openQuestions.map((item, index) => ({
+    factType: 'open_question',
+    factKey: normalizeComparableText(item.text),
+    sortOrder: index,
+    displayText: item.text,
+    payloadJson: JSON.stringify(item),
+    evidenceRefs: []
+  }))
+}
+
+function buildFactRecords(analysis?: StructuredAnalysis): FactRecord[] {
+  if (!analysis) {
+    return []
+  }
+
+  return [
+    ...buildTopicFactRecords(analysis),
+    ...buildDecisionFactRecords(analysis),
+    ...buildTodoFactRecords(analysis),
+    ...buildRiskFactRecords(analysis),
+    ...buildEventFactRecords(analysis),
+    ...buildOpenQuestionFactRecords(analysis)
+  ].filter((item) => item.factKey && item.displayText)
+}
 
 /**
  * AI 专用数据库管理
@@ -13,20 +195,24 @@ export class AIDatabase {
    * 初始化数据库
    */
   init(cachePath: string, wxid: string): void {
-    // AI 数据库放在缓存根目录下，不放在账号目录内
+    void wxid
+
     this.dbPath = join(cachePath, 'ai_summary.db')
 
-    // 确保目录存在
     const dir = dirname(this.dbPath)
     if (!existsSync(dir)) {
       mkdirSync(dir, { recursive: true })
     }
 
-    // 打开数据库
     this.db = new Database(this.dbPath)
-
-    // 创建表
     this.createTables()
+
+    try {
+      this.bootstrapAnalysisStorageBackfill()
+      this.catchUpMissingAnalysisRuns()
+    } catch (error) {
+      console.warn('[AIDatabase] 分析存储回填初始化失败，将在后续启动继续补录:', error)
+    }
   }
 
   /**
@@ -35,7 +221,6 @@ export class AIDatabase {
   private createTables(): void {
     if (!this.db) return
 
-    // 摘要记录表
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS summaries (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -51,14 +236,11 @@ export class AIDatabase {
         model TEXT NOT NULL,
         created_at INTEGER NOT NULL
       );
-      
+
       CREATE INDEX IF NOT EXISTS idx_summaries_session ON summaries(session_id);
       CREATE INDEX IF NOT EXISTS idx_summaries_created ON summaries(created_at);
       CREATE INDEX IF NOT EXISTS idx_summaries_time_range ON summaries(time_range_start, time_range_end);
-    `)
 
-    // 使用统计表
-    this.db.exec(`
       CREATE TABLE IF NOT EXISTS usage_stats (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         date TEXT NOT NULL,
@@ -69,12 +251,9 @@ export class AIDatabase {
         request_count INTEGER DEFAULT 0,
         UNIQUE(date, provider, model)
       );
-      
-      CREATE INDEX IF NOT EXISTS idx_usage_date ON usage_stats(date);
-    `)
 
-    // 缓存表
-    this.db.exec(`
+      CREATE INDEX IF NOT EXISTS idx_usage_date ON usage_stats(date);
+
       CREATE TABLE IF NOT EXISTS summary_cache (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         cache_key TEXT UNIQUE NOT NULL,
@@ -82,20 +261,108 @@ export class AIDatabase {
         expires_at INTEGER NOT NULL,
         FOREIGN KEY (summary_id) REFERENCES summaries(id)
       );
-      
+
       CREATE INDEX IF NOT EXISTS idx_cache_key ON summary_cache(cache_key);
       CREATE INDEX IF NOT EXISTS idx_cache_expires ON summary_cache(expires_at);
+
+      CREATE TABLE IF NOT EXISTS db_meta (
+        meta_key TEXT PRIMARY KEY,
+        meta_value TEXT NOT NULL,
+        updated_at INTEGER NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS analysis_runs (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        summary_id INTEGER NOT NULL,
+        session_id TEXT NOT NULL,
+        time_range_start INTEGER NOT NULL,
+        time_range_end INTEGER NOT NULL,
+        time_range_days INTEGER NOT NULL,
+        raw_message_count INTEGER NOT NULL,
+        effective_message_count INTEGER,
+        block_count INTEGER NOT NULL DEFAULT 0,
+        provider TEXT NOT NULL,
+        model TEXT NOT NULL,
+        status TEXT NOT NULL,
+        source_kind TEXT NOT NULL,
+        evidence_resolved INTEGER NOT NULL DEFAULT 0,
+        blocks_available INTEGER NOT NULL DEFAULT 0,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      );
+
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_analysis_runs_summary ON analysis_runs(summary_id);
+      CREATE INDEX IF NOT EXISTS idx_analysis_runs_session ON analysis_runs(session_id);
+
+      CREATE TABLE IF NOT EXISTS analysis_blocks (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        run_id INTEGER NOT NULL,
+        block_index INTEGER NOT NULL,
+        block_id TEXT NOT NULL,
+        start_time INTEGER NOT NULL,
+        end_time INTEGER NOT NULL,
+        message_count INTEGER NOT NULL,
+        char_count INTEGER NOT NULL,
+        rendered_text TEXT NOT NULL,
+        messages_json TEXT NOT NULL,
+        extracted_result_json TEXT
+      );
+
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_analysis_blocks_run_block ON analysis_blocks(run_id, block_index);
+      CREATE INDEX IF NOT EXISTS idx_analysis_blocks_run ON analysis_blocks(run_id);
+
+      CREATE TABLE IF NOT EXISTS extracted_facts (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        run_id INTEGER NOT NULL,
+        fact_type TEXT NOT NULL,
+        fact_key TEXT NOT NULL,
+        sort_order INTEGER NOT NULL,
+        display_text TEXT NOT NULL,
+        confidence REAL,
+        importance REAL,
+        severity TEXT,
+        owner TEXT,
+        deadline TEXT,
+        status TEXT,
+        event_date TEXT,
+        payload_json TEXT NOT NULL
+      );
+
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_extracted_facts_run_type_key ON extracted_facts(run_id, fact_type, fact_key);
+      CREATE INDEX IF NOT EXISTS idx_extracted_facts_run_sort ON extracted_facts(run_id, fact_type, sort_order);
+
+      CREATE TABLE IF NOT EXISTS evidence_links (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        fact_id INTEGER NOT NULL,
+        run_id INTEGER NOT NULL,
+        evidence_order INTEGER NOT NULL,
+        session_id TEXT NOT NULL,
+        local_id INTEGER NOT NULL,
+        create_time INTEGER NOT NULL,
+        sort_seq INTEGER NOT NULL,
+        sender_username TEXT,
+        sender_display_name TEXT,
+        preview_text TEXT NOT NULL
+      );
+
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_evidence_links_fact_message ON evidence_links(fact_id, local_id, create_time, sort_seq);
+      CREATE INDEX IF NOT EXISTS idx_evidence_links_run ON evidence_links(run_id);
     `)
-    
-    // 添加新列（如果不存在）
+
     try {
       this.db.exec("ALTER TABLE summaries ADD COLUMN prompt_text TEXT")
     } catch (e) {
       // 忽略错误，列已存在
     }
-    
+
     try {
       this.db.exec("ALTER TABLE summaries ADD COLUMN custom_name TEXT")
+    } catch (e) {
+      // 忽略错误，列已存在
+    }
+
+    try {
+      this.db.exec("ALTER TABLE summaries ADD COLUMN structured_result_json TEXT")
     } catch (e) {
       // 忽略错误，列已存在
     }
@@ -126,8 +393,11 @@ export class AIDatabase {
     provider: string
     model: string
     promptText?: string
+    structuredResultJson?: string
+    createdAt?: number
   }): number {
     const db = this.getDb()
+    const createdAt = summary.createdAt || Date.now()
 
     console.log('[AIDatabase] 保存摘要:', {
       sessionId: summary.sessionId,
@@ -141,8 +411,8 @@ export class AIDatabase {
       INSERT INTO summaries (
         session_id, time_range_start, time_range_end, time_range_days,
         message_count, summary_text, tokens_used, cost,
-        provider, model, created_at, prompt_text
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        provider, model, created_at, prompt_text, structured_result_json
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       summary.sessionId,
       summary.timeRangeStart,
@@ -154,13 +424,196 @@ export class AIDatabase {
       summary.cost,
       summary.provider,
       summary.model,
-      Date.now(),
-      summary.promptText || ''
+      createdAt,
+      summary.promptText || '',
+      summary.structuredResultJson || null
     )
 
     console.log('[AIDatabase] 摘要已保存，ID:', result.lastInsertRowid)
 
     return result.lastInsertRowid as number
+  }
+
+  saveAnalysisArtifacts(input: SaveAnalysisArtifactsInput): void {
+    const db = this.getDb()
+
+    const saveTx = db.transaction((payload: SaveAnalysisArtifactsInput) => {
+      const createdAt = payload.createdAt || Date.now()
+      const updatedAt = payload.updatedAt || createdAt
+
+      const existingRun = db.prepare(`
+        SELECT id FROM analysis_runs WHERE summary_id = ?
+      `).get(payload.summaryId) as { id: number } | undefined
+
+      let runId = existingRun?.id
+
+      if (runId) {
+        db.prepare('DELETE FROM evidence_links WHERE run_id = ?').run(runId)
+        db.prepare('DELETE FROM extracted_facts WHERE run_id = ?').run(runId)
+        db.prepare('DELETE FROM analysis_blocks WHERE run_id = ?').run(runId)
+
+        db.prepare(`
+          UPDATE analysis_runs
+          SET
+            session_id = ?,
+            time_range_start = ?,
+            time_range_end = ?,
+            time_range_days = ?,
+            raw_message_count = ?,
+            effective_message_count = ?,
+            block_count = ?,
+            provider = ?,
+            model = ?,
+            status = ?,
+            source_kind = ?,
+            evidence_resolved = ?,
+            blocks_available = ?,
+            updated_at = ?
+          WHERE id = ?
+        `).run(
+          payload.sessionId,
+          payload.timeRangeStart,
+          payload.timeRangeEnd,
+          payload.timeRangeDays,
+          payload.rawMessageCount,
+          payload.effectiveMessageCount ?? null,
+          payload.blockCount,
+          payload.provider,
+          payload.model,
+          payload.status,
+          payload.sourceKind,
+          payload.evidenceResolved ? 1 : 0,
+          payload.blocksAvailable ? 1 : 0,
+          updatedAt,
+          runId
+        )
+      } else {
+        const result = db.prepare(`
+          INSERT INTO analysis_runs (
+            summary_id, session_id, time_range_start, time_range_end, time_range_days,
+            raw_message_count, effective_message_count, block_count,
+            provider, model, status, source_kind,
+            evidence_resolved, blocks_available, created_at, updated_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `).run(
+          payload.summaryId,
+          payload.sessionId,
+          payload.timeRangeStart,
+          payload.timeRangeEnd,
+          payload.timeRangeDays,
+          payload.rawMessageCount,
+          payload.effectiveMessageCount ?? null,
+          payload.blockCount,
+          payload.provider,
+          payload.model,
+          payload.status,
+          payload.sourceKind,
+          payload.evidenceResolved ? 1 : 0,
+          payload.blocksAvailable ? 1 : 0,
+          createdAt,
+          updatedAt
+        )
+
+        runId = result.lastInsertRowid as number
+      }
+
+      if (payload.blocksAvailable && payload.blocks?.length) {
+        const insertBlock = db.prepare(`
+          INSERT INTO analysis_blocks (
+            run_id, block_index, block_id, start_time, end_time,
+            message_count, char_count, rendered_text, messages_json, extracted_result_json
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `)
+
+        payload.blocks.forEach((block, index) => {
+          insertBlock.run(
+            runId,
+            index,
+            block.blockId,
+            block.startTime,
+            block.endTime,
+            block.messageCount,
+            block.charCount,
+            block.renderedText,
+            JSON.stringify(block.messages),
+            payload.blockAnalyses?.[index] ? JSON.stringify(payload.blockAnalyses[index]) : null
+          )
+        })
+      }
+
+      const factRecords = buildFactRecords(payload.finalAnalysis)
+      if (factRecords.length > 0) {
+        const insertFact = db.prepare(`
+          INSERT INTO extracted_facts (
+            run_id, fact_type, fact_key, sort_order, display_text,
+            confidence, importance, severity, owner, deadline, status, event_date, payload_json
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `)
+
+        const insertEvidenceLink = db.prepare(`
+          INSERT INTO evidence_links (
+            fact_id, run_id, evidence_order, session_id, local_id, create_time,
+            sort_seq, sender_username, sender_display_name, preview_text
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `)
+
+        for (const factRecord of factRecords) {
+          const factResult = insertFact.run(
+            runId,
+            factRecord.factType,
+            factRecord.factKey,
+            factRecord.sortOrder,
+            factRecord.displayText,
+            factRecord.confidence ?? null,
+            factRecord.importance ?? null,
+            factRecord.severity ?? null,
+            factRecord.owner ?? null,
+            factRecord.deadline ?? null,
+            factRecord.status ?? null,
+            factRecord.eventDate ?? null,
+            factRecord.payloadJson
+          )
+
+          const factId = factResult.lastInsertRowid as number
+          factRecord.evidenceRefs.forEach((evidenceRef, evidenceIndex) => {
+            insertEvidenceLink.run(
+              factId,
+              runId,
+              evidenceIndex,
+              evidenceRef.sessionId,
+              evidenceRef.localId,
+              evidenceRef.createTime,
+              evidenceRef.sortSeq,
+              evidenceRef.senderUsername ?? null,
+              evidenceRef.senderDisplayName ?? null,
+              evidenceRef.previewText
+            )
+          })
+        }
+      }
+    })
+
+    saveTx(input)
+  }
+
+  bootstrapAnalysisStorageBackfill(): void {
+    const db = this.getDb()
+    const bootstrapCompleted = this.getMetaValue(ANALYSIS_STORAGE_BOOTSTRAP_KEY)
+
+    if (bootstrapCompleted === '1') {
+      return
+    }
+
+    const insertedCount = this.backfillMissingAnalysisRuns()
+    this.setMetaValue(ANALYSIS_STORAGE_BOOTSTRAP_KEY, '1')
+    console.log('[AIDatabase] analysis storage bootstrap backfill 完成:', { insertedCount })
+  }
+
+  catchUpMissingAnalysisRuns(): void {
+    const insertedCount = this.backfillMissingAnalysisRuns()
+    if (insertedCount > 0) {
+      console.log('[AIDatabase] analysis storage catch-up 完成:', { insertedCount })
+    }
   }
 
   /**
@@ -190,7 +643,6 @@ export class AIDatabase {
 
     if (!row) return null
 
-    // 转换为 camelCase 格式
     return {
       id: row.id,
       sessionId: row.session_id,
@@ -204,7 +656,8 @@ export class AIDatabase {
       provider: row.provider,
       model: row.model,
       createdAt: row.created_at,
-      promptText: row.prompt_text
+      promptText: row.prompt_text,
+      structuredAnalysis: this.parseStructuredAnalysisColumn(row.structured_result_json)
     }
   }
 
@@ -213,7 +666,7 @@ export class AIDatabase {
    */
   updateUsageStats(provider: string, model: string, tokens: number, cost: number): void {
     const db = this.getDb()
-    const date = new Date().toISOString().split('T')[0] // YYYY-MM-DD
+    const date = new Date().toISOString().split('T')[0]
 
     db.prepare(`
       INSERT INTO usage_stats (date, provider, model, total_tokens, total_cost, request_count)
@@ -253,7 +706,23 @@ export class AIDatabase {
   /**
    * 获取会话的摘要历史
    */
-  getSummaryHistory(sessionId: string, limit: number = 10): any[] {
+  getSummaryHistory(sessionId: string, limit: number = 10): Array<{
+    id: number
+    sessionId: string
+    timeRangeStart: number
+    timeRangeEnd: number
+    timeRangeDays: number
+    messageCount: number
+    summaryText: string
+    tokensUsed: number
+    cost: number
+    provider: string
+    model: string
+    createdAt: number
+    promptText?: string
+    customName?: string
+    structuredAnalysis?: StructuredAnalysis
+  }> {
     const db = this.getDb()
 
     console.log('[AIDatabase] 查询历史记录:', { sessionId, limit })
@@ -267,7 +736,6 @@ export class AIDatabase {
 
     console.log('[AIDatabase] 查询到', rows.length, '条历史记录')
 
-    // 转换为 camelCase 格式
     return rows.map((row: any) => ({
       id: row.id,
       sessionId: row.session_id,
@@ -282,7 +750,8 @@ export class AIDatabase {
       model: row.model,
       createdAt: row.created_at,
       promptText: row.prompt_text,
-      customName: row.custom_name
+      customName: row.custom_name,
+      structuredAnalysis: this.parseStructuredAnalysisColumn(row.structured_result_json)
     }))
   }
 
@@ -293,12 +762,25 @@ export class AIDatabase {
     const db = this.getDb()
 
     try {
-      // 先删除相关的缓存
-      db.prepare('DELETE FROM summary_cache WHERE summary_id = ?').run(id)
-      
-      // 删除摘要记录
-      const result = db.prepare('DELETE FROM summaries WHERE id = ?').run(id)
-      
+      const deleteTx = db.transaction((summaryId: number) => {
+        db.prepare('DELETE FROM summary_cache WHERE summary_id = ?').run(summaryId)
+        db.prepare(`
+          DELETE FROM evidence_links
+          WHERE run_id IN (SELECT id FROM analysis_runs WHERE summary_id = ?)
+        `).run(summaryId)
+        db.prepare(`
+          DELETE FROM extracted_facts
+          WHERE run_id IN (SELECT id FROM analysis_runs WHERE summary_id = ?)
+        `).run(summaryId)
+        db.prepare(`
+          DELETE FROM analysis_blocks
+          WHERE run_id IN (SELECT id FROM analysis_runs WHERE summary_id = ?)
+        `).run(summaryId)
+        db.prepare('DELETE FROM analysis_runs WHERE summary_id = ?').run(summaryId)
+        return db.prepare('DELETE FROM summaries WHERE id = ?').run(summaryId)
+      })
+
+      const result = deleteTx(id)
       return result.changes > 0
     } catch (e) {
       console.error('[AIDatabase] 删除摘要失败:', e)
@@ -340,7 +822,114 @@ export class AIDatabase {
       this.db = null
     }
   }
+
+  private parseStructuredAnalysisColumn(rawValue: unknown): StructuredAnalysis | undefined {
+    const parsed = parseStoredStructuredAnalysis(rawValue)
+    if (!parsed && rawValue) {
+      console.warn('[AIDatabase] structured_result_json 解析失败，已忽略该字段')
+    }
+    return parsed
+  }
+
+  private getMetaValue(metaKey: string): string | undefined {
+    const db = this.getDb()
+    const row = db.prepare(`
+      SELECT meta_value FROM db_meta WHERE meta_key = ?
+    `).get(metaKey) as { meta_value: string } | undefined
+
+    return row?.meta_value
+  }
+
+  private setMetaValue(metaKey: string, metaValue: string): void {
+    const db = this.getDb()
+    db.prepare(`
+      INSERT INTO db_meta (meta_key, meta_value, updated_at)
+      VALUES (?, ?, ?)
+      ON CONFLICT(meta_key) DO UPDATE SET
+        meta_value = excluded.meta_value,
+        updated_at = excluded.updated_at
+    `).run(metaKey, metaValue, Date.now())
+  }
+
+  private backfillMissingAnalysisRuns(): number {
+    const candidates = this.getBackfillCandidates()
+    let insertedCount = 0
+
+    for (const summaryRow of candidates) {
+      try {
+        const structuredAnalysis = this.parseStructuredAnalysisColumn(summaryRow.structured_result_json)
+        const payload: SaveAnalysisArtifactsInput = structuredAnalysis
+          ? {
+              summaryId: summaryRow.id,
+              sessionId: summaryRow.session_id,
+              timeRangeStart: summaryRow.time_range_start,
+              timeRangeEnd: summaryRow.time_range_end,
+              timeRangeDays: summaryRow.time_range_days,
+              rawMessageCount: summaryRow.message_count,
+              effectiveMessageCount: undefined,
+              blockCount: 0,
+              provider: summaryRow.provider,
+              model: summaryRow.model,
+              status: 'backfill_facts_only',
+              sourceKind: 'backfill_structured',
+              evidenceResolved: hasAnyEvidenceRefs(structuredAnalysis),
+              blocksAvailable: false,
+              finalAnalysis: structuredAnalysis,
+              createdAt: summaryRow.created_at,
+              updatedAt: Date.now()
+            }
+          : {
+              summaryId: summaryRow.id,
+              sessionId: summaryRow.session_id,
+              timeRangeStart: summaryRow.time_range_start,
+              timeRangeEnd: summaryRow.time_range_end,
+              timeRangeDays: summaryRow.time_range_days,
+              rawMessageCount: summaryRow.message_count,
+              effectiveMessageCount: undefined,
+              blockCount: 0,
+              provider: summaryRow.provider,
+              model: summaryRow.model,
+              status: 'legacy_placeholder',
+              sourceKind: 'backfill_legacy',
+              evidenceResolved: false,
+              blocksAvailable: false,
+              createdAt: summaryRow.created_at,
+              updatedAt: Date.now()
+            }
+
+        this.saveAnalysisArtifacts(payload)
+        insertedCount += 1
+      } catch (error) {
+        console.warn('[AIDatabase] 回填 analysis_runs 失败，已跳过该摘要:', {
+          summaryId: summaryRow.id,
+          error: String(error)
+        })
+      }
+    }
+
+    return insertedCount
+  }
+
+  private getBackfillCandidates(): SummaryBackfillRow[] {
+    const db = this.getDb()
+    return db.prepare(`
+      SELECT
+        s.id,
+        s.session_id,
+        s.time_range_start,
+        s.time_range_end,
+        s.time_range_days,
+        s.message_count,
+        s.provider,
+        s.model,
+        s.created_at,
+        s.structured_result_json
+      FROM summaries s
+      LEFT JOIN analysis_runs ar ON ar.summary_id = s.id
+      WHERE ar.id IS NULL
+      ORDER BY s.id ASC
+    `).all() as SummaryBackfillRow[]
+  }
 }
 
-// 导出单例
 export const aiDatabase = new AIDatabase()

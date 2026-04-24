@@ -85,7 +85,8 @@ https://api.openai-sb.com/v1
 - `claude-3-5-sonnet-20241022`
 - `claude-3-5-haiku-20241022`
 - `gemini-2.0-flash-exp`
-- `deepseek-chat`
+- `deepseek-v4-flash`
+- `deepseek-v4-pro`
 - `qwen-plus`
 
 ### 自定义模型

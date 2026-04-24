@@ -1,5 +1,5 @@
 import { ConfigService } from '../config'
-import { aiDatabase } from './aiDatabase'
+import { aiDatabase, type SaveAnalysisArtifactsInput } from './aiDatabase'
 import { ZhipuProvider, ZhipuMetadata } from './providers/zhipu'
 import { DeepSeekProvider, DeepSeekMetadata } from './providers/deepseek'
 import { QwenProvider, QwenMetadata } from './providers/qwen'
@@ -16,14 +16,41 @@ import { OllamaProvider, OllamaMetadata } from './providers/ollama'
 import { CustomProvider, CustomMetadata } from './providers/custom'
 import { AIProvider } from './providers/base'
 import type { Message, Contact } from '../chatService'
-import { voiceTranscribeService } from '../voiceTranscribeService'
+import {
+  fallbackStructuredAnalysisWithoutEvidence,
+  resolveStructuredAnalysisEvidence
+} from '../ai-agent/analyzer/evidenceResolver'
+import { extractFactsFromBlocks } from '../ai-agent/analyzer/factExtractor'
+import {
+  renderStandardizedMessages,
+  sliceAnalysisBlocks,
+  standardizeMessagesForAnalysis
+} from '../ai-agent/analyzer/blockSlicer'
+import { mergeStructuredAnalysisBlocks } from '../ai-agent/analyzer/resultMerger'
+import {
+  buildLegacySummaryUserPrompt,
+  buildStructuredSummaryUserPrompt
+} from '../ai-agent/analyzer/summaryRenderer'
+import type {
+  AnalysisBlock,
+  ExtractedStructuredAnalysis,
+  StructuredAnalysis
+} from '../ai-agent/types/analysis'
+import {
+  answerSessionQuestionWithAgent,
+  type SessionQAHistoryMessage,
+  type SessionQAProgressEvent,
+  type SessionQAToolCall
+} from '../ai-agent/qa/sessionQaAgent'
 
 /**
  * 摘要选项
  */
 export interface SummaryOptions {
   sessionId: string
-  timeRangeDays: number  // 1, 3, 7, 30
+  timeRangeDays: number  // 0 表示全部消息
+  timeRangeStart?: number
+  timeRangeEnd?: number
   provider?: string
   apiKey?: string
   model?: string
@@ -34,12 +61,14 @@ export interface SummaryOptions {
   customRequirement?: string  // 用户自定义要求
   sessionName?: string        // 会话名称
   enableThinking?: boolean    // 是否启用思考模式（推理模式）
+  inputMessageScopeNote?: string
 }
 
 /**
  * 摘要结果
  */
 export interface SummaryResult {
+  id?: number
   sessionId: string
   timeRangeStart: number
   timeRangeEnd: number
@@ -51,6 +80,52 @@ export interface SummaryResult {
   provider: string
   model: string
   createdAt: number
+  customName?: string
+  structuredAnalysis?: StructuredAnalysis
+}
+
+export interface SessionQAOptions {
+  sessionId: string
+  sessionName?: string
+  question: string
+  summaryText?: string
+  structuredAnalysis?: StructuredAnalysis
+  history?: SessionQAHistoryMessage[]
+  provider?: string
+  apiKey?: string
+  model?: string
+  enableThinking?: boolean
+}
+
+export interface SessionQAResult {
+  sessionId: string
+  question: string
+  answerText: string
+  evidenceRefs: Array<{
+    sessionId: string
+    localId: number
+    createTime: number
+    sortSeq: number
+    senderUsername?: string
+    senderDisplayName?: string
+    previewText: string
+  }>
+  toolCalls: SessionQAToolCall[]
+  tokensUsed: number
+  cost: number
+  provider: string
+  model: string
+  createdAt: number
+}
+
+interface StructuredAnalysisAttempt {
+  blocks: AnalysisBlock[]
+  blockAnalyses: ExtractedStructuredAnalysis[]
+  mergedAnalysis: ExtractedStructuredAnalysis
+  finalAnalysis: StructuredAnalysis
+  blockCount: number
+  effectiveMessageCount: number
+  evidenceResolved: boolean
 }
 
 /**
@@ -242,175 +317,6 @@ ${detailInstructions[detail as keyof typeof detailInstructions] || detailInstruc
   }
 
   /**
-   * 格式化消息（完全依赖后端解析结果，不重复解析）
-   */
-  private formatMessages(messages: Message[], contacts: Map<string, Contact>, sessionId: string): string {
-    const formattedLines: string[] = []
-
-    messages.forEach(msg => {
-      // 获取发送者显示名称
-      const contact = contacts.get(msg.senderUsername || '')
-      const sender = contact?.remark || contact?.nickName || msg.senderUsername || '未知'
-
-      // 格式化时间：YYYY-MM-DD-HH:MM:SS
-      const date = new Date(msg.createTime * 1000)
-      const time = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}-${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}:${String(date.getSeconds()).padStart(2, '0')}`
-
-      // 调试日志：检查聊天记录消息
-      if (msg.parsedContent && msg.parsedContent.includes('[聊天记录]')) {
-        console.log('[AIService] 发现聊天记录消息:', {
-          localType: msg.localType,
-          parsedContent: msg.parsedContent.substring(0, 100),
-          hasChatRecordList: !!msg.chatRecordList,
-          chatRecordListLength: msg.chatRecordList?.length || 0,
-          rawContentPreview: msg.rawContent?.substring(0, 200)
-        })
-      }
-
-      // 处理不同类型的消息
-      let content = ''
-      let messageType = '文本'
-
-      // 特殊处理1：聊天记录（有详细列表）
-      // 后端在 parseChatHistory() 中检查 <type>19</type> 并填充 chatRecordList
-      if (msg.chatRecordList && msg.chatRecordList.length > 0) {
-        messageType = '聊天记录'
-        const recordCount = msg.chatRecordList.length
-        const recordLines: string[] = []
-
-        // 从 parsedContent 提取标题（格式：[聊天记录] 标题）
-        let title = '聊天记录'
-        if (msg.parsedContent && msg.parsedContent.startsWith('[聊天记录]')) {
-          title = msg.parsedContent.replace('[聊天记录]', '').trim() || '聊天记录'
-        }
-
-        recordLines.push(title)
-        recordLines.push(`共${recordCount}条消息：`)
-
-        // 遍历聊天记录列表
-        msg.chatRecordList.forEach((record, index) => {
-          const recordSender = record.sourcename || '未知'
-
-          // 根据datatype判断消息类型
-          let recordContent = ''
-          if (record.datatype === 1) {
-            // 文本消息
-            recordContent = record.datadesc || record.datatitle || ''
-          } else if (record.datatype === 3) {
-            recordContent = '[图片]'
-          } else if (record.datatype === 34) {
-            recordContent = '[语音]'
-          } else if (record.datatype === 43) {
-            recordContent = '[视频]'
-          } else if (record.datatype === 47) {
-            recordContent = '[表情包]'
-          } else if (record.datatype === 8 || record.datatype === 49) {
-            // 文件消息
-            recordContent = `[文件] ${record.datatitle || record.datadesc || ''}`
-          } else {
-            recordContent = record.datadesc || record.datatitle || '[媒体消息]'
-          }
-
-          recordLines.push(`  第${index + 1}条 - ${recordSender}: ${recordContent}`)
-        })
-
-        content = recordLines.join('\n')
-      }
-      // 特殊处理2：语音消息 - 尝试获取转写文本
-      else if (msg.localType === 34) {
-        messageType = '语音'
-        const transcript = voiceTranscribeService.getCachedTranscript(sessionId, msg.createTime)
-        content = transcript || msg.parsedContent || '[语音消息]'
-      }
-      // 特殊处理3：撤回消息 - 跳过
-      else if (msg.localType === 10002) {
-        return
-      }
-      // 其他所有消息：直接使用后端解析的 parsedContent
-      else {
-        content = msg.parsedContent || '[消息]'
-
-        // 根据 parsedContent 的前缀判断消息类型
-        if (content.startsWith('[图片]')) {
-          messageType = '图片'
-        } else if (content.startsWith('[视频]')) {
-          messageType = '视频'
-        } else if (content.startsWith('[动画表情]') || content.startsWith('[表情包]')) {
-          messageType = '表情包'
-        } else if (content.startsWith('[文件]')) {
-          messageType = '文件'
-        } else if (content.startsWith('[转账]')) {
-          messageType = '转账'
-        } else if (content.startsWith('[链接]')) {
-          messageType = '链接'
-        } else if (content.startsWith('[小程序]')) {
-          messageType = '小程序'
-        } else if (content.startsWith('[聊天记录]')) {
-          messageType = '聊天记录'
-        } else if (content.startsWith('[引用消息]') || msg.localType === 244813135921) {
-          messageType = '引用'
-        } else if (content.startsWith('[位置]')) {
-          messageType = '位置'
-        } else if (content.startsWith('[名片]')) {
-          messageType = '名片'
-        } else if (content.startsWith('[通话]')) {
-          messageType = '通话'
-        } else if (msg.localType === 10000) {
-          messageType = '系统'
-        } else if (msg.localType === 1) {
-          messageType = '文本'
-        } else {
-          // 未知类型，记录日志以便调试
-          console.log(`[AIService] 未知消息类型: localType=${msg.localType}, parsedContent=${content.substring(0, 100)}`)
-          messageType = '未知'
-        }
-      }
-
-      // 跳过空内容的消息（但保留图片、视频、表情包等媒体消息）
-      if (!content && messageType !== '图片' && messageType !== '视频' && messageType !== '表情包') {
-        return
-      }
-
-      // 格式化输出：[消息类型] {发送者：时间 内容}
-      if (messageType === '文本') {
-        formattedLines.push(`[文本] {${sender}：${time} ${content}}`)
-      } else if (messageType === '转账') {
-        formattedLines.push(`[转账] {${sender}：${time} ${content}}`)
-      } else if (messageType === '链接') {
-        formattedLines.push(`[链接] {${sender}：${time} ${content}}`)
-      } else if (messageType === '文件') {
-        formattedLines.push(`[文件] {${sender}：${time} ${content}}`)
-      } else if (messageType === '语音') {
-        formattedLines.push(`[语音] {${sender}：${time} ${content}}`)
-      } else if (messageType === '图片') {
-        formattedLines.push(`[图片] {${sender}：${time}}`)
-      } else if (messageType === '视频') {
-        formattedLines.push(`[视频] {${sender}：${time}}`)
-      } else if (messageType === '表情包') {
-        formattedLines.push(`[表情包] {${sender}：${time}}`)
-      } else if (messageType === '小程序') {
-        formattedLines.push(`[小程序] {${sender}：${time} ${content}}`)
-      } else if (messageType === '聊天记录') {
-        formattedLines.push(`[聊天记录] {${sender}：${time} ${content}}`)
-      } else if (messageType === '引用') {
-        formattedLines.push(`[引用] {${sender}：${time} ${content}}`)
-      } else if (messageType === '位置') {
-        formattedLines.push(`[位置] {${sender}：${time} ${content}}`)
-      } else if (messageType === '名片') {
-        formattedLines.push(`[名片] {${sender}：${time} ${content}}`)
-      } else if (messageType === '通话') {
-        formattedLines.push(`[通话] {${sender}：${time} ${content}}`)
-      } else if (messageType === '系统') {
-        formattedLines.push(`[系统消息] {${time} ${content}}`)
-      } else {
-        formattedLines.push(`[${messageType}] {${sender}：${time} ${content}}`)
-      }
-    })
-
-    return formattedLines.join('\n')
-  }
-
-  /**
    * 估算 tokens
    */
   estimateTokens(text: string): number {
@@ -437,6 +343,59 @@ ${detailInstructions[detail as keyof typeof detailInstructions] || detailInstruc
     return `${sessionId}_${timeRangeDays}d_${dayAlignedEnd}`
   }
 
+  private buildTimeRangeLabel(timeRangeDays: number): string {
+    return timeRangeDays > 0 ? `最近${timeRangeDays}天` : '全部消息'
+  }
+
+  private async tryGenerateStructuredAnalysis(
+    provider: AIProvider,
+    model: string,
+    blocks: AnalysisBlock[],
+    standardizedMessages: ReturnType<typeof standardizeMessagesForAnalysis>,
+    options: SummaryOptions
+  ): Promise<StructuredAnalysisAttempt | null> {
+    if (standardizedMessages.length === 0 || blocks.length === 0) {
+      return null
+    }
+
+    try {
+      const blockAnalyses = await extractFactsFromBlocks(blocks, provider, {
+        model,
+        sessionName: options.sessionName || options.sessionId,
+        timeRangeLabel: this.buildTimeRangeLabel(options.timeRangeDays)
+      })
+
+      const mergedAnalysis = mergeStructuredAnalysisBlocks(blockAnalyses)
+      let finalAnalysis: StructuredAnalysis
+      let evidenceResolved = false
+
+      try {
+        finalAnalysis = resolveStructuredAnalysisEvidence(
+          mergedAnalysis,
+          standardizedMessages,
+          options.sessionId
+        )
+        evidenceResolved = true
+      } catch (error) {
+        console.warn('[AIService] 证据解析失败，回退到无证据结构化摘要:', error)
+        finalAnalysis = fallbackStructuredAnalysisWithoutEvidence(mergedAnalysis)
+      }
+
+      return {
+        blocks,
+        blockAnalyses,
+        mergedAnalysis,
+        finalAnalysis,
+        blockCount: blocks.length,
+        effectiveMessageCount: standardizedMessages.length,
+        evidenceResolved
+      }
+    } catch (error) {
+      console.warn('[AIService] 结构化抽取失败，回退到原始摘要链路:', error)
+      return null
+    }
+  }
+
   /**
    * 生成摘要（流式）
    */
@@ -450,16 +409,23 @@ ${detailInstructions[detail as keyof typeof detailInstructions] || detailInstruc
       this.init()
     }
 
-    // 计算时间范围
-    const endTime = Math.floor(Date.now() / 1000)
-    const startTime = endTime - (options.timeRangeDays * 24 * 60 * 60)
+    const endTime = Number.isFinite(options.timeRangeEnd) && Number(options.timeRangeEnd) > 0
+      ? Math.floor(Number(options.timeRangeEnd))
+      : Math.floor(Date.now() / 1000)
+    const startTime = Number.isFinite(options.timeRangeStart) && Number(options.timeRangeStart) >= 0
+      ? Math.floor(Number(options.timeRangeStart))
+      : (options.timeRangeDays > 0
+        ? endTime - (options.timeRangeDays * 24 * 60 * 60)
+        : (messages[0]?.createTime || endTime))
 
     // 获取提供商
     const provider = this.getProvider(options.provider, options.apiKey)
     const model = options.model || provider.models[0]
 
-    // 格式化消息
-    const formattedMessages = this.formatMessages(messages, contacts, options.sessionId)
+    // 统一标准化消息，供结构化抽取和 legacy 回退共用。
+    const standardizedMessages = standardizeMessagesForAnalysis(messages, contacts, options.sessionId)
+    const analysisBlocks = sliceAnalysisBlocks(standardizedMessages)
+    const formattedMessages = renderStandardizedMessages(standardizedMessages)
 
     // 构建提示词
     const presetFromConfig = (this.configService.get('aiSystemPromptPreset') as any) || 'default'
@@ -473,15 +439,42 @@ ${detailInstructions[detail as keyof typeof detailInstructions] || detailInstruc
 
     // 使用会话名称优化提示词
     const targetName = options.sessionName || options.sessionId
-    let userPrompt = `请分析我与"${targetName}"的聊天记录（时间范围：最近${options.timeRangeDays}天，共${messages.length}条消息）：
+    const timeRangeLabel = this.buildTimeRangeLabel(options.timeRangeDays)
+    const structuredAnalysisResult = await this.tryGenerateStructuredAnalysis(
+      provider,
+      model,
+      analysisBlocks,
+      standardizedMessages,
+      options
+    )
 
-${formattedMessages}
+    const userPrompt = structuredAnalysisResult
+      ? buildStructuredSummaryUserPrompt({
+          targetName,
+          timeRangeLabel,
+          messageCount: messages.length,
+          blockCount: structuredAnalysisResult.blockCount,
+          analysis: structuredAnalysisResult.finalAnalysis,
+          inputMessageScopeNote: options.inputMessageScopeNote,
+          customRequirement: options.customRequirement
+        })
+      : buildLegacySummaryUserPrompt({
+          targetName,
+          timeRangeLabel,
+          messageCount: messages.length,
+          formattedMessages,
+          inputMessageScopeNote: options.inputMessageScopeNote,
+          customRequirement: options.customRequirement
+        })
 
-请按照系统提示的格式生成摘要。`
-
-    // 如果有自定义要求，添加到提示词中
-    if (options.customRequirement && options.customRequirement.trim()) {
-      userPrompt += `\n\n用户的额外要求：${options.customRequirement.trim()}`
+    if (structuredAnalysisResult) {
+      console.log('[AIService] 结构化抽取完成:', {
+        sessionId: options.sessionId,
+        blockCount: structuredAnalysisResult.blockCount,
+        messageCount: messages.length,
+        effectiveMessageCount: standardizedMessages.length,
+        evidenceResolved: structuredAnalysisResult.evidenceResolved
+      })
     }
 
     // 流式生成
@@ -506,6 +499,7 @@ ${formattedMessages}
     const totalText = systemPrompt + userPrompt + summaryText
     const tokensUsed = this.estimateTokens(totalText)
     const cost = (tokensUsed / 1000) * provider.pricing.input
+    const createdAt = Date.now()
 
     // 保存到数据库
     const summaryId = aiDatabase.saveSummary({
@@ -519,15 +513,48 @@ ${formattedMessages}
       cost: cost,
       provider: provider.name,
       model: model,
-      promptText: userPrompt
+      promptText: userPrompt,
+      structuredResultJson: structuredAnalysisResult
+        ? JSON.stringify(structuredAnalysisResult.finalAnalysis)
+        : undefined,
+      createdAt
     })
 
     console.log('[AIService] 摘要已保存到数据库，ID:', summaryId)
+
+    const analysisArtifactsPayload: SaveAnalysisArtifactsInput = {
+      summaryId,
+      sessionId: options.sessionId,
+      timeRangeStart: startTime,
+      timeRangeEnd: endTime,
+      timeRangeDays: options.timeRangeDays,
+      rawMessageCount: messages.length,
+      effectiveMessageCount: standardizedMessages.length || undefined,
+      blockCount: structuredAnalysisResult?.blockCount ?? analysisBlocks.length,
+      provider: provider.name,
+      model,
+      status: structuredAnalysisResult ? 'completed' : 'fallback_legacy',
+      sourceKind: structuredAnalysisResult ? 'generate_summary' : 'generate_summary_legacy',
+      evidenceResolved: structuredAnalysisResult?.evidenceResolved ?? false,
+      blocksAvailable: Boolean(structuredAnalysisResult?.blocks.length),
+      blocks: structuredAnalysisResult?.blocks,
+      blockAnalyses: structuredAnalysisResult?.blockAnalyses,
+      finalAnalysis: structuredAnalysisResult?.finalAnalysis,
+      createdAt,
+      updatedAt: createdAt
+    }
+
+    try {
+      aiDatabase.saveAnalysisArtifacts(analysisArtifactsPayload)
+    } catch (error) {
+      console.warn('[AIService] 分析产物写入失败，将由后续 catch-up 补录:', error)
+    }
 
     // 更新使用统计
     aiDatabase.updateUsageStats(provider.name, model, tokensUsed, cost)
 
     return {
+      id: summaryId,
       sessionId: options.sessionId,
       timeRangeStart: startTime,
       timeRangeEnd: endTime,
@@ -538,7 +565,8 @@ ${formattedMessages}
       cost: cost,
       provider: provider.name,
       model: model,
-      createdAt: Date.now()
+      createdAt,
+      structuredAnalysis: structuredAnalysisResult?.finalAnalysis
     }
   }
 
@@ -590,9 +618,64 @@ ${formattedMessages}
   }
 
   /**
+   * 单会话 AI 问答（流式）
+   */
+  async answerSessionQuestion(
+    options: SessionQAOptions,
+    onChunk: (chunk: string) => void,
+    onProgress?: (event: SessionQAProgressEvent) => void
+  ): Promise<SessionQAResult> {
+    if (!this.initialized) {
+      this.init()
+    }
+
+    const question = String(options.question || '').trim()
+    if (!question) {
+      throw new Error('问题不能为空')
+    }
+
+    const provider = this.getProvider(options.provider, options.apiKey)
+    const model = options.model || provider.models[0]
+
+    const result = await answerSessionQuestionWithAgent({
+      sessionId: options.sessionId,
+      sessionName: options.sessionName,
+      question,
+      summaryText: options.summaryText,
+      structuredAnalysis: options.structuredAnalysis,
+      history: options.history,
+      provider,
+      model,
+      enableThinking: options.enableThinking,
+      onChunk,
+      onProgress
+    })
+
+    const totalText = result.promptText + result.answerText
+    const tokensUsed = this.estimateTokens(totalText)
+    const cost = (tokensUsed / 1000) * provider.pricing.input
+    const createdAt = Date.now()
+
+    aiDatabase.updateUsageStats(provider.name, model, tokensUsed, cost)
+
+    return {
+      sessionId: options.sessionId,
+      question,
+      answerText: result.answerText,
+      evidenceRefs: result.evidenceRefs,
+      toolCalls: result.toolCalls,
+      tokensUsed,
+      cost,
+      provider: provider.name,
+      model,
+      createdAt
+    }
+  }
+
+  /**
    * 获取摘要历史
    */
-  getSummaryHistory(sessionId: string, limit: number = 10): any[] {
+  getSummaryHistory(sessionId: string, limit: number = 10): SummaryResult[] {
     if (!this.initialized) {
       this.init()
     }

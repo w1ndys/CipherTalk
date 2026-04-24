@@ -115,6 +115,21 @@ interface AISummarySettingsProps {
   showMessage: (text: string, success: boolean) => void
 }
 
+const DEEPSEEK_LEGACY_MODEL_MAP: Record<string, string> = {
+  'DeepSeek V3': 'deepseek-v4-flash',
+  'DeepSeek R1 (推理)': 'deepseek-v4-flash',
+  'deepseek-chat': 'deepseek-v4-flash',
+  'deepseek-reasoner': 'deepseek-v4-flash'
+}
+
+function normalizeProviderModel(providerId: string, modelName: string) {
+  if (providerId !== 'deepseek') {
+    return modelName
+  }
+
+  return DEEPSEEK_LEGACY_MODEL_MAP[modelName] || modelName
+}
+
 function AISummarySettings({
   provider,
   setProvider,
@@ -167,6 +182,13 @@ function AISummarySettings({
     loadPresets()
   }, [])
 
+  useEffect(() => {
+    const normalizedModel = normalizeProviderModel(provider, model)
+    if (normalizedModel !== model) {
+      setModel(normalizedModel)
+    }
+  }, [provider, model, setModel])
+
   // 当 provider 改变时，加载对应的 baseURL
   useEffect(() => {
     const loadBaseURL = async () => {
@@ -211,7 +233,16 @@ function AISummarySettings({
     try {
       const { getAllAiProviderConfigs } = await import('../../services/config')
       const configs = await getAllAiProviderConfigs()
-      setProviderConfigs(configs)
+      const normalizedConfigs = Object.fromEntries(
+        Object.entries(configs).map(([providerId, config]) => [
+          providerId,
+          {
+            ...config,
+            model: normalizeProviderModel(providerId, config.model)
+          }
+        ])
+      )
+      setProviderConfigs(normalizedConfigs)
     } catch (e) {
       console.error('加载提供商配置失败:', e)
     }
@@ -242,7 +273,7 @@ function AISummarySettings({
     setEditingPresetId(preset.id)
     setNewPresetProvider(preset.provider)
     setNewPresetApiKey(preset.apiKey)
-    setNewPresetModel(preset.model)
+    setNewPresetModel(normalizeProviderModel(preset.provider, preset.model))
     setNewPresetBaseURL(preset.baseURL || '')
     setPresetName(preset.name)
     setNewPresetStep('config')
@@ -279,7 +310,7 @@ function AISummarySettings({
         name: presetName.trim(),
         provider: newPresetProvider,
         apiKey: newPresetApiKey,
-        model: newPresetModel,
+        model: normalizeProviderModel(newPresetProvider, newPresetModel),
         baseURL: newPresetBaseURL
       }
 
@@ -307,7 +338,7 @@ function AISummarySettings({
       if (preset) {
         setProvider(preset.provider)
         setApiKey(preset.apiKey)
-        setModel(preset.model)
+        setModel(normalizeProviderModel(preset.provider, preset.model))
         setBaseURL(preset.baseURL || '')
         setCurrentPresetName(preset.name)
         showMessage(`已加载配置: ${preset.name}`, true)
@@ -332,10 +363,11 @@ function AISummarySettings({
     // 先保存当前提供商的配置
     if (provider && (apiKey || model || baseURL)) {
       const { setAiProviderConfig } = await import('../../services/config')
-      await setAiProviderConfig(provider, { apiKey, model, baseURL: baseURL || undefined })
+      const normalizedModel = normalizeProviderModel(provider, model)
+      await setAiProviderConfig(provider, { apiKey, model: normalizedModel, baseURL: baseURL || undefined })
       setProviderConfigs(prev => ({
         ...prev,
-        [provider]: { apiKey, model, baseURL: baseURL || undefined }
+        [provider]: { apiKey, model: normalizedModel, baseURL: baseURL || undefined }
       }))
     }
 
@@ -349,7 +381,7 @@ function AISummarySettings({
     if (savedConfig) {
       // 使用已保存的配置
       setApiKey(savedConfig.apiKey)
-      setModel(savedConfig.model)
+      setModel(normalizeProviderModel(newProvider, savedConfig.model))
       setBaseURL(savedConfig.baseURL || '')
     } else if (newProviderData) {
       // 使用默认配置

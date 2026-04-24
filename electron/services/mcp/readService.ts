@@ -53,6 +53,8 @@ const SEARCH_BATCH_SIZE = 200
 const MAX_SEARCH_SESSIONS = 20
 const MAX_SCAN_PER_SESSION = 1000
 const MAX_SCAN_GLOBAL = 10000
+const MAX_TARGETED_SCAN_PER_SESSION = 200000
+const MAX_TARGETED_SCAN_GLOBAL = 200000
 
 const listSessionsArgsSchema = z.object({
   q: z.string().optional(),
@@ -1813,6 +1815,9 @@ export class McpReadService {
           displayName: session.displayName,
           kind: session.kind
         }))
+    const exhaustiveTargetedSearch = sessionIdCandidates.length > 0
+    const sessionScanLimit = exhaustiveTargetedSearch ? MAX_TARGETED_SCAN_PER_SESSION : MAX_SCAN_PER_SESSION
+    const globalScanLimit = exhaustiveTargetedSearch ? MAX_TARGETED_SCAN_GLOBAL : MAX_SCAN_GLOBAL
 
     const kindSet = args.data.kinds?.length ? new Set(args.data.kinds) : undefined
     const senderUsername = normalizeQuery(args.data.senderUsername)
@@ -1838,14 +1843,14 @@ export class McpReadService {
       let sessionOffset = 0
       let sessionScanned = 0
 
-      while (sessionScanned < MAX_SCAN_PER_SESSION && messagesScanned < MAX_SCAN_GLOBAL) {
+      while (sessionScanned < sessionScanLimit && messagesScanned < globalScanLimit) {
         const bestScoreBeforeBatch = bestScore
         let roundBestScore = Number.NEGATIVE_INFINITY
 
         const fetchLimit = Math.min(
           SEARCH_BATCH_SIZE,
-          MAX_SCAN_PER_SESSION - sessionScanned,
-          MAX_SCAN_GLOBAL - messagesScanned
+          sessionScanLimit - sessionScanned,
+          globalScanLimit - messagesScanned
         )
 
         if (fetchLimit <= 0) {
@@ -1896,7 +1901,7 @@ export class McpReadService {
           bestScore = Math.max(bestScore, match.score)
         }
 
-        if (rawHits.length >= limit * 3) {
+        if (!exhaustiveTargetedSearch && rawHits.length >= limit * 3) {
           hitTargetReached = true
           await reportProgress(reporter, {
             stage: 'streaming_hits',
@@ -1913,11 +1918,15 @@ export class McpReadService {
         if (!result.hasMore) break
       }
 
-      if (truncated && rawHits.length >= limit * 3) {
+      if (sessionScanned >= sessionScanLimit) {
+        truncated = true
+      }
+
+      if (!exhaustiveTargetedSearch && truncated && rawHits.length >= limit * 3) {
         break
       }
 
-      if (messagesScanned >= MAX_SCAN_GLOBAL) {
+      if (messagesScanned >= globalScanLimit) {
         truncated = true
         break
       }
