@@ -484,6 +484,75 @@
     }
   }
 
+  .semantic-vector-subtitle {
+    margin-top: 1rem;
+    margin-bottom: 0.5rem;
+    font-size: 0.95rem;
+    font-weight: 500;
+  }
+
+  .semantic-model-grid {
+    margin-bottom: 16px;
+  }
+
+  .semantic-device-grid {
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    margin-bottom: 12px;
+  }
+
+  .semantic-device-status {
+    padding: 14px 16px;
+    margin-bottom: 16px;
+    background: var(--bg-tertiary);
+    border-radius: 12px;
+
+    .status-indicator {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 14px;
+      font-weight: 500;
+
+      &.ready {
+        color: #22c55e;
+      }
+
+      &.missing {
+        color: #f59e0b;
+      }
+    }
+
+    p {
+      margin: 8px 0 0;
+      color: var(--text-secondary);
+      font-size: 13px;
+      line-height: 1.5;
+    }
+  }
+
+  .semantic-vector-model-status {
+    .model-size span {
+      color: var(--text-tertiary);
+    }
+
+    .model-path {
+      margin: 0;
+      color: var(--text-tertiary);
+      font-size: 12px;
+      line-height: 1.5;
+      word-break: break-all;
+    }
+  }
+
+  .semantic-download-progress {
+    margin-top: 0;
+  }
+
+  .semantic-vector-actions {
+    margin-top: 1rem;
+    margin-bottom: 24px;
+  }
+
   // 3. 详情卡片
   .detail-options {
     display: grid;

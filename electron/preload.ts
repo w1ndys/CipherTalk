@@ -20,6 +20,17 @@ type SessionVectorIndexProgressEvent = {
   vectorModel: string
 }
 
+type EmbeddingModelDownloadProgress = {
+  profileId: string
+  displayName: string
+  remoteHost?: string
+  file?: string
+  loaded?: number
+  total?: number
+  percent?: number
+  status?: string
+}
+
 function getMcpLaunchConfigSafe(): Promise<{
   command: string
   args: string[]
@@ -543,6 +554,14 @@ contextBridge.exposeInMainWorld('electronAPI', {
     getSessionVectorIndexState: (sessionId: string) => ipcRenderer.invoke('ai:getSessionVectorIndexState', sessionId),
     prepareSessionVectorIndex: (options: { sessionId: string }) => ipcRenderer.invoke('ai:prepareSessionVectorIndex', options),
     cancelSessionVectorIndex: (sessionId: string) => ipcRenderer.invoke('ai:cancelSessionVectorIndex', sessionId),
+    getEmbeddingModelProfiles: () => ipcRenderer.invoke('ai:getEmbeddingModelProfiles'),
+    setEmbeddingModelProfile: (profileId: string) => ipcRenderer.invoke('ai:setEmbeddingModelProfile', profileId),
+    getEmbeddingDeviceStatus: () => ipcRenderer.invoke('ai:getEmbeddingDeviceStatus'),
+    setEmbeddingDevice: (device: 'cpu' | 'dml') => ipcRenderer.invoke('ai:setEmbeddingDevice', device),
+    getEmbeddingModelStatus: (profileId?: string) => ipcRenderer.invoke('ai:getEmbeddingModelStatus', profileId),
+    downloadEmbeddingModel: (profileId?: string) => ipcRenderer.invoke('ai:downloadEmbeddingModel', profileId),
+    clearEmbeddingModel: (profileId?: string) => ipcRenderer.invoke('ai:clearEmbeddingModel', profileId),
+    clearSemanticVectorIndex: (vectorModel?: string) => ipcRenderer.invoke('ai:clearSemanticVectorIndex', vectorModel),
     onSummaryChunk: (callback: (chunk: string) => void) => {
       ipcRenderer.on('ai:summaryChunk', (_, chunk) => callback(chunk))
       return () => ipcRenderer.removeAllListeners('ai:summaryChunk')
@@ -558,6 +577,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
     onSessionVectorIndexProgress: (callback: (event: SessionVectorIndexProgressEvent) => void) => {
       ipcRenderer.on('ai:sessionVectorIndexProgress', (_, event) => callback(event))
       return () => ipcRenderer.removeAllListeners('ai:sessionVectorIndexProgress')
+    },
+    onEmbeddingModelDownloadProgress: (callback: (event: EmbeddingModelDownloadProgress) => void) => {
+      ipcRenderer.on('ai:embeddingModelDownloadProgress', (_, event) => callback(event))
+      return () => ipcRenderer.removeAllListeners('ai:embeddingModelDownloadProgress')
     }
   }
 })

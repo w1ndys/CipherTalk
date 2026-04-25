@@ -44,7 +44,9 @@ export const CONFIG_KEYS = {
   AUTH_CREDENTIAL_ID: 'authCredentialId',
   AUTH_PASSWORD_HASH: 'authPasswordHash',
   AUTH_PASSWORD_SALT: 'authPasswordSalt',
-  CLOSE_TO_TRAY: 'closeToTray'
+  CLOSE_TO_TRAY: 'closeToTray',
+  AI_EMBEDDING_MODEL_PROFILE: 'aiEmbeddingModelProfile',
+  AI_EMBEDDING_DEVICE: 'aiEmbeddingDevice'
 } as const
 
 export type { AccountProfile, AccountProfileInput, AccountProfilePatch }
@@ -626,6 +628,24 @@ export async function getAiMessageLimit(): Promise<number> {
 // 设置摘要提取消息条数限制
 export async function setAiMessageLimit(limit: number): Promise<void> {
   await config.set('aiMessageLimit', limit)
+}
+
+export async function getAiEmbeddingModelProfile(): Promise<string> {
+  const value = await config.get(CONFIG_KEYS.AI_EMBEDDING_MODEL_PROFILE)
+  return (value as string) || 'bge-large-zh-v1.5-int8'
+}
+
+export async function setAiEmbeddingModelProfile(profileId: string): Promise<void> {
+  await config.set(CONFIG_KEYS.AI_EMBEDDING_MODEL_PROFILE, profileId || 'bge-large-zh-v1.5-int8')
+}
+
+export async function getAiEmbeddingDevice(): Promise<'cpu' | 'dml'> {
+  const value = await config.get(CONFIG_KEYS.AI_EMBEDDING_DEVICE)
+  return value === 'dml' ? 'dml' : 'cpu'
+}
+
+export async function setAiEmbeddingDevice(device: 'cpu' | 'dml'): Promise<void> {
+  await config.set(CONFIG_KEYS.AI_EMBEDDING_DEVICE, device === 'dml' ? 'dml' : 'cpu')
 }
 
 // --- MCP 配置 ---

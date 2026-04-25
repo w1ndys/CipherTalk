@@ -1410,8 +1410,8 @@ function AISummaryWindow() {
       status: 'running',
       processedCount: vectorConfirm?.state?.vectorizedCount || 0,
       totalCount: vectorConfirm?.state?.indexedCount || 0,
-      message: '正在准备本地向量索引',
-      vectorModel: vectorConfirm?.state?.vectorModel || 'local-chargram-hash-v1'
+      message: '正在准备本地语义向量索引',
+      vectorModel: vectorConfirm?.state?.vectorModel || 'bge-large-zh-v1.5-int8'
     })
 
     try {
@@ -1422,7 +1422,7 @@ function AISummaryWindow() {
 
       const result = await window.electronAPI.ai.prepareSessionVectorIndex({ sessionId })
       if (!result.success || !result.result) {
-        throw new Error(result.error || '向量索引准备失败')
+        throw new Error(result.error || '语义向量索引准备失败')
       }
 
       if (result.result.isVectorComplete) {
@@ -1431,7 +1431,7 @@ function AISummaryWindow() {
         setIsVectorIndexing(false)
         await runAskQuestion(question)
       } else {
-        setQaError('本地向量索引未完成，已取消本次准备')
+        setQaError('本地语义向量索引未完成，已取消本次准备')
       }
     } catch (e) {
       setQaError(String(e))
@@ -1554,6 +1554,7 @@ function AISummaryWindow() {
       ? Math.min(100, Math.round((processedCount / totalCount) * 100))
       : 0
     const pendingCount = Math.max(0, totalCount - processedCount)
+    const isDownloadingModel = vectorProgress?.stage === 'downloading_model'
 
     return (
       <div
@@ -1567,17 +1568,24 @@ function AISummaryWindow() {
       >
         <div className="dialog-box vector-index-dialog" onClick={(e) => e.stopPropagation()}>
           <div className="dialog-header">
-            <h3>准备本地向量索引</h3>
+            <h3>准备本地语义向量索引</h3>
           </div>
           <div className="dialog-content">
             <div className="vector-index-intro">
               <Atom size={18} />
-              <p>当前会话尚未完成本地向量化。建立后，本次和后续问 AI 会优先使用本地相似度检索，新消息会自动增量处理。</p>
+              <p>当前会话尚未完成本地语义向量化。建立后，本次和后续问 AI 会优先使用真实语义检索，新消息会自动增量处理。</p>
             </div>
 
             <div className="vector-index-stats">
-              <span>已向量化 {processedCount} 条</span>
-              <span>待处理 {pendingCount} 条</span>
+              <span>{vectorConfirm.state?.vectorModelName || vectorProgress?.vectorModel || 'BGE Small 中文'}</span>
+              {isDownloadingModel ? (
+                <span>正在下载语义模型</span>
+              ) : (
+                <>
+                  <span>已语义向量化 {processedCount} 条</span>
+                  <span>待处理 {pendingCount} 条</span>
+                </>
+              )}
             </div>
 
             {isVectorIndexing && (
@@ -1601,7 +1609,7 @@ function AISummaryWindow() {
               onClick={handlePrepareVectorIndex}
               disabled={isVectorIndexing}
             >
-              {isVectorIndexing ? '处理中' : '开始向量化'}
+              {isVectorIndexing ? '处理中' : '开始语义向量化'}
             </button>
           </div>
         </div>
@@ -1745,7 +1753,7 @@ function AISummaryWindow() {
             </div>
           )}
           {isVectorIndexing && (
-            <div className="generating-status" data-tooltip="正在准备本地向量索引...">
+            <div className="generating-status" data-tooltip="正在准备本地语义向量索引...">
               <Loader2 className="spinner" size={16} />
             </div>
           )}

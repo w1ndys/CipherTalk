@@ -4145,6 +4145,111 @@ function registerIpcHandlers() {
       return { success: false, error: String(e) }
     }
   })
+
+  ipcMain.handle('ai:getEmbeddingModelProfiles', async () => {
+    try {
+      const { localEmbeddingModelService } = await import('./services/search/embeddingModelService')
+      return {
+        success: true,
+        result: localEmbeddingModelService.listProfiles(),
+        currentProfileId: localEmbeddingModelService.getCurrentProfileId()
+      }
+    } catch (e) {
+      console.error('[AI] 获取语义模型列表失败:', e)
+      return { success: false, error: String(e) }
+    }
+  })
+
+  ipcMain.handle('ai:setEmbeddingModelProfile', async (_, profileId: string) => {
+    try {
+      const { localEmbeddingModelService } = await import('./services/search/embeddingModelService')
+      const result = localEmbeddingModelService.setCurrentProfileId(profileId)
+      return { success: true, result }
+    } catch (e) {
+      console.error('[AI] 设置语义模型失败:', e)
+      return { success: false, error: String(e) }
+    }
+  })
+
+  ipcMain.handle('ai:getEmbeddingDeviceStatus', async () => {
+    try {
+      const { localEmbeddingModelService } = await import('./services/search/embeddingModelService')
+      return {
+        success: true,
+        result: localEmbeddingModelService.getDeviceStatus()
+      }
+    } catch (e) {
+      console.error('[AI] 获取语义向量计算模式失败:', e)
+      return { success: false, error: String(e) }
+    }
+  })
+
+  ipcMain.handle('ai:setEmbeddingDevice', async (_, device: string) => {
+    try {
+      const { localEmbeddingModelService } = await import('./services/search/embeddingModelService')
+      const result = localEmbeddingModelService.setCurrentDevice(device)
+      return {
+        success: true,
+        result,
+        status: localEmbeddingModelService.getDeviceStatus()
+      }
+    } catch (e) {
+      console.error('[AI] 设置语义向量计算模式失败:', e)
+      return { success: false, error: String(e) }
+    }
+  })
+
+  ipcMain.handle('ai:getEmbeddingModelStatus', async (_, profileId?: string) => {
+    try {
+      const { localEmbeddingModelService } = await import('./services/search/embeddingModelService')
+      return {
+        success: true,
+        result: await localEmbeddingModelService.getModelStatus(profileId)
+      }
+    } catch (e) {
+      console.error('[AI] 获取语义模型状态失败:', e)
+      return { success: false, error: String(e) }
+    }
+  })
+
+  ipcMain.handle('ai:downloadEmbeddingModel', async (event, profileId?: string) => {
+    try {
+      const { localEmbeddingModelService } = await import('./services/search/embeddingModelService')
+      const result = await localEmbeddingModelService.downloadModel(profileId, (progress) => {
+        event.sender.send('ai:embeddingModelDownloadProgress', progress)
+      })
+      return { success: true, result }
+    } catch (e) {
+      console.error('[AI] 下载语义模型失败:', e)
+      return { success: false, error: String(e) }
+    }
+  })
+
+  ipcMain.handle('ai:clearEmbeddingModel', async (_, profileId?: string) => {
+    try {
+      const { localEmbeddingModelService } = await import('./services/search/embeddingModelService')
+      return {
+        success: true,
+        result: await localEmbeddingModelService.clearModel(profileId)
+      }
+    } catch (e) {
+      console.error('[AI] 清理语义模型失败:', e)
+      return { success: false, error: String(e) }
+    }
+  })
+
+  ipcMain.handle('ai:clearSemanticVectorIndex', async (_, vectorModel?: string) => {
+    try {
+      const { chatSearchIndexService } = await import('./services/search/chatSearchIndexService')
+      return {
+        success: true,
+        result: chatSearchIndexService.clearSemanticVectorIndex(vectorModel)
+      }
+    } catch (e) {
+      console.error('[AI] 清理语义向量索引失败:', e)
+      return { success: false, error: String(e) }
+    }
+  })
 }
 
 // 主窗口引用

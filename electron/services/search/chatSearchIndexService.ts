@@ -3,6 +3,11 @@ import { existsSync, mkdirSync } from 'fs'
 import { join } from 'path'
 import { chatService, type Message } from '../chatService'
 import { ConfigService } from '../config'
+import {
+  float32ArrayToBuffer,
+  hashEmbeddingContent,
+  localEmbeddingModelService
+} from './embeddingModelService'
 
 export type ChatSearchIndexProgressStage =
   | 'preparing_index'
@@ -56,6 +61,7 @@ export interface ChatSearchSessionResult {
 
 export type ChatVectorIndexProgressStage =
   | 'preparing'
+  | 'downloading_model'
   | 'indexing_messages'
   | 'vectorizing_messages'
   | 'completed'
@@ -84,6 +90,9 @@ export interface ChatVectorIndexState {
   isVectorComplete: boolean
   isVectorRunning: boolean
   vectorModel: string
+  vectorModelName?: string
+  vectorProviderAvailable?: boolean
+  vectorProviderError?: string
 }
 
 export interface ChatVectorSearchSessionResult {
@@ -112,17 +121,7 @@ type MessageIndexRow = {
 }
 
 type MessageVectorRow = MessageIndexRow & {
-  vector_json: string
-}
-
-type SparseVector = Array<[number, number]>
-
-interface LocalVectorProvider {
-  id: string
-  buildVector(text: string): SparseVector
-  parseVector(value: string): SparseVector
-  toWeightMap(vector: SparseVector): Map<number, number>
-  dot(queryWeights: Map<number, number>, vector: SparseVector): number
+  distance: number
 }
 
 type SessionVectorStateRow = {
@@ -141,81 +140,18 @@ type VectorTask = {
 }
 
 const INDEX_DB_NAME = 'chat_search_index.db'
-const INDEX_SCHEMA_VERSION = '1'
+const INDEX_SCHEMA_VERSION = '3'
 const INDEX_BATCH_SIZE = 800
 const MAX_INDEX_TEXT_CHARS = 8000
 const MAX_EXCERPT_RADIUS = 48
 const MAX_INDEX_SEARCH_CANDIDATES = 240
-const VECTOR_MODEL_ID = 'local-chargram-hash-v1'
-const VECTOR_DIMENSIONS = 2048
-const VECTOR_BATCH_SIZE = 800
-const MAX_VECTOR_TEXT_CHARS = 2400
-const MAX_VECTOR_SCAN_ROWS = 120000
-const VECTOR_MIN_SCORE = 0.055
+const VECTOR_BATCH_SIZE = 32
+const VECTOR_SEARCH_OVERFETCH = 8
+const VECTOR_MIN_SCORE = 0.45
 // Vector hits are recall supplements, so keep them below high-confidence keyword hits.
 const VECTOR_SCORE_BASE = 560
 const VECTOR_SCORE_SCALE = 420
 const VECTOR_INDEX_CANCELLED_ERROR = 'VECTOR_INDEX_CANCELLED'
-const VECTOR_STOP_PHRASES = [
-  '有没有',
-  '是不是',
-  '是否',
-  '什么',
-  '哪个',
-  '哪些',
-  '什么时候',
-  '为什么',
-  '怎么',
-  '如何',
-  '帮我',
-  '看看',
-  '请问',
-  '问一下',
-  '聊天记录',
-  '聊天',
-  '消息',
-  '记录',
-  '内容',
-  '这个',
-  '那个',
-  '我们',
-  '他们',
-  '对方',
-  '最近',
-  '说过',
-  '提到',
-  '关于',
-  '一下'
-]
-const VECTOR_STOP_WORDS = new Set([
-  'the',
-  'and',
-  'for',
-  'with',
-  'that',
-  'this',
-  'what',
-  'when',
-  'where',
-  'which',
-  'why',
-  'how',
-  'have',
-  'has',
-  '是否',
-  '什么',
-  '哪个',
-  '哪些',
-  '怎么',
-  '如何',
-  '我们',
-  '他们',
-  '对方',
-  '消息',
-  '聊天',
-  '记录',
-  '内容'
-])
 
 function cursorKey(message: Pick<Message, 'localId' | 'createTime' | 'sortSeq'>): string {
   return `${Number(message.localId || 0)}:${Number(message.createTime || 0)}:${Number(message.sortSeq || 0)}`
@@ -237,6 +173,15 @@ function compareIndexRowCursorAsc(
   return Number(a.sort_seq || 0) - Number(b.sort_seq || 0)
     || Number(a.create_time || 0) - Number(b.create_time || 0)
     || Number(a.local_id || 0) - Number(b.local_id || 0)
+}
+
+function vectorSessionKey(sessionId: string): number {
+  let hash = 2166136261
+  for (let index = 0; index < sessionId.length; index += 1) {
+    hash ^= sessionId.charCodeAt(index)
+    hash = Math.imul(hash, 16777619)
+  }
+  return hash >>> 0
 }
 
 function normalizeSearchText(value?: string): string {
@@ -336,128 +281,6 @@ function buildSearchTokens(value: string): string {
   }
 
   return uniqueStrings(tokens).join(' ')
-}
-
-function normalizeVectorText(value: string): string {
-  let normalized = normalizeSearchText(value).slice(0, MAX_VECTOR_TEXT_CHARS)
-
-  for (const phrase of VECTOR_STOP_PHRASES) {
-    normalized = normalized.replace(new RegExp(phrase, 'gi'), ' ')
-  }
-
-  return normalized.replace(/\s+/g, ' ').trim()
-}
-
-function hashString(value: string): number {
-  let hash = 2166136261
-  for (let index = 0; index < value.length; index += 1) {
-    hash ^= value.charCodeAt(index)
-    hash = Math.imul(hash, 16777619)
-  }
-  return hash >>> 0
-}
-
-function addVectorFeature(weights: Map<number, number>, feature: string, weight: number): void {
-  if (!feature || VECTOR_STOP_WORDS.has(feature)) return
-
-  const hash = hashString(feature)
-  const dimension = hash % VECTOR_DIMENSIONS
-  const signedWeight = (hash & 0x80000000) ? -weight : weight
-  weights.set(dimension, (weights.get(dimension) || 0) + signedWeight)
-}
-
-function addChineseVectorFeatures(weights: Map<number, number>, segment: string): void {
-  if (!segment || VECTOR_STOP_WORDS.has(segment)) return
-
-  if (segment.length >= 2 && segment.length <= 12) {
-    addVectorFeature(weights, `zh:${segment}`, 1.35)
-  }
-
-  for (let size = 2; size <= 4; size += 1) {
-    if (segment.length < size) continue
-    const weight = size === 2 ? 0.9 : size === 3 ? 1.1 : 0.85
-    for (let index = 0; index <= segment.length - size; index += 1) {
-      const gram = segment.slice(index, index + size)
-      if (VECTOR_STOP_WORDS.has(gram)) continue
-      addVectorFeature(weights, `c${size}:${gram}`, weight)
-    }
-  }
-}
-
-function buildLocalSearchVector(value: string): SparseVector {
-  const normalized = normalizeVectorText(value)
-  if (!normalized) return []
-
-  const weights = new Map<number, number>()
-  const latinWords: string[] = []
-
-  for (const match of normalized.matchAll(/[\u3400-\u9fff]+/g)) {
-    addChineseVectorFeatures(weights, match[0])
-  }
-
-  for (const match of normalized.matchAll(/[a-z0-9_@.\-]{2,}/g)) {
-    const word = match[0]
-    if (VECTOR_STOP_WORDS.has(word)) continue
-    latinWords.push(word)
-    addVectorFeature(weights, `w:${word}`, 1.2)
-  }
-
-  for (let index = 0; index < latinWords.length - 1; index += 1) {
-    addVectorFeature(weights, `wb:${latinWords[index]} ${latinWords[index + 1]}`, 1.35)
-  }
-
-  let norm = 0
-  for (const weight of weights.values()) {
-    norm += weight * weight
-  }
-
-  if (norm <= 0) return []
-
-  const scale = Math.sqrt(norm)
-  return Array.from(weights.entries())
-    .map(([dimension, weight]) => [dimension, Number((weight / scale).toFixed(6))] as [number, number])
-    .filter(([, weight]) => Math.abs(weight) > 0.000001)
-    .sort((a, b) => a[0] - b[0])
-}
-
-function parseSparseVector(value: string): SparseVector {
-  try {
-    const parsed = JSON.parse(value)
-    if (!Array.isArray(parsed)) return []
-
-    const vector: SparseVector = []
-    for (const item of parsed) {
-      if (!Array.isArray(item) || item.length < 2) continue
-      const dimension = Number(item[0])
-      const weight = Number(item[1])
-      if (!Number.isInteger(dimension) || dimension < 0 || !Number.isFinite(weight)) continue
-      vector.push([dimension, weight])
-    }
-    return vector
-  } catch {
-    return []
-  }
-}
-
-function dotSparseVector(queryWeights: Map<number, number>, vector: SparseVector): number {
-  let score = 0
-  for (const [dimension, weight] of vector) {
-    const queryWeight = queryWeights.get(dimension)
-    if (queryWeight) score += queryWeight * weight
-  }
-  return score
-}
-
-function sparseVectorToMap(vector: SparseVector): Map<number, number> {
-  return new Map(vector)
-}
-
-const localVectorProvider: LocalVectorProvider = {
-  id: VECTOR_MODEL_ID,
-  buildVector: buildLocalSearchVector,
-  parseVector: parseSparseVector,
-  toWeightMap: sparseVectorToMap,
-  dot: dotSparseVector
 }
 
 function createVectorExcerpt(row: Pick<MessageIndexRow, 'parsed_content' | 'search_text'>, query: string): string {
@@ -629,6 +452,8 @@ export class ChatSearchIndexService {
   private db: Database.Database | null = null
   private dbPath: string | null = null
   private vectorTasks = new Map<string, VectorTask>()
+  private sqliteVectorAvailable = false
+  private sqliteVectorError = ''
 
   private getCacheBasePath(): string {
     const configService = new ConfigService()
@@ -662,8 +487,22 @@ export class ChatSearchIndexService {
     const db = new Database(nextDbPath)
     this.db = db
     this.dbPath = nextDbPath
+    this.loadSqliteVectorExtension(db)
     this.ensureSchema(db)
     return db
+  }
+
+  private loadSqliteVectorExtension(db: Database.Database): void {
+    try {
+      const sqliteVec = require('sqlite-vec') as { load: (db: Database.Database) => void }
+      sqliteVec.load(db)
+      this.sqliteVectorAvailable = true
+      this.sqliteVectorError = ''
+    } catch (error) {
+      this.sqliteVectorAvailable = false
+      this.sqliteVectorError = String(error)
+      console.warn('[ChatSearchIndex] sqlite-vec 加载失败，语义向量检索将降级为关键词检索:', error)
+    }
   }
 
   private ensureSchema(db: Database.Database): void {
@@ -720,12 +559,15 @@ export class ChatSearchIndexService {
       );
 
       CREATE TABLE IF NOT EXISTS message_vector_index (
-        message_id INTEGER PRIMARY KEY,
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        message_id INTEGER NOT NULL,
         session_id TEXT NOT NULL,
         vector_model TEXT NOT NULL,
-        vector_json TEXT NOT NULL,
-        feature_count INTEGER NOT NULL DEFAULT 0,
-        indexed_at INTEGER NOT NULL
+        embedding_blob BLOB NOT NULL,
+        dim INTEGER NOT NULL,
+        content_hash TEXT NOT NULL,
+        indexed_at INTEGER NOT NULL,
+        UNIQUE(message_id, vector_model)
       );
 
       CREATE TABLE IF NOT EXISTS session_vector_state (
@@ -745,9 +587,24 @@ export class ChatSearchIndexService {
         ON message_index(session_id, sender_username);
       CREATE INDEX IF NOT EXISTS idx_message_vector_session_model
         ON message_vector_index(session_id, vector_model);
+      CREATE INDEX IF NOT EXISTS idx_message_vector_message_model
+        ON message_vector_index(message_id, vector_model);
       CREATE INDEX IF NOT EXISTS idx_session_vector_state_session
         ON session_vector_state(session_id);
     `)
+
+    if (this.sqliteVectorAvailable) {
+      const dim = localEmbeddingModelService.getProfile().dim
+      db.exec(`
+        CREATE VIRTUAL TABLE IF NOT EXISTS message_embedding_vec USING vec0(
+          vector_id INTEGER PRIMARY KEY,
+          session_key INTEGER PARTITION KEY,
+          session_id TEXT,
+          vector_model TEXT,
+          embedding FLOAT[${dim}]
+        );
+      `)
+    }
 
     db.prepare('INSERT OR REPLACE INTO meta(key, value) VALUES (?, ?)').run('schema_version', INDEX_SCHEMA_VERSION)
   }
@@ -755,6 +612,7 @@ export class ChatSearchIndexService {
   private resetSchema(db: Database.Database): void {
     db.exec(`
       DROP TABLE IF EXISTS message_index_fts;
+      DROP TABLE IF EXISTS message_embedding_vec;
       DROP TABLE IF EXISTS message_vector_index;
       DROP TABLE IF EXISTS session_vector_state;
       DROP TABLE IF EXISTS message_index;
@@ -783,26 +641,36 @@ export class ChatSearchIndexService {
     return Number(row?.count || 0)
   }
 
+  private getCurrentVectorProfile() {
+    return localEmbeddingModelService.getProfile()
+  }
+
+  private getCurrentVectorModelId(): string {
+    return this.getCurrentVectorProfile().id
+  }
+
   private getVectorizedCount(db: Database.Database, sessionId: string): number {
+    const vectorModel = this.getCurrentVectorModelId()
     const row = db.prepare(`
       SELECT COUNT(*) AS count
       FROM message_index m
       JOIN message_vector_index v ON v.message_id = m.id
       WHERE m.session_id = ? AND v.vector_model = ?
-    `).get(sessionId, localVectorProvider.id) as { count?: number }
+    `).get(sessionId, vectorModel) as { count?: number }
     return Number(row?.count || 0)
   }
 
   private getVectorTaskKey(sessionId: string): string {
-    return `${sessionId}:${localVectorProvider.id}`
+    return `${sessionId}:${this.getCurrentVectorModelId()}`
   }
 
   private getVectorStateRow(db: Database.Database, sessionId: string): SessionVectorStateRow | null {
+    const vectorModel = this.getCurrentVectorModelId()
     const row = db.prepare(`
       SELECT *
       FROM session_vector_state
       WHERE session_id = ? AND vector_model = ?
-    `).get(sessionId, localVectorProvider.id) as SessionVectorStateRow | undefined
+    `).get(sessionId, vectorModel) as SessionVectorStateRow | undefined
     return row || null
   }
 
@@ -836,7 +704,7 @@ export class ChatSearchIndexService {
         last_error = excluded.last_error
     `).run(
       input.sessionId,
-      localVectorProvider.id,
+      this.getCurrentVectorModelId(),
       input.confirmedAt ?? null,
       input.completedAt ?? null,
       now,
@@ -847,11 +715,13 @@ export class ChatSearchIndexService {
 
   getSessionVectorIndexState(sessionId: string): ChatVectorIndexState {
     const db = this.getDb()
+    const profile = this.getCurrentVectorProfile()
     const indexedCount = this.getIndexedCount(db, sessionId)
     const vectorizedCount = this.getVectorizedCount(db, sessionId)
     const isRunning = this.vectorTasks.has(this.getVectorTaskKey(sessionId))
     const row = this.getVectorStateRow(db, sessionId)
-    const isComplete = Number(row?.is_complete || 0) === 1
+    const isComplete = this.sqliteVectorAvailable
+      && Number(row?.is_complete || 0) === 1
       && vectorizedCount >= indexedCount
 
     return {
@@ -861,7 +731,10 @@ export class ChatSearchIndexService {
       pendingCount: Math.max(0, indexedCount - vectorizedCount),
       isVectorComplete: isComplete,
       isVectorRunning: isRunning,
-      vectorModel: localVectorProvider.id
+      vectorModel: profile.id,
+      vectorModelName: profile.displayName,
+      vectorProviderAvailable: this.sqliteVectorAvailable,
+      vectorProviderError: this.sqliteVectorError
     }
   }
 
@@ -873,56 +746,78 @@ export class ChatSearchIndexService {
     progress: Omit<ChatVectorIndexProgress, 'vectorModel'>,
     onProgress?: (progress: ChatVectorIndexProgress) => void | Promise<void>
   ): Promise<void> {
+    const profile = this.getCurrentVectorProfile()
     await onProgress?.({
       ...progress,
-      vectorModel: localVectorProvider.id
+      vectorModel: profile.id
     })
   }
 
-  private upsertVectorRows(
+  private async upsertVectorRows(
     db: Database.Database,
     rows: Array<Pick<MessageIndexRow, 'id' | 'session_id' | 'search_text'> & { indexed_at?: number }>
-  ): void {
+  ): Promise<void> {
     if (rows.length === 0) return
+    if (!this.sqliteVectorAvailable) {
+      throw new Error(`本地语义检索不可用：${this.sqliteVectorError || 'sqlite-vec 未加载'}`)
+    }
+
+    const profile = this.getCurrentVectorProfile()
+    const embeddings = await localEmbeddingModelService.embedTexts(rows.map((row) => row.search_text), profile.id)
 
     const upsertVector = db.prepare(`
       INSERT INTO message_vector_index (
         message_id,
         session_id,
         vector_model,
-        vector_json,
-        feature_count,
+        embedding_blob,
+        dim,
+        content_hash,
         indexed_at
-      ) VALUES (?, ?, ?, ?, ?, ?)
-      ON CONFLICT(message_id) DO UPDATE SET
+      ) VALUES (?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(message_id, vector_model) DO UPDATE SET
         session_id = excluded.session_id,
-        vector_model = excluded.vector_model,
-        vector_json = excluded.vector_json,
-        feature_count = excluded.feature_count,
+        embedding_blob = excluded.embedding_blob,
+        dim = excluded.dim,
+        content_hash = excluded.content_hash,
         indexed_at = excluded.indexed_at
+    `)
+    const selectVectorId = db.prepare(`
+      SELECT id FROM message_vector_index
+      WHERE message_id = ? AND vector_model = ?
+    `)
+    const upsertVec = db.prepare(`
+      INSERT OR REPLACE INTO message_embedding_vec(vector_id, session_key, session_id, vector_model, embedding)
+      VALUES (?, ?, ?, ?, ?)
     `)
 
     const run = db.transaction((items: Array<Pick<MessageIndexRow, 'id' | 'session_id' | 'search_text'> & { indexed_at?: number }>) => {
       const now = Date.now()
-      for (const row of items) {
-        const vector = localVectorProvider.buildVector(row.search_text)
+      for (let index = 0; index < items.length; index += 1) {
+        const row = items[index]
+        const vector = embeddings[index]
         upsertVector.run(
           row.id,
           row.session_id,
-          localVectorProvider.id,
-          JSON.stringify(vector),
+          profile.id,
+          float32ArrayToBuffer(vector),
           vector.length,
+          hashEmbeddingContent(row.search_text),
           row.indexed_at || now
         )
+        const vectorRow = selectVectorId.get(row.id, profile.id) as { id?: number } | undefined
+        if (vectorRow?.id) {
+          upsertVec.run(vectorRow.id, vectorSessionKey(row.session_id), row.session_id, profile.id, float32ArrayToBuffer(vector))
+        }
       }
     })
 
     run(rows)
   }
 
-  private upsertMessages(db: Database.Database, sessionId: string, messages: Message[], options: {
+  private async upsertMessages(db: Database.Database, sessionId: string, messages: Message[], options: {
     vectorize?: boolean
-  } = {}): void {
+  } = {}): Promise<void> {
     if (messages.length === 0) return
 
     const upsert = db.prepare(`
@@ -978,22 +873,7 @@ export class ChatSearchIndexService {
       INSERT INTO message_index_fts(rowid, session_id, cursor_key, search_text, token_text)
       VALUES (?, ?, ?, ?, ?)
     `)
-    const upsertVector = db.prepare(`
-      INSERT INTO message_vector_index (
-        message_id,
-        session_id,
-        vector_model,
-        vector_json,
-        feature_count,
-        indexed_at
-      ) VALUES (?, ?, ?, ?, ?, ?)
-      ON CONFLICT(message_id) DO UPDATE SET
-        session_id = excluded.session_id,
-        vector_model = excluded.vector_model,
-        vector_json = excluded.vector_json,
-        feature_count = excluded.feature_count,
-        indexed_at = excluded.indexed_at
-    `)
+    const vectorRows: Array<Pick<MessageIndexRow, 'id' | 'session_id' | 'search_text'> & { indexed_at?: number }> = []
 
     const run = db.transaction((items: Message[]) => {
       const indexedAt = Date.now()
@@ -1024,20 +904,29 @@ export class ChatSearchIndexService {
         deleteFts.run(row.id)
         insertFts.run(row.id, sessionId, cursorKey(message), searchText, tokenText)
         if (options.vectorize) {
-          const vector = localVectorProvider.buildVector(searchText)
-          upsertVector.run(
-            row.id,
-            sessionId,
-            localVectorProvider.id,
-            JSON.stringify(vector),
-            vector.length,
-            indexedAt
-          )
+          vectorRows.push({
+            id: row.id,
+            session_id: sessionId,
+            search_text: searchText,
+            indexed_at: indexedAt
+          })
         }
       }
     })
 
     run(messages)
+    if (vectorRows.length > 0) {
+      try {
+        await this.upsertVectorRows(db, vectorRows)
+      } catch (error) {
+        this.setSessionVectorState(db, {
+          sessionId,
+          completedAt: null,
+          isComplete: false,
+          lastError: String(error)
+        })
+      }
+    }
   }
 
   private updateSessionState(db: Database.Database, sessionId: string, newest: Message | null, isComplete: boolean): ChatSearchIndexState {
@@ -1149,7 +1038,7 @@ export class ChatSearchIndexService {
 
         const messages = result.messages || []
         if (messages.length === 0) break
-        this.upsertMessages(db, sessionId, messages, { vectorize: vectorizeDuringIndexing })
+        await this.upsertMessages(db, sessionId, messages, { vectorize: vectorizeDuringIndexing })
         scanned += messages.length
         newest = messages[messages.length - 1] || newest
         cursor = {
@@ -1181,6 +1070,12 @@ export class ChatSearchIndexService {
     }
 
     db.prepare('DELETE FROM message_index_fts WHERE session_id = ?').run(sessionId)
+    if (this.sqliteVectorAvailable) {
+      db.prepare(`
+        DELETE FROM message_embedding_vec
+        WHERE vector_id IN (SELECT id FROM message_vector_index WHERE session_id = ?)
+      `).run(sessionId)
+    }
     db.prepare('DELETE FROM message_vector_index WHERE session_id = ?').run(sessionId)
     db.prepare('DELETE FROM message_index WHERE session_id = ?').run(sessionId)
     db.prepare('DELETE FROM session_index_state WHERE session_id = ?').run(sessionId)
@@ -1193,7 +1088,7 @@ export class ChatSearchIndexService {
     let messages = firstPage.messages || []
     let hasMore = Boolean(firstPage.hasMore)
     if (messages.length > 0) {
-      this.upsertMessages(db, sessionId, messages, { vectorize: vectorizeDuringIndexing })
+      await this.upsertMessages(db, sessionId, messages, { vectorize: vectorizeDuringIndexing })
       scanned += messages.length
       newest = messages[messages.length - 1]
       await this.report({
@@ -1220,7 +1115,7 @@ export class ChatSearchIndexService {
 
       messages = result.messages || []
       if (messages.length === 0) break
-      this.upsertMessages(db, sessionId, messages, { vectorize: vectorizeDuringIndexing })
+      await this.upsertMessages(db, sessionId, messages, { vectorize: vectorizeDuringIndexing })
       scanned += messages.length
       hasMore = Boolean(result.hasMore)
 
@@ -1284,6 +1179,21 @@ export class ChatSearchIndexService {
     return this.getSessionVectorIndexState(sessionId)
   }
 
+  clearSemanticVectorIndex(vectorModel = this.getCurrentVectorModelId()): { success: boolean; deletedCount: number; vectorModel: string } {
+    const db = this.getDb()
+    const row = db.prepare('SELECT COUNT(*) AS count FROM message_vector_index WHERE vector_model = ?').get(vectorModel) as { count?: number }
+    if (this.sqliteVectorAvailable) {
+      db.prepare('DELETE FROM message_embedding_vec WHERE vector_model = ?').run(vectorModel)
+    }
+    db.prepare('DELETE FROM message_vector_index WHERE vector_model = ?').run(vectorModel)
+    db.prepare('DELETE FROM session_vector_state WHERE vector_model = ?').run(vectorModel)
+    return {
+      success: true,
+      deletedCount: Number(row?.count || 0),
+      vectorModel
+    }
+  }
+
   private async runPrepareSessionVectorIndex(
     sessionId: string,
     task: VectorTask,
@@ -1301,6 +1211,35 @@ export class ChatSearchIndexService {
     }, onProgress)
 
     try {
+      if (!this.sqliteVectorAvailable) {
+        throw new Error(`本地语义检索不可用：${this.sqliteVectorError || 'sqlite-vec 未加载'}`)
+      }
+
+      const profile = this.getCurrentVectorProfile()
+      const modelStatus = await localEmbeddingModelService.getModelStatus(profile.id)
+      if (!modelStatus.exists) {
+        await this.reportVectorProgress({
+          sessionId,
+          stage: 'downloading_model',
+          status: 'running',
+          processedCount: 0,
+          totalCount: 0,
+          message: `正在下载本地语义模型：${profile.displayName}`
+        }, onProgress)
+        await localEmbeddingModelService.downloadModel(profile.id, async (progress) => {
+          await this.reportVectorProgress({
+            sessionId,
+            stage: 'downloading_model',
+            status: 'running',
+            processedCount: progress.loaded || 0,
+            totalCount: progress.total || 0,
+            message: progress.percent !== undefined
+              ? `正在下载 ${profile.displayName}：${progress.percent}%`
+              : `正在下载 ${profile.displayName}`
+          }, onProgress)
+        })
+      }
+
       const searchState = await this.ensureSessionIndexed(sessionId, async (progress) => {
         if (task.cancelRequested) {
           throw new Error(VECTOR_INDEX_CANCELLED_ERROR)
@@ -1326,7 +1265,7 @@ export class ChatSearchIndexService {
           status: 'completed',
           processedCount: currentState.vectorizedCount,
           totalCount: currentState.indexedCount,
-          message: `本地向量索引已就绪，共 ${currentState.vectorizedCount} 条消息`
+          message: `本地语义向量索引已就绪，共 ${currentState.vectorizedCount} 条消息`
         }, onProgress)
         return currentState
       }
@@ -1386,11 +1325,11 @@ export class ChatSearchIndexService {
           WHERE m.session_id = ? AND v.message_id IS NULL
           ORDER BY m.id ASC
           LIMIT ?
-        `).all(localVectorProvider.id, sessionId, VECTOR_BATCH_SIZE) as Array<Pick<MessageIndexRow, 'id' | 'session_id' | 'search_text'> & { indexed_at?: number }>
+        `).all(this.getCurrentVectorModelId(), sessionId, VECTOR_BATCH_SIZE) as Array<Pick<MessageIndexRow, 'id' | 'session_id' | 'search_text'> & { indexed_at?: number }>
 
         if (rows.length === 0) break
 
-        this.upsertVectorRows(db, rows)
+        await this.upsertVectorRows(db, rows)
         currentState = this.getSessionVectorIndexState(sessionId)
         await this.reportVectorProgress({
           sessionId,
@@ -1417,7 +1356,7 @@ export class ChatSearchIndexService {
         status: 'completed',
         processedCount: currentState.vectorizedCount,
         totalCount: currentState.indexedCount,
-        message: `本地向量索引已完成，共 ${currentState.vectorizedCount} 条消息`
+        message: `本地语义向量索引已完成，共 ${currentState.vectorizedCount} 条消息`
       }, onProgress)
 
       return currentState
@@ -1576,23 +1515,26 @@ export class ChatSearchIndexService {
     const db = this.getDb()
     const state = await this.ensureSessionIndexed(options.sessionId, options.onProgress)
     const vectorState = this.getSessionVectorIndexState(options.sessionId)
-    const queryVector = localVectorProvider.buildVector(options.query)
+    const profile = this.getCurrentVectorProfile()
     const vectorizedCount = vectorState.vectorizedCount
 
-    if (!vectorState.isVectorComplete || queryVector.length === 0) {
+    if (!this.sqliteVectorAvailable || !vectorState.isVectorComplete || !normalizeSearchText(options.query)) {
       return {
         hits: [],
         indexedCount: state.indexedCount,
         vectorizedCount,
         truncated: false,
-        model: localVectorProvider.id
+        model: profile.id
       }
     }
+
+    const queryVector = await localEmbeddingModelService.embedText(options.query, profile.id)
+    const queryEmbedding = float32ArrayToBuffer(queryVector)
 
     await this.report({
       stage: 'searching_index',
       sessionId: options.sessionId,
-      message: `正在进行本地向量检索：${options.query}`,
+      message: `正在进行本地语义检索：${options.query}`,
       indexedCount: state.indexedCount
     }, options.onProgress)
 
@@ -1600,14 +1542,19 @@ export class ChatSearchIndexService {
     const endTime = toTimestampSeconds(options.endTimeMs)
     const senderUsername = normalizeSearchText(options.senderUsername)
     const direction = options.direction
-    const scanLimit = MAX_VECTOR_SCAN_ROWS
+    const scanLimit = Math.max(options.limit * VECTOR_SEARCH_OVERFETCH, options.limit + 20)
     const sqlFilters: string[] = [
-      'v.session_id = @sessionId',
-      'v.vector_model = @vectorModel'
+      'vec.embedding MATCH @queryEmbedding',
+      'vec.session_key = @sessionKey',
+      'vec.session_id = @sessionId',
+      'vec.vector_model = @vectorModel',
+      'k = @scanLimit'
     ]
     const params: Record<string, unknown> = {
       sessionId: options.sessionId,
-      vectorModel: localVectorProvider.id,
+      sessionKey: vectorSessionKey(options.sessionId),
+      vectorModel: profile.id,
+      queryEmbedding,
       scanLimit: scanLimit + 1
     }
 
@@ -1628,18 +1575,16 @@ export class ChatSearchIndexService {
     }
 
     const rows = db.prepare(`
-      SELECT m.*, v.vector_json
-      FROM message_vector_index v
+      SELECT m.*, vec.distance
+      FROM message_embedding_vec vec
+      JOIN message_vector_index v ON v.id = vec.vector_id
       JOIN message_index m ON m.id = v.message_id
       WHERE ${sqlFilters.join(' AND ')}
-        AND v.feature_count > 0
-      ORDER BY m.sort_seq DESC, m.create_time DESC, m.local_id DESC
-      LIMIT @scanLimit
+      ORDER BY vec.distance ASC
     `).all(params) as MessageVectorRow[]
-    const queryWeights = localVectorProvider.toWeightMap(queryVector)
     const scored = rows
       .map((row) => {
-        const vectorScore = localVectorProvider.dot(queryWeights, localVectorProvider.parseVector(row.vector_json))
+        const vectorScore = Math.max(0, Math.min(1, 1 - Number(row.distance || 0)))
         return {
           row,
           vectorScore
@@ -1662,7 +1607,7 @@ export class ChatSearchIndexService {
       indexedCount: state.indexedCount,
       vectorizedCount,
       truncated: rows.length > scanLimit,
-      model: localVectorProvider.id
+      model: profile.id
     }
   }
 }

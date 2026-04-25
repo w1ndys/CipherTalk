@@ -182,10 +182,14 @@ export interface SessionVectorIndexState {
   isVectorComplete: boolean
   isVectorRunning: boolean
   vectorModel: string
+  vectorModelName?: string
+  vectorProviderAvailable?: boolean
+  vectorProviderError?: string
 }
 
 export type SessionVectorIndexProgressStage =
   | 'preparing'
+  | 'downloading_model'
   | 'indexing_messages'
   | 'vectorizing_messages'
   | 'completed'
@@ -204,6 +208,56 @@ export interface SessionVectorIndexProgressEvent {
   totalCount: number
   message: string
   vectorModel: string
+}
+
+export interface EmbeddingModelProfile {
+  id: string
+  displayName: string
+  description: string
+  modelId: string
+  remoteHosts: string[]
+  remotePathTemplate: string
+  revision: string
+  dim: number
+  maxTokens: number
+  maxTextChars: number
+  dtype: string
+  sizeLabel: string
+  enabled: boolean
+}
+
+export interface EmbeddingModelStatus {
+  profileId: string
+  displayName: string
+  modelId: string
+  dim: number
+  dtype: string
+  sizeLabel: string
+  enabled: boolean
+  exists: boolean
+  modelDir: string
+  sizeBytes: number
+}
+
+export type EmbeddingDevice = 'cpu' | 'dml'
+
+export interface EmbeddingDeviceStatus {
+  currentDevice: EmbeddingDevice
+  effectiveDevice: EmbeddingDevice
+  gpuAvailable: boolean
+  provider: 'CPU' | 'DirectML'
+  info: string
+}
+
+export interface EmbeddingModelDownloadProgress {
+  profileId: string
+  displayName: string
+  remoteHost?: string
+  file?: string
+  loaded?: number
+  total?: number
+  percent?: number
+  status?: string
 }
 
 export interface SessionQAResult {

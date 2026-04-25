@@ -1,5 +1,10 @@
 import type { ChatSession, Message, Contact, ContactInfo } from './models'
 import type {
+  EmbeddingDevice,
+  EmbeddingDeviceStatus,
+  EmbeddingModelDownloadProgress,
+  EmbeddingModelProfile,
+  EmbeddingModelStatus,
   SessionQAHistoryMessage,
   SessionQAProgressEvent,
   SessionQAResult,
@@ -1089,10 +1094,53 @@ export interface ElectronAPI {
       result?: SessionVectorIndexState
       error?: string
     }>
+    getEmbeddingModelProfiles: () => Promise<{
+      success: boolean
+      result?: EmbeddingModelProfile[]
+      currentProfileId?: string
+      error?: string
+    }>
+    setEmbeddingModelProfile: (profileId: string) => Promise<{
+      success: boolean
+      result?: string
+      error?: string
+    }>
+    getEmbeddingDeviceStatus: () => Promise<{
+      success: boolean
+      result?: EmbeddingDeviceStatus
+      error?: string
+    }>
+    setEmbeddingDevice: (device: EmbeddingDevice) => Promise<{
+      success: boolean
+      result?: EmbeddingDevice
+      status?: EmbeddingDeviceStatus
+      error?: string
+    }>
+    getEmbeddingModelStatus: (profileId?: string) => Promise<{
+      success: boolean
+      result?: EmbeddingModelStatus
+      error?: string
+    }>
+    downloadEmbeddingModel: (profileId?: string) => Promise<{
+      success: boolean
+      result?: EmbeddingModelStatus
+      error?: string
+    }>
+    clearEmbeddingModel: (profileId?: string) => Promise<{
+      success: boolean
+      result?: EmbeddingModelStatus
+      error?: string
+    }>
+    clearSemanticVectorIndex: (vectorModel?: string) => Promise<{
+      success: boolean
+      result?: { success: boolean; deletedCount: number; vectorModel: string }
+      error?: string
+    }>
     onSummaryChunk: (callback: (chunk: string) => void) => () => void
     onSessionQAChunk: (callback: (chunk: string) => void) => () => void
     onSessionQAProgress: (callback: (event: SessionQAProgressEvent) => void) => () => void
     onSessionVectorIndexProgress: (callback: (event: SessionVectorIndexProgressEvent) => void) => () => void
+    onEmbeddingModelDownloadProgress: (callback: (event: EmbeddingModelDownloadProgress) => void) => () => void
   }
 
 }

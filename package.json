@@ -38,6 +38,7 @@
   "dependencies": {
     "@emotion/react": "^11.14.0",
     "@emotion/styled": "^11.14.1",
+    "@huggingface/transformers": "^4.2.0",
     "@lobehub/fluent-emoji": "^4.1.0",
     "@lobehub/icons": "^5.3.0",
     "@lobehub/ui": "^5.6.5",
@@ -76,6 +77,7 @@
     "react-window": "^2.2.5",
     "sherpa-onnx-node": "^1.12.23",
     "silk-wasm": "^3.7.1",
+    "sqlite-vec": "^0.1.9",
     "wechat-emojis": "^1.0.2",
     "xlsx": "^0.18.5",
     "zod": "^4.1.12",
@@ -211,12 +213,14 @@
       "!node_modules/**/*.lib",
       "!node_modules/**/build/!(Release)/**/*",
       "!node_modules/**/deps/**/*",
+      "node_modules/sqlite-vec*/**/*",
       "node_modules/koffi/build/**/*"
     ],
     "asarUnpack": [
       "node_modules/ffmpeg-static/**/*",
       "node_modules/silk-wasm/**/*",
       "node_modules/sherpa-onnx-node/**/*",
+      "node_modules/sqlite-vec*/**/*",
       "node_modules/koffi/**/*",
       "dist-electron/workers/**/*",
       "resources/wedecrypt/*.node",
