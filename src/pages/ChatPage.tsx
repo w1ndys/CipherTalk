@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { createPortal } from 'react-dom'
-import { Search, MessageSquare, AlertCircle, Loader2, RefreshCw, X, ChevronDown, Info, Calendar, Database, Hash, Image as ImageIcon, Play, PlayCircle, Video, Copy, ZoomIn, CheckSquare, Check, Edit, Link, Sparkles, FileText, FileArchive, Users, Mic, CheckCircle, XCircle, Download, Phone, Aperture, MapPin, UserRound } from 'lucide-react'
+import { Search, MessageSquare, AlertCircle, Loader2, RefreshCw, X, ChevronDown, Info, Calendar, Database, Hash, Image as ImageIcon, Play, PlayCircle, Video, Copy, ZoomIn, CheckSquare, Check, Edit, Link, Sparkles, FileText, FileArchive, Users, Mic, CheckCircle, XCircle, Download, Phone, Aperture, MapPin, UserRound, BrainCircuit, Radar, BadgeCheck, TriangleAlert } from 'lucide-react'
 import { Qwen } from '@lobehub/icons'
 import { useChatStore } from '../stores/chatStore'
 import { useUpdateStatusStore } from '../stores/updateStatusStore'
@@ -10,6 +10,7 @@ import { getImageXorKey, getImageAesKey, getQuoteStyle } from '../services/confi
 import { LRUCache } from '../utils/lruCache'
 import { LivePhotoIcon } from '../components/LivePhotoIcon'
 import type { ChatSession, Message } from '../types/models'
+import type { SessionVectorIndexProgressEvent, SessionVectorIndexState } from '../types/ai'
 import { List, RowComponentProps } from 'react-window'
 import './ChatPage.scss'
 
@@ -278,6 +279,7 @@ function ChatPage(_props: ChatPageProps) {
   const lastUpdateTimeRef = useRef<number>(0)
   const updateTimerRef = useRef<NodeJS.Timeout | null>(null)
   const updateStatusTimerRef = useRef<NodeJS.Timeout | null>(null)
+  const vectorProgressRenderRef = useRef<{ lastAt: number; percent: number }>({ lastAt: 0, percent: -1 })
   const isUserOperatingRef = useRef<boolean>(false) // 标记用户是否正在操作
   const [currentOffset, setCurrentOffset] = useState(0)
   const [isDateJumpMode, setIsDateJumpMode] = useState(false)
@@ -353,11 +355,203 @@ function ChatPage(_props: ChatPageProps) {
   const [batchImageMessages, setBatchImageMessages] = useState<{ imageMd5?: string; imageDatName?: string; createTime?: number }[] | null>(null)
   const [batchImageDates, setBatchImageDates] = useState<string[]>([])
   const [batchImageSelectedDates, setBatchImageSelectedDates] = useState<Set<string>>(new Set())
+  const [vectorIndexState, setVectorIndexState] = useState<SessionVectorIndexState | null>(null)
+  const [vectorIndexProgress, setVectorIndexProgress] = useState<SessionVectorIndexProgressEvent | null>(null)
+  const [isPreparingVectorIndex, setIsPreparingVectorIndex] = useState(false)
 
   const showTopToast = useCallback((text: string, success = true) => {
     setTopToast({ text, success })
     setTimeout(() => setTopToast(null), 2000)
   }, [])
+
+  const refreshVectorIndexState = useCallback(async (sessionId: string) => {
+    try {
+      const result = await window.electronAPI.ai.getSessionVectorIndexState(sessionId)
+      if (currentSessionIdRef.current !== sessionId) return
+      if (result.success && result.result) {
+        setVectorIndexState(result.result)
+        setIsPreparingVectorIndex(result.result.isVectorRunning)
+      }
+    } catch (error) {
+      console.error('获取会话向量索引状态失败:', error)
+    }
+  }, [])
+
+  useEffect(() => {
+    let cancelled = false
+    setVectorIndexState(null)
+    setVectorIndexProgress(null)
+    setIsPreparingVectorIndex(false)
+    vectorProgressRenderRef.current = { lastAt: 0, percent: -1 }
+
+    if (!currentSessionId) return
+
+    window.electronAPI.ai.getSessionVectorIndexState(currentSessionId).then((result) => {
+      if (cancelled) return
+      if (result.success && result.result) {
+        setVectorIndexState(result.result)
+        setIsPreparingVectorIndex(result.result.isVectorRunning)
+      }
+    }).catch((error) => {
+      if (!cancelled) console.error('加载会话向量索引状态失败:', error)
+    })
+
+    return () => {
+      cancelled = true
+    }
+  }, [currentSessionId])
+
+  useEffect(() => {
+    return window.electronAPI.ai.onSessionVectorIndexProgress((event) => {
+      const activeSessionId = currentSessionIdRef.current
+      if (!event || !activeSessionId || event.sessionId !== activeSessionId) return
+
+      const isTerminal = event.status !== 'running'
+      const nextPercent = event.totalCount > 0
+        ? Math.min(100, Math.max(0, Math.round((event.processedCount / event.totalCount) * 100)))
+        : 0
+      const now = Date.now()
+      if (!isTerminal && nextPercent === vectorProgressRenderRef.current.percent && now - vectorProgressRenderRef.current.lastAt < 500) {
+        return
+      }
+      vectorProgressRenderRef.current = {
+        lastAt: now,
+        percent: nextPercent
+      }
+
+      setVectorIndexProgress(event)
+      setIsPreparingVectorIndex(event.status === 'running')
+      setVectorIndexState((prev) => ({
+        sessionId: event.sessionId,
+        indexedCount: event.totalCount || prev?.indexedCount || 0,
+        vectorizedCount: event.processedCount,
+        pendingCount: Math.max(0, (event.totalCount || prev?.indexedCount || 0) - event.processedCount),
+        isVectorComplete: event.status === 'completed',
+        isVectorRunning: event.status === 'running',
+        vectorModel: event.vectorModel || prev?.vectorModel || '',
+        vectorModelName: prev?.vectorModelName,
+        vectorProviderAvailable: prev?.vectorProviderAvailable,
+        vectorProviderError: prev?.vectorProviderError
+      }))
+
+      if (event.status === 'completed') {
+        showTopToast('向量索引已就绪', true)
+        void refreshVectorIndexState(event.sessionId)
+      } else if (event.status === 'cancelled') {
+        showTopToast('已取消向量化', true)
+        void refreshVectorIndexState(event.sessionId)
+      } else if (event.status === 'failed') {
+        showTopToast(event.message || '向量化失败', false)
+        void refreshVectorIndexState(event.sessionId)
+      }
+    })
+  }, [refreshVectorIndexState, showTopToast])
+
+  const vectorIndexTotal = vectorIndexProgress?.totalCount || vectorIndexState?.indexedCount || 0
+  const vectorIndexDone = vectorIndexProgress?.processedCount ?? vectorIndexState?.vectorizedCount ?? 0
+  const vectorIndexPercent = vectorIndexTotal > 0
+    ? Math.min(100, Math.max(0, Math.round((vectorIndexDone / vectorIndexTotal) * 100)))
+    : vectorIndexState?.isVectorComplete ? 100 : 0
+  const hasPendingVectorMessages = Boolean(vectorIndexState && !vectorIndexState.isVectorComplete && vectorIndexState.pendingCount > 0)
+  const vectorIndexBadgeLabel = isPreparingVectorIndex
+    ? `${vectorIndexPercent}%`
+    : hasPendingVectorMessages
+      ? vectorIndexState && vectorIndexState.pendingCount > 99 ? '99+' : String(vectorIndexState?.pendingCount || 0)
+      : ''
+  const isVectorProviderUnavailable = vectorIndexState?.vectorProviderAvailable === false
+  const vectorButtonTitle = isVectorProviderUnavailable
+    ? `本地语义向量不可用：${vectorIndexState?.vectorProviderError || 'sqlite-vec 未加载'}`
+    : isPreparingVectorIndex
+      ? `取消向量化：${vectorIndexProgress?.message || `${vectorIndexDone}/${vectorIndexTotal}`}`
+      : vectorIndexState?.isVectorComplete
+        ? `增量检查向量索引：已完成 ${vectorIndexState.vectorizedCount}/${vectorIndexState.indexedCount}`
+        : hasPendingVectorMessages
+          ? `增量向量化：待处理 ${vectorIndexState?.pendingCount || 0} 条`
+          : '增量向量化当前聊天'
+
+  const handleVectorIndexClick = useCallback(async () => {
+    if (!currentSessionId) return
+
+    if (isPreparingVectorIndex) {
+      const result = await window.electronAPI.ai.cancelSessionVectorIndex(currentSessionId)
+      if (result.success && result.result) {
+        const nextState = result.result
+        setVectorIndexState(nextState)
+        setIsPreparingVectorIndex(nextState.isVectorRunning)
+        if (!nextState.isVectorRunning) {
+          setVectorIndexProgress(null)
+        } else {
+          setVectorIndexProgress((prev) => prev ? {
+            ...prev,
+            message: '正在取消向量化'
+          } : {
+            sessionId: currentSessionId,
+            stage: 'vectorizing_messages',
+            status: 'running',
+            processedCount: nextState.vectorizedCount,
+            totalCount: nextState.indexedCount,
+            message: '正在取消向量化',
+            vectorModel: nextState.vectorModel
+          })
+        }
+      }
+      showTopToast(
+        result.success
+          ? result.result?.isVectorRunning ? '正在取消向量化' : '已取消向量化'
+          : (result.error || '取消向量化失败'),
+        result.success
+      )
+      return
+    }
+
+    setIsPreparingVectorIndex(true)
+    setVectorIndexProgress({
+      sessionId: currentSessionId,
+      stage: 'preparing',
+      status: 'running',
+      processedCount: vectorIndexState?.vectorizedCount || 0,
+      totalCount: vectorIndexState?.indexedCount || 0,
+      message: '正在增量检查向量索引',
+      vectorModel: vectorIndexState?.vectorModel || ''
+    })
+
+    try {
+      const result = await window.electronAPI.ai.prepareSessionVectorIndex({ sessionId: currentSessionId })
+      if (currentSessionIdRef.current !== currentSessionId) return
+      if (result.success && result.result) {
+        setVectorIndexState(result.result)
+        setIsPreparingVectorIndex(result.result.isVectorRunning)
+        if (result.result.isVectorRunning) {
+          setVectorIndexProgress((prev) => prev || {
+            sessionId: currentSessionId,
+            stage: 'preparing',
+            status: 'running',
+            processedCount: result.result?.vectorizedCount || 0,
+            totalCount: result.result?.indexedCount || 0,
+            message: '已转入后台向量化',
+            vectorModel: result.result?.vectorModel || ''
+          })
+        } else {
+          setVectorIndexProgress(null)
+          showTopToast(result.result.isVectorComplete ? '向量索引已就绪' : '向量索引已更新', true)
+        }
+      } else {
+        setIsPreparingVectorIndex(false)
+        showTopToast(result.error || '向量化失败', false)
+      }
+    } catch (error) {
+      if (currentSessionIdRef.current !== currentSessionId) return
+      setIsPreparingVectorIndex(false)
+      showTopToast(`向量化失败: ${String(error)}`, false)
+    }
+  }, [
+    currentSessionId,
+    isPreparingVectorIndex,
+    showTopToast,
+    vectorIndexState?.indexedCount,
+    vectorIndexState?.vectorizedCount,
+    vectorIndexState?.vectorModel
+  ])
 
   useEffect(() => {
     isLoadingMoreRef.current = isLoadingMore
@@ -1786,6 +1980,26 @@ function ChatPage(_props: ChatPageProps) {
                   title="刷新消息"
                 >
                   <RefreshCw size={18} className={isRefreshingMessages || isUpdating ? 'spin' : ''} />
+                </button>
+                <button
+                  className={`icon-btn vector-index-btn ${isPreparingVectorIndex ? 'running active' : ''} ${vectorIndexState?.isVectorComplete ? 'complete' : ''} ${hasPendingVectorMessages ? 'pending' : ''}`}
+                  onClick={handleVectorIndexClick}
+                  disabled={!currentSessionId || (isVectorProviderUnavailable && !isPreparingVectorIndex)}
+                  title={vectorButtonTitle}
+                  aria-label={isPreparingVectorIndex ? '取消向量化' : '增量向量化当前聊天'}
+                >
+                  {isVectorProviderUnavailable && !isPreparingVectorIndex ? (
+                    <TriangleAlert size={18} />
+                  ) : isPreparingVectorIndex ? (
+                    <Radar size={18} className="vector-index-radar" />
+                  ) : vectorIndexState?.isVectorComplete ? (
+                    <BadgeCheck size={18} />
+                  ) : (
+                    <BrainCircuit size={18} />
+                  )}
+                  {vectorIndexBadgeLabel && (
+                    <span className="vector-index-badge">{vectorIndexBadgeLabel}</span>
+                  )}
                 </button>
                 {!isGroupChat(currentSession.username) && (
                   <button

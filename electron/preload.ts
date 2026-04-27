@@ -1,6 +1,50 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import type { AccountProfile } from '../src/types/account'
 
+type SessionQAProgressEvent = {
+  id: string
+  stage: string
+  status: string
+  title?: string
+  detail?: string
+  message?: string
+  toolName?: string
+  createdAt?: number
+  [key: string]: unknown
+}
+
+type SessionQAJobEvent = {
+  requestId: string
+  seq: number
+  kind: 'progress' | 'chunk' | 'final' | 'error' | 'cancelled'
+  createdAt: number
+  progress?: SessionQAProgressEvent
+  chunk?: string
+  result?: unknown
+  error?: string
+}
+
+type SessionVectorIndexProgressEvent = {
+  sessionId: string
+  stage: string
+  status: string
+  processedCount: number
+  totalCount: number
+  message: string
+  vectorModel: string
+}
+
+type EmbeddingModelDownloadProgress = {
+  profileId: string
+  displayName: string
+  remoteHost?: string
+  file?: string
+  loaded?: number
+  total?: number
+  percent?: number
+  status?: string
+}
+
 function getMcpLaunchConfigSafe(): Promise<{
   command: string
   args: string[]
@@ -509,9 +553,67 @@ contextBridge.exposeInMainWorld('electronAPI', {
       sessionName?: string
       enableThinking?: boolean
     }) => ipcRenderer.invoke('ai:generateSummary', sessionId, timeRange, options),
+    askSessionQuestion: (options: {
+      sessionId: string
+      sessionName?: string
+      question: string
+      summaryText?: string
+      structuredAnalysis?: any
+      history?: Array<{ role: 'user' | 'assistant'; content: string }>
+      provider: string
+      apiKey: string
+      model: string
+      enableThinking?: boolean
+    }) => ipcRenderer.invoke('ai:askSessionQuestion', options),
+    startSessionQuestion: (options: {
+      requestId?: string
+      sessionId: string
+      sessionName?: string
+      question: string
+      summaryText?: string
+      structuredAnalysis?: any
+      history?: Array<{ role: 'user' | 'assistant'; content: string }>
+      provider: string
+      apiKey: string
+      model: string
+      enableThinking?: boolean
+    }) => ipcRenderer.invoke('ai:startSessionQuestion', options),
+    cancelSessionQuestion: (requestId: string) => ipcRenderer.invoke('ai:cancelSessionQuestion', requestId),
+    getSessionVectorIndexState: (sessionId: string) => ipcRenderer.invoke('ai:getSessionVectorIndexState', sessionId),
+    prepareSessionVectorIndex: (options: { sessionId: string }) => ipcRenderer.invoke('ai:prepareSessionVectorIndex', options),
+    cancelSessionVectorIndex: (sessionId: string) => ipcRenderer.invoke('ai:cancelSessionVectorIndex', sessionId),
+    getEmbeddingModelProfiles: () => ipcRenderer.invoke('ai:getEmbeddingModelProfiles'),
+    setEmbeddingModelProfile: (profileId: string) => ipcRenderer.invoke('ai:setEmbeddingModelProfile', profileId),
+    getEmbeddingDeviceStatus: () => ipcRenderer.invoke('ai:getEmbeddingDeviceStatus'),
+    setEmbeddingDevice: (device: 'cpu' | 'dml') => ipcRenderer.invoke('ai:setEmbeddingDevice', device),
+    getEmbeddingModelStatus: (profileId?: string) => ipcRenderer.invoke('ai:getEmbeddingModelStatus', profileId),
+    downloadEmbeddingModel: (profileId?: string) => ipcRenderer.invoke('ai:downloadEmbeddingModel', profileId),
+    clearEmbeddingModel: (profileId?: string) => ipcRenderer.invoke('ai:clearEmbeddingModel', profileId),
+    clearSemanticVectorIndex: (vectorModel?: string) => ipcRenderer.invoke('ai:clearSemanticVectorIndex', vectorModel),
     onSummaryChunk: (callback: (chunk: string) => void) => {
       ipcRenderer.on('ai:summaryChunk', (_, chunk) => callback(chunk))
       return () => ipcRenderer.removeAllListeners('ai:summaryChunk')
+    },
+    onSessionQAChunk: (callback: (chunk: string) => void) => {
+      ipcRenderer.on('ai:sessionQaChunk', (_, chunk) => callback(chunk))
+      return () => ipcRenderer.removeAllListeners('ai:sessionQaChunk')
+    },
+    onSessionQAProgress: (callback: (event: SessionQAProgressEvent) => void) => {
+      ipcRenderer.on('ai:sessionQaProgress', (_, event) => callback(event))
+      return () => ipcRenderer.removeAllListeners('ai:sessionQaProgress')
+    },
+    onSessionQAEvent: (callback: (event: SessionQAJobEvent) => void) => {
+      const listener = (_: any, event: SessionQAJobEvent) => callback(event)
+      ipcRenderer.on('ai:sessionQaEvent', listener)
+      return () => ipcRenderer.removeListener('ai:sessionQaEvent', listener)
+    },
+    onSessionVectorIndexProgress: (callback: (event: SessionVectorIndexProgressEvent) => void) => {
+      ipcRenderer.on('ai:sessionVectorIndexProgress', (_, event) => callback(event))
+      return () => ipcRenderer.removeAllListeners('ai:sessionVectorIndexProgress')
+    },
+    onEmbeddingModelDownloadProgress: (callback: (event: EmbeddingModelDownloadProgress) => void) => {
+      ipcRenderer.on('ai:embeddingModelDownloadProgress', (_, event) => callback(event))
+      return () => ipcRenderer.removeAllListeners('ai:embeddingModelDownloadProgress')
     }
   }
 })

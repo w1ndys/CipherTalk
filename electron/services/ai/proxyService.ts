@@ -25,6 +25,11 @@ class ProxyService {
    */
   async getSystemProxy(targetUrl: string = 'https://api.openai.com'): Promise<string | null> {
     try {
+      // worker 线程没有 electron.session API，直接跳过
+      if (!session?.defaultSession) {
+        return null
+      }
+
       // 使用缓存避免频繁查询
       const now = Date.now()
       if (this.cachedProxyUrl && (now - this.lastCheckTime) < this.CACHE_DURATION) {

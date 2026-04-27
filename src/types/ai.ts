@@ -60,6 +60,64 @@ export const SUMMARY_DETAIL_OPTIONS = [
   { value: 'detailed' as SummaryDetail, label: '详细' }
 ]
 
+export interface SummaryEvidenceRef {
+  sessionId: string
+  localId: number
+  createTime: number
+  sortSeq: number
+  senderUsername?: string
+  senderDisplayName?: string
+  previewText: string
+}
+
+export interface SummaryTopicFact {
+  name: string
+  importance: number
+}
+
+export interface SummaryDecisionFact {
+  text: string
+  confidence: number
+  evidenceRefs: SummaryEvidenceRef[]
+}
+
+export interface SummaryTodoFact {
+  owner?: string
+  task: string
+  deadline?: string
+  status: 'open' | 'done' | 'unknown'
+  confidence: number
+  evidenceRefs: SummaryEvidenceRef[]
+}
+
+export interface SummaryRiskFact {
+  text: string
+  severity: 'low' | 'medium' | 'high'
+  confidence: number
+  evidenceRefs: SummaryEvidenceRef[]
+}
+
+export interface SummaryEventFact {
+  text: string
+  date?: string
+  confidence: number
+  evidenceRefs: SummaryEvidenceRef[]
+}
+
+export interface SummaryOpenQuestionFact {
+  text: string
+}
+
+export interface SummaryStructuredAnalysis {
+  overview: string
+  topics: SummaryTopicFact[]
+  decisions: SummaryDecisionFact[]
+  todos: SummaryTodoFact[]
+  risks: SummaryRiskFact[]
+  events: SummaryEventFact[]
+  openQuestions: SummaryOpenQuestionFact[]
+}
+
 /**
  * 摘要结果
  */
@@ -77,6 +135,179 @@ export interface SummaryResult {
   model: string
   createdAt: number
   customName?: string
+  structuredAnalysis?: SummaryStructuredAnalysis
+}
+
+export interface SessionQAHistoryMessage {
+  role: 'user' | 'assistant'
+  content: string
+}
+
+export type SessionQARequestId = string
+
+export interface SessionQAToolCall {
+  toolName:
+    | 'read_summary_facts'
+    | 'read_latest'
+    | 'read_by_time_range'
+    | 'resolve_participant'
+    | 'search_messages'
+    | 'read_context'
+    | 'aggregate_messages'
+    | 'get_session_statistics'
+    | 'get_keyword_statistics'
+    | 'answer'
+    | 'get_session_context'
+    | 'prepare_vector_index'
+  args: Record<string, unknown>
+  summary: string
+  status?: 'running' | 'completed' | 'failed' | 'cancelled'
+  durationMs?: number
+  evidenceCount?: number
+}
+
+export type SessionQAProgressStage = 'intent' | 'tool' | 'context' | 'answer'
+export type SessionQAProgressStatus = 'running' | 'completed' | 'failed'
+export type SessionQAProgressSource = 'summary' | 'chat' | 'search_index' | 'vector' | 'aggregate' | 'model'
+
+export interface SessionQAProgressEvent {
+  id: string
+  stage: SessionQAProgressStage
+  status: SessionQAProgressStatus
+  title: string
+  detail?: string
+  toolName?: SessionQAToolCall['toolName']
+  query?: string
+  count?: number
+  createdAt: number
+  requestId?: SessionQARequestId
+  source?: SessionQAProgressSource
+  elapsedMs?: number
+  diagnostics?: string[]
+}
+
+export type SessionQAJobEventKind = 'progress' | 'chunk' | 'final' | 'error' | 'cancelled'
+
+export interface SessionQAJobEvent {
+  requestId: SessionQARequestId
+  seq: number
+  kind: SessionQAJobEventKind
+  createdAt: number
+  progress?: SessionQAProgressEvent
+  chunk?: string
+  result?: SessionQAResult
+  error?: string
+}
+
+export interface SessionQAStartResult {
+  success: boolean
+  requestId?: SessionQARequestId
+  error?: string
+}
+
+export interface SessionQACancelResult {
+  success: boolean
+  requestId?: SessionQARequestId
+  error?: string
+}
+
+export interface SessionVectorIndexState {
+  sessionId: string
+  indexedCount: number
+  vectorizedCount: number
+  pendingCount: number
+  isVectorComplete: boolean
+  isVectorRunning: boolean
+  vectorModel: string
+  vectorModelName?: string
+  vectorProviderAvailable?: boolean
+  vectorProviderError?: string
+}
+
+export type SessionVectorIndexProgressStage =
+  | 'preparing'
+  | 'downloading_model'
+  | 'indexing_messages'
+  | 'vectorizing_messages'
+  | 'completed'
+
+export type SessionVectorIndexProgressStatus =
+  | 'running'
+  | 'completed'
+  | 'cancelled'
+  | 'failed'
+
+export interface SessionVectorIndexProgressEvent {
+  sessionId: string
+  stage: SessionVectorIndexProgressStage
+  status: SessionVectorIndexProgressStatus
+  processedCount: number
+  totalCount: number
+  message: string
+  vectorModel: string
+}
+
+export interface EmbeddingModelProfile {
+  id: string
+  displayName: string
+  description: string
+  modelId: string
+  remoteHosts: string[]
+  remotePathTemplate: string
+  revision: string
+  dim: number
+  maxTokens: number
+  maxTextChars: number
+  dtype: string
+  sizeLabel: string
+  enabled: boolean
+}
+
+export interface EmbeddingModelStatus {
+  profileId: string
+  displayName: string
+  modelId: string
+  dim: number
+  dtype: string
+  sizeLabel: string
+  enabled: boolean
+  exists: boolean
+  modelDir: string
+  sizeBytes: number
+}
+
+export type EmbeddingDevice = 'cpu' | 'dml'
+
+export interface EmbeddingDeviceStatus {
+  currentDevice: EmbeddingDevice
+  effectiveDevice: EmbeddingDevice
+  gpuAvailable: boolean
+  provider: 'CPU' | 'DirectML'
+  info: string
+}
+
+export interface EmbeddingModelDownloadProgress {
+  profileId: string
+  displayName: string
+  remoteHost?: string
+  file?: string
+  loaded?: number
+  total?: number
+  percent?: number
+  status?: string
+}
+
+export interface SessionQAResult {
+  sessionId: string
+  question: string
+  answerText: string
+  evidenceRefs: SummaryEvidenceRef[]
+  toolCalls: SessionQAToolCall[]
+  tokensUsed: number
+  cost: number
+  provider: string
+  model: string
+  createdAt: number
 }
 
 /**

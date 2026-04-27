@@ -45,6 +45,7 @@ class DataManagementService {
   private pendingUpdateCount: number = 0 // 待处理的更新请求数
   private updateQueue: Array<() => Promise<void>> = [] // 更新队列
   private isProcessingQueue: boolean = false
+  private aiPauseCount: number = 0
 
   constructor() {
     this.configService = new ConfigService()
@@ -412,6 +413,10 @@ class DataManagementService {
    * 增量更新（只更新有变化的文件）
    */
   async incrementalUpdate(silent: boolean = false): Promise<{ success: boolean; successCount?: number; failCount?: number; error?: string }> {
+    if (this.aiPauseCount > 0) {
+      return { success: false, error: 'AI 任务运行中，请稍后再同步' }
+    }
+
     // 设置静默模式
     const previousSilentMode = this.silentMode
     this.silentMode = silent
@@ -1316,7 +1321,7 @@ class DataManagementService {
 
     // 启动定时检查（作为备选方案，仅在文件监听失效时使用）
     this.autoUpdateInterval = setInterval(async () => {
-      if (this.isUpdating) return
+      if (this.isUpdating || this.aiPauseCount > 0) return
 
       // 再次检查配置，以防运行时被修改
       if (!this.configService.get('autoUpdateDatabase')) {
@@ -1350,6 +1355,18 @@ class DataManagementService {
     }
 
     console.log('[DataManagement] 自动更新已禁用')
+  }
+
+  pauseForAi(): void {
+    this.aiPauseCount++
+  }
+
+  resumeFromAi(): void {
+    if (this.aiPauseCount > 0) this.aiPauseCount--
+  }
+
+  get isAiPaused(): boolean {
+    return this.aiPauseCount > 0
   }
 
   /**
@@ -1412,7 +1429,7 @@ class DataManagementService {
       let debounceTimer: NodeJS.Timeout | null = null
 
       this.dbWatcher = fs.watch(dbStoragePath, { recursive: true }, async (eventType, filename) => {
-        if (!filename || this.isUpdating) return
+        if (!filename || this.isUpdating || this.aiPauseCount > 0) return
 
         // 检查配置
         if (!this.configService.get('autoUpdateDatabase')) return
@@ -1520,10 +1537,9 @@ class DataManagementService {
       return { success: true, updated: false }
     }
 
-    if (this.isUpdating) {
-      // 如果正在更新，返回待处理状态
+    if (this.isUpdating || this.aiPauseCount > 0) {
       this.pendingUpdateCount++
-      return { success: false, updated: false, error: '正在更新中，请稍候' }
+      return { success: false, updated: false, error: this.aiPauseCount > 0 ? 'AI 任务运行中，暂缓自动同步' : '正在更新中，请稍候' }
     }
 
     // 检查更新频率限制

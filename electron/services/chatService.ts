@@ -1316,6 +1316,180 @@ class ChatService extends EventEmitter {
   }
 
   /**
+   * 摘要专用：按精确时间范围读取消息，并优先保留范围内最新消息。
+   */
+  async getMessagesByTimeRangeForSummary(
+    sessionId: string,
+    options: {
+      startTime?: number
+      endTime: number
+      limit: number
+    }
+  ): Promise<{ success: boolean; messages?: Message[]; hasMore?: boolean; error?: string }> {
+    try {
+      if (!this.dbDir) {
+        const connectResult = await this.connect()
+        if (!connectResult.success) {
+          return { success: false, error: connectResult.error || '数据库未连接' }
+        }
+      }
+
+      const normalizedLimit = Number.isFinite(options.limit) ? Math.max(1, Math.floor(options.limit)) : 50
+      const startTime = Number.isFinite(options.startTime) && Number(options.startTime) > 0
+        ? Math.floor(Number(options.startTime))
+        : undefined
+      const endTime = Number.isFinite(options.endTime) && Number(options.endTime) > 0
+        ? Math.floor(Number(options.endTime))
+        : Math.floor(Date.now() / 1000)
+
+      if (startTime !== undefined && startTime > endTime) {
+        return { success: true, messages: [], hasMore: false }
+      }
+
+      const myWxid = this.configService.get('myWxid')
+      const cleanedMyWxid = myWxid ? this.cleanAccountDirName(myWxid) : ''
+      const dbTablePairs = this.findSessionTables(sessionId)
+
+      if (dbTablePairs.length === 0) {
+        return { success: false, error: '未找到该会话的消息表' }
+      }
+
+      let allMessages: Message[] = []
+      const fetchLimitPerDb = normalizedLimit + 1
+
+      for (const { db, tableName, dbPath } of dbTablePairs) {
+        try {
+          const hasName2IdTable = this.checkTableExists(db, 'Name2Id')
+
+          let myRowId: number | null = null
+          if (myWxid && hasName2IdTable) {
+            const cacheKeyOriginal = `${dbPath}:${myWxid}`
+            const cachedRowIdOriginal = this.myRowIdCache.get(cacheKeyOriginal)
+
+            if (cachedRowIdOriginal !== undefined) {
+              myRowId = cachedRowIdOriginal
+            } else {
+              const row = db.prepare('SELECT rowid FROM Name2Id WHERE user_name = ?').get(myWxid) as any
+              if (row?.rowid) {
+                myRowId = row.rowid
+                this.myRowIdCache.set(cacheKeyOriginal, myRowId)
+              } else if (cleanedMyWxid && cleanedMyWxid !== myWxid) {
+                const cacheKeyCleaned = `${dbPath}:${cleanedMyWxid}`
+                const cachedRowIdCleaned = this.myRowIdCache.get(cacheKeyCleaned)
+
+                if (cachedRowIdCleaned !== undefined) {
+                  myRowId = cachedRowIdCleaned
+                } else {
+                  const row2 = db.prepare('SELECT rowid FROM Name2Id WHERE user_name = ?').get(cleanedMyWxid) as any
+                  myRowId = row2?.rowid ?? null
+                  this.myRowIdCache.set(cacheKeyCleaned, myRowId)
+                }
+              } else {
+                this.myRowIdCache.set(cacheKeyOriginal, null)
+              }
+            }
+          }
+
+          const whereParts: string[] = []
+          const params: Array<number> = []
+
+          if (startTime !== undefined) {
+            whereParts.push(hasName2IdTable ? 'm.create_time >= ?' : 'create_time >= ?')
+            params.push(startTime)
+          }
+
+          whereParts.push(hasName2IdTable ? 'm.create_time <= ?' : 'create_time <= ?')
+          params.push(endTime)
+
+          const whereClause = `WHERE ${whereParts.join(' AND ')}`
+
+          let sql: string
+          let rows: any[]
+
+          if (hasName2IdTable && myRowId !== null) {
+            sql = `SELECT m.*,
+                   CASE WHEN m.real_sender_id = ? THEN 1 ELSE 0 END AS computed_is_send,
+                   n.user_name AS sender_username
+                   FROM ${tableName} m
+                   LEFT JOIN Name2Id n ON m.real_sender_id = n.rowid
+                   ${whereClause}
+                   ORDER BY m.sort_seq DESC, m.create_time DESC, m.local_id DESC
+                   LIMIT ?`
+            rows = db.prepare(sql).all(myRowId, ...params, fetchLimitPerDb) as any[]
+          } else if (hasName2IdTable) {
+            sql = `SELECT m.*, n.user_name AS sender_username
+                   FROM ${tableName} m
+                   LEFT JOIN Name2Id n ON m.real_sender_id = n.rowid
+                   ${whereClause}
+                   ORDER BY m.sort_seq DESC, m.create_time DESC, m.local_id DESC
+                   LIMIT ?`
+            rows = db.prepare(sql).all(...params, fetchLimitPerDb) as any[]
+          } else {
+            sql = `SELECT *
+                   FROM ${tableName}
+                   ${whereClause}
+                   ORDER BY sort_seq DESC, create_time DESC, local_id DESC
+                   LIMIT ?`
+            rows = db.prepare(sql).all(...params, fetchLimitPerDb) as any[]
+          }
+
+          for (const row of rows) {
+            const content = this.decodeMessageContent(row.message_content, row.compress_content)
+            const localType = row.local_type || row.type || 1
+            const isSend = row.computed_is_send ?? row.is_send ?? null
+            const parsedContent = this.parseMessageContent(content, localType)
+            const xmlType = content ? this.extractXmlValue(content, 'type') : undefined
+            const chatRecordList = content && (xmlType === '19' || localType === 49)
+              ? this.parseChatHistory(content)
+              : undefined
+
+            allMessages.push({
+              localId: row.local_id || 0,
+              serverId: row.server_id || 0,
+              localType,
+              createTime: row.create_time || 0,
+              sortSeq: row.sort_seq || 0,
+              isSend,
+              senderUsername: row.sender_username || null,
+              parsedContent: parsedContent || '',
+              rawContent: content,
+              chatRecordList
+            })
+          }
+        } catch (e: any) {
+          if (e?.code === 'SQLITE_CORRUPT' || e?.message?.includes('malformed')) {
+            console.error(`[ChatService] 摘要查询遇到损坏数据库: ${dbPath}`, e)
+            this.messageDbCache.delete(dbPath)
+            try { db.close() } catch { }
+            this.refreshMessageDbCache()
+          } else {
+            console.error('ChatService: 摘要时间范围查询失败:', e)
+          }
+        }
+      }
+
+      allMessages.sort(compareMessageCursorDesc)
+
+      const seen = new Set<string>()
+      const uniqueMessages = allMessages.filter((msg) => {
+        const key = `${msg.serverId}-${msg.localId}-${msg.createTime}-${msg.sortSeq}`
+        if (seen.has(key)) return false
+        seen.add(key)
+        return true
+      })
+
+      const hasMore = uniqueMessages.length > normalizedLimit
+      const messages = uniqueMessages.slice(0, normalizedLimit)
+      messages.reverse()
+
+      return { success: true, messages, hasMore }
+    } catch (e) {
+      console.error('ChatService: 摘要时间范围查询失败:', e)
+      return { success: false, error: String(e) }
+    }
+  }
+
+  /**
    * 基于 sortSeq 游标，获取更早的消息（严格小于 cursorSortSeq）
    */
   async getMessagesBefore(

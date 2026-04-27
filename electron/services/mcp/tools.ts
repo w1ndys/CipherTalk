@@ -218,6 +218,7 @@ export function registerCipherTalkMcpTools(server: any) {
     description: 'Search messages across one or more sessions and return agent-friendly hits. Use for broad clue hunting when the target session or keyword is still uncertain. Hit text is in hits[].message.text and hits[].excerpt.',
     inputSchema: {
       query: z.string().trim().min(1).describe('Required full-text query.'),
+      semanticQuery: z.string().trim().min(1).optional().describe('Optional natural-language query for local vector search. Defaults to query.'),
       sessionId: z.string().trim().min(1).optional().describe('Single session identifier to search. Accepts sessionId, contactId, display name, remark, or nickname when uniquely resolvable.'),
       sessionIds: z.array(z.string().trim().min(1)).max(20).optional().describe('Multiple session identifiers to search. Each item accepts sessionId, contactId, display name, remark, or nickname when uniquely resolvable.'),
       startTime: z.number().int().positive().optional().describe('Start timestamp in seconds or milliseconds.'),
@@ -263,6 +264,47 @@ export function registerCipherTalkMcpTools(server: any) {
       const defaults = getMcpConfigSnapshot()
       const payload = await readService.getSessionContext((args || {}) as any, defaults.mcpExposeMediaPaths)
       return createToolSuccess(buildToolResultText('get_session_context', payload), payload)
+    } catch (error) {
+      return createToolError(error)
+    }
+  })
+
+  server.registerTool('get_session_statistics', {
+    title: 'Get Session Statistics',
+    description: 'Return accurate statistics for one chat session, including message totals, sender rankings, message kinds, and time distributions.',
+    inputSchema: {
+      sessionId: z.string().trim().min(1).describe('Required session identifier. Accepts sessionId, contactId, display name, remark, or nickname when uniquely resolvable.'),
+      startTime: z.number().int().positive().optional().describe('Optional start timestamp in seconds or milliseconds.'),
+      endTime: z.number().int().positive().optional().describe('Optional end timestamp in seconds or milliseconds.'),
+      includeSamples: z.boolean().optional().describe('Include up to five sample messages when true.'),
+      participantLimit: z.number().int().positive().optional().describe('Maximum number of participant ranking rows to return.')
+    },
+    outputSchema: toolOutputSchemas.get_session_statistics
+  }, async (args: unknown) => {
+    try {
+      const payload = await readService.getSessionStatistics((args || {}) as any)
+      return createToolSuccess(buildToolResultText('get_session_statistics', payload), payload)
+    } catch (error) {
+      return createToolError(error)
+    }
+  })
+
+  server.registerTool('get_keyword_statistics', {
+    title: 'Get Keyword Statistics',
+    description: 'Return accurate per-keyword hit counts, occurrence counts, sender distribution, time distribution, and sample evidence for one chat session.',
+    inputSchema: {
+      sessionId: z.string().trim().min(1).describe('Required session identifier. Accepts sessionId, contactId, display name, remark, or nickname when uniquely resolvable.'),
+      keywords: z.array(z.string().trim().min(1)).min(1).max(20).describe('Keywords or exact phrases to count.'),
+      startTime: z.number().int().positive().optional().describe('Optional start timestamp in seconds or milliseconds.'),
+      endTime: z.number().int().positive().optional().describe('Optional end timestamp in seconds or milliseconds.'),
+      matchMode: z.enum(['substring', 'exact']).optional().describe('substring counts contained phrases; exact only counts messages whose normalized text equals the keyword.'),
+      participantLimit: z.number().int().positive().optional().describe('Maximum number of participant ranking rows to return.')
+    },
+    outputSchema: toolOutputSchemas.get_keyword_statistics
+  }, async (args: unknown) => {
+    try {
+      const payload = await readService.getKeywordStatistics((args || {}) as any)
+      return createToolSuccess(buildToolResultText('get_keyword_statistics', payload), payload)
     } catch (error) {
       return createToolError(error)
     }

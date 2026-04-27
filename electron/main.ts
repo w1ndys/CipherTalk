@@ -1,7 +1,8 @@
-import { app, BrowserWindow, ipcMain, nativeImage, nativeTheme, protocol, net, Tray, Menu } from 'electron'
+import { app, BrowserWindow, ipcMain, nativeImage, nativeTheme, protocol, net, Tray, Menu, type WebContents } from 'electron'
 import { join } from 'path'
 import { randomBytes } from 'crypto'
 import { readFileSync, existsSync, mkdirSync } from 'fs'
+import { Worker } from 'worker_threads'
 import { autoUpdater, type ProgressInfo } from 'electron-updater'
 import { DatabaseService } from './services/database'
 import { appUpdateService } from './services/appUpdateService'
@@ -96,6 +97,141 @@ let welcomeWindow: BrowserWindow | null = null
 // 聊天记录窗口实例
 let chatHistoryWindow: BrowserWindow | null = null
 const allowDevTools = !!process.env.VITE_DEV_SERVER_URL
+
+type SessionVectorIndexWorkerMessage = {
+  type?: 'progress' | 'completed' | 'error'
+  sessionId?: string
+  progress?: any
+  state?: any
+  error?: string
+}
+
+type SessionVectorIndexJob = {
+  worker: Worker
+  sender: WebContents
+  cancelRequested: boolean
+}
+
+const sessionVectorIndexJobs = new Map<string, SessionVectorIndexJob>()
+
+function findElectronWorkerPath(fileName: string): string | null {
+  const candidates = app.isPackaged
+    ? [
+        join(process.resourcesPath, 'app.asar.unpacked', 'dist-electron', fileName),
+        join(process.resourcesPath, 'dist-electron', fileName),
+        join(__dirname, '..', fileName),
+        join(__dirname, fileName)
+      ]
+    : [
+        join(__dirname, '..', fileName),
+        join(__dirname, fileName),
+        join(app.getAppPath(), 'dist-electron', fileName)
+      ]
+
+  return candidates.find((candidate) => existsSync(candidate)) || null
+}
+
+async function getSessionVectorIndexStateForUi(sessionId: string) {
+  const { chatSearchIndexService } = await import('./services/search/chatSearchIndexService')
+  const state = chatSearchIndexService.getSessionVectorIndexState(sessionId)
+  return {
+    ...state,
+    isVectorRunning: state.isVectorRunning || sessionVectorIndexJobs.has(sessionId)
+  }
+}
+
+function sendSessionVectorIndexProgress(sender: WebContents, progress: any) {
+  if (!sender || sender.isDestroyed()) return
+  sender.send('ai:sessionVectorIndexProgress', progress)
+}
+
+async function sendSessionVectorIndexFailure(sender: WebContents, sessionId: string, error: string) {
+  try {
+    const state = await getSessionVectorIndexStateForUi(sessionId)
+    sendSessionVectorIndexProgress(sender, {
+      sessionId,
+      stage: 'vectorizing_messages',
+      status: 'failed',
+      processedCount: state.vectorizedCount || 0,
+      totalCount: state.indexedCount || 0,
+      message: error,
+      vectorModel: state.vectorModel || ''
+    })
+  } catch {
+    sendSessionVectorIndexProgress(sender, {
+      sessionId,
+      stage: 'vectorizing_messages',
+      status: 'failed',
+      processedCount: 0,
+      totalCount: 0,
+      message: error,
+      vectorModel: ''
+    })
+  }
+}
+
+async function startSessionVectorIndexJob(sessionId: string, sender: WebContents) {
+  const existing = sessionVectorIndexJobs.get(sessionId)
+  if (existing) {
+    existing.sender = sender
+    return getSessionVectorIndexStateForUi(sessionId)
+  }
+
+  const workerPath = findElectronWorkerPath('sessionVectorIndexWorker.js')
+  if (!workerPath) {
+    throw new Error('未找到 sessionVectorIndexWorker.js')
+  }
+
+  const worker = new Worker(workerPath, {
+    workerData: { sessionId }
+  })
+  const job: SessionVectorIndexJob = {
+    worker,
+    sender,
+    cancelRequested: false
+  }
+  sessionVectorIndexJobs.set(sessionId, job)
+  dataManagementService.pauseForAi()
+
+  worker.on('message', (message: SessionVectorIndexWorkerMessage) => {
+    const currentJob = sessionVectorIndexJobs.get(sessionId)
+    const targetSender = currentJob?.sender || sender
+
+    if (message?.type === 'progress' && message.progress) {
+      sendSessionVectorIndexProgress(targetSender, message.progress)
+      return
+    }
+
+    if (message?.type === 'completed') {
+      sessionVectorIndexJobs.delete(sessionId)
+      return
+    }
+
+    if (message?.type === 'error') {
+      sessionVectorIndexJobs.delete(sessionId)
+      void sendSessionVectorIndexFailure(targetSender, sessionId, message.error || '向量化失败')
+    }
+  })
+
+  worker.on('error', (error) => {
+    const currentJob = sessionVectorIndexJobs.get(sessionId)
+    sessionVectorIndexJobs.delete(sessionId)
+    void sendSessionVectorIndexFailure(currentJob?.sender || sender, sessionId, String(error))
+  })
+
+  worker.on('exit', (code) => {
+    dataManagementService.resumeFromAi()
+    const currentJob = sessionVectorIndexJobs.get(sessionId)
+    if (!currentJob) return
+    sessionVectorIndexJobs.delete(sessionId)
+
+    if (code !== 0 && !currentJob.cancelRequested) {
+      void sendSessionVectorIndexFailure(currentJob.sender, sessionId, `向量化 Worker 异常退出，代码：${code}`)
+    }
+  })
+
+  return getSessionVectorIndexStateForUi(sessionId)
+}
 
 type ImageViewerListItem = {
   imagePath: string
@@ -1234,9 +1370,9 @@ function createAISummaryWindow(sessionId: string, sessionName: string) {
   const isDark = nativeTheme.shouldUseDarkColors
 
   aiSummaryWindow = new BrowserWindow({
-    width: 600,
-    height: 800,
-    minWidth: 500,
+    width: 1100,
+    height: 760,
+    minWidth: 900,
     minHeight: 600,
     icon: iconPath,
     webPreferences: {
@@ -3949,24 +4085,28 @@ function registerIpcHandlers() {
 
       // 计算时间范围
       const endTime = Math.floor(Date.now() / 1000)
-      const startTime = endTime - (timeRange * 24 * 60 * 60)
+      const startTime = timeRange > 0 ? endTime - (timeRange * 24 * 60 * 60) : undefined
 
-      // 获取消息（使用 getMessagesByDate 获取指定时间范围内的消息）
-      // 使用用户配置的条数限制（默认 3000）
+      // 获取指定时间范围内的消息，超出上限时优先保留范围内最新消息。
       const messageLimit = configService?.get('aiMessageLimit') || 3000
-      const messagesResult = await chatService.getMessagesByDate(sessionId, startTime, messageLimit)
+      const messagesResult = await chatService.getMessagesByTimeRangeForSummary(sessionId, {
+        startTime,
+        endTime,
+        limit: messageLimit
+      })
       if (!messagesResult.success || !messagesResult.messages) {
         return { success: false, error: '获取消息失败' }
       }
 
-      // 过滤时间范围内的消息 (getMessagesByDate 返回的是 >= startTime 的消息)
-      const filteredMessages = messagesResult.messages.filter((msg: any) =>
-        msg.createTime <= endTime
-      )
-
-      if (filteredMessages.length === 0) {
+      const summaryMessages = messagesResult.messages
+      if (summaryMessages.length === 0) {
         return { success: false, error: '该时间范围内没有消息' }
       }
+
+      const actualTimeRangeStart = startTime ?? summaryMessages[0].createTime
+      const inputMessageScopeNote = messagesResult.hasMore
+        ? `当前时间范围内消息较多，本次仅分析其中最新 ${summaryMessages.length} 条消息。请明确基于这批最新消息归纳重点，避免误判为已覆盖完整时间范围。`
+        : undefined
 
       // 获取消息中所有发送者的联系人信息
       const contacts = new Map()
@@ -3976,7 +4116,7 @@ function registerIpcHandlers() {
       senderSet.add(sessionId)
 
       // 添加所有消息发送者
-      filteredMessages.forEach((msg: any) => {
+      summaryMessages.forEach((msg: any) => {
         if (msg.senderUsername) {
           senderSet.add(msg.senderUsername)
         }
@@ -4013,11 +4153,14 @@ function registerIpcHandlers() {
 
       // 生成摘要（流式输出）
       const result = await aiService.generateSummary(
-        filteredMessages,
+        summaryMessages,
         contacts,
         {
           sessionId,
           timeRangeDays: timeRange,
+          timeRangeStart: actualTimeRangeStart,
+          timeRangeEnd: endTime,
+          inputMessageScopeNote,
           provider: options.provider,
           apiKey: options.apiKey,
           model: options.model,
@@ -4038,6 +4181,7 @@ function registerIpcHandlers() {
         console.log('[AI] 摘要生成完成，结果:', {
           sessionId: result.sessionId,
           messageCount: result.messageCount,
+          hasMore: Boolean(messagesResult.hasMore),
           summaryLength: result.summaryText?.length || 0
         })
       }
@@ -4046,6 +4190,239 @@ function registerIpcHandlers() {
     } catch (e) {
       console.error('[AI] 生成摘要失败:', e)
       logService?.error('AI', '生成摘要失败', { error: String(e) })
+      return { success: false, error: String(e) }
+    }
+  })
+
+  ipcMain.handle('ai:askSessionQuestion', async (event, options: {
+    sessionId: string
+    sessionName?: string
+    question: string
+    summaryText?: string
+    structuredAnalysis?: any
+    history?: Array<{ role: 'user' | 'assistant'; content: string }>
+    provider: string
+    apiKey: string
+    model: string
+    enableThinking?: boolean
+  }) => {
+    try {
+      const { aiService } = await import('./services/ai/aiService')
+
+      aiService.init()
+
+      const result = await aiService.answerSessionQuestion(
+        {
+          sessionId: options.sessionId,
+          sessionName: options.sessionName,
+          question: options.question,
+          summaryText: options.summaryText,
+          structuredAnalysis: options.structuredAnalysis,
+          history: options.history,
+          provider: options.provider,
+          apiKey: options.apiKey,
+          model: options.model,
+          enableThinking: options.enableThinking
+        },
+        (chunk: string) => {
+          event.sender.send('ai:sessionQaChunk', chunk)
+        },
+        (progress) => {
+          event.sender.send('ai:sessionQaProgress', progress)
+        }
+      )
+
+      return { success: true, result }
+    } catch (e) {
+      console.error('[AI] 单会话问答失败:', e)
+      logService?.error('AI', '单会话问答失败', { error: String(e) })
+      return { success: false, error: String(e) }
+    }
+  })
+
+  ipcMain.handle('ai:startSessionQuestion', async (event, options: {
+    requestId?: string
+    sessionId: string
+    sessionName?: string
+    question: string
+    summaryText?: string
+    structuredAnalysis?: any
+    history?: Array<{ role: 'user' | 'assistant'; content: string }>
+    provider: string
+    apiKey: string
+    model: string
+    enableThinking?: boolean
+  }) => {
+    try {
+      const { sessionQAJobService } = await import('./services/ai/sessionQAJobService')
+      return sessionQAJobService.start(options, event.sender)
+    } catch (e) {
+      console.error('[AI] 启动单会话问答任务失败:', e)
+      logService?.error('AI', '启动单会话问答任务失败', { error: String(e) })
+      return { success: false, error: String(e) }
+    }
+  })
+
+  ipcMain.handle('ai:cancelSessionQuestion', async (_, requestId: string) => {
+    try {
+      const { sessionQAJobService } = await import('./services/ai/sessionQAJobService')
+      return await sessionQAJobService.cancel(requestId)
+    } catch (e) {
+      console.error('[AI] 取消单会话问答任务失败:', e)
+      logService?.error('AI', '取消单会话问答任务失败', { error: String(e) })
+      return { success: false, requestId, error: String(e) }
+    }
+  })
+
+  ipcMain.handle('ai:getSessionVectorIndexState', async (_, sessionId: string) => {
+    try {
+      return {
+        success: true,
+        result: await getSessionVectorIndexStateForUi(sessionId)
+      }
+    } catch (e) {
+      console.error('[AI] 获取会话向量索引状态失败:', e)
+      logService?.error('AI', '获取会话向量索引状态失败', { error: String(e) })
+      return { success: false, error: String(e) }
+    }
+  })
+
+  ipcMain.handle('ai:prepareSessionVectorIndex', async (event, options: { sessionId: string }) => {
+    try {
+      const result = await startSessionVectorIndexJob(options.sessionId, event.sender)
+      return { success: true, result }
+    } catch (e) {
+      console.error('[AI] 准备会话向量索引失败:', e)
+      logService?.error('AI', '准备会话向量索引失败', { error: String(e) })
+      return { success: false, error: String(e) }
+    }
+  })
+
+  ipcMain.handle('ai:cancelSessionVectorIndex', async (_, sessionId: string) => {
+    try {
+      const job = sessionVectorIndexJobs.get(sessionId)
+      if (job) {
+        job.cancelRequested = true
+        job.worker.postMessage({ type: 'cancel' })
+        return {
+          success: true,
+          result: await getSessionVectorIndexStateForUi(sessionId)
+        }
+      }
+
+      const { chatSearchIndexService } = await import('./services/search/chatSearchIndexService')
+      return {
+        success: true,
+        result: chatSearchIndexService.cancelSessionVectorIndex(sessionId)
+      }
+    } catch (e) {
+      console.error('[AI] 取消会话向量索引失败:', e)
+      logService?.error('AI', '取消会话向量索引失败', { error: String(e) })
+      return { success: false, error: String(e) }
+    }
+  })
+
+  ipcMain.handle('ai:getEmbeddingModelProfiles', async () => {
+    try {
+      const { localEmbeddingModelService } = await import('./services/search/embeddingModelService')
+      return {
+        success: true,
+        result: localEmbeddingModelService.listProfiles(),
+        currentProfileId: localEmbeddingModelService.getCurrentProfileId()
+      }
+    } catch (e) {
+      console.error('[AI] 获取语义模型列表失败:', e)
+      return { success: false, error: String(e) }
+    }
+  })
+
+  ipcMain.handle('ai:setEmbeddingModelProfile', async (_, profileId: string) => {
+    try {
+      const { localEmbeddingModelService } = await import('./services/search/embeddingModelService')
+      const result = localEmbeddingModelService.setCurrentProfileId(profileId)
+      return { success: true, result }
+    } catch (e) {
+      console.error('[AI] 设置语义模型失败:', e)
+      return { success: false, error: String(e) }
+    }
+  })
+
+  ipcMain.handle('ai:getEmbeddingDeviceStatus', async () => {
+    try {
+      const { localEmbeddingModelService } = await import('./services/search/embeddingModelService')
+      return {
+        success: true,
+        result: localEmbeddingModelService.getDeviceStatus()
+      }
+    } catch (e) {
+      console.error('[AI] 获取语义向量计算模式失败:', e)
+      return { success: false, error: String(e) }
+    }
+  })
+
+  ipcMain.handle('ai:setEmbeddingDevice', async (_, device: string) => {
+    try {
+      const { localEmbeddingModelService } = await import('./services/search/embeddingModelService')
+      const result = localEmbeddingModelService.setCurrentDevice(device)
+      return {
+        success: true,
+        result,
+        status: localEmbeddingModelService.getDeviceStatus()
+      }
+    } catch (e) {
+      console.error('[AI] 设置语义向量计算模式失败:', e)
+      return { success: false, error: String(e) }
+    }
+  })
+
+  ipcMain.handle('ai:getEmbeddingModelStatus', async (_, profileId?: string) => {
+    try {
+      const { localEmbeddingModelService } = await import('./services/search/embeddingModelService')
+      return {
+        success: true,
+        result: await localEmbeddingModelService.getModelStatus(profileId)
+      }
+    } catch (e) {
+      console.error('[AI] 获取语义模型状态失败:', e)
+      return { success: false, error: String(e) }
+    }
+  })
+
+  ipcMain.handle('ai:downloadEmbeddingModel', async (event, profileId?: string) => {
+    try {
+      const { localEmbeddingModelService } = await import('./services/search/embeddingModelService')
+      const result = await localEmbeddingModelService.downloadModel(profileId, (progress) => {
+        event.sender.send('ai:embeddingModelDownloadProgress', progress)
+      })
+      return { success: true, result }
+    } catch (e) {
+      console.error('[AI] 下载语义模型失败:', e)
+      return { success: false, error: String(e) }
+    }
+  })
+
+  ipcMain.handle('ai:clearEmbeddingModel', async (_, profileId?: string) => {
+    try {
+      const { localEmbeddingModelService } = await import('./services/search/embeddingModelService')
+      return {
+        success: true,
+        result: await localEmbeddingModelService.clearModel(profileId)
+      }
+    } catch (e) {
+      console.error('[AI] 清理语义模型失败:', e)
+      return { success: false, error: String(e) }
+    }
+  })
+
+  ipcMain.handle('ai:clearSemanticVectorIndex', async (_, vectorModel?: string) => {
+    try {
+      const { chatSearchIndexService } = await import('./services/search/chatSearchIndexService')
+      return {
+        success: true,
+        result: chatSearchIndexService.clearSemanticVectorIndex(vectorModel)
+      }
+    } catch (e) {
+      console.error('[AI] 清理语义向量索引失败:', e)
       return { success: false, error: String(e) }
     }
   })

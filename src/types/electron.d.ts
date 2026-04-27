@@ -1,5 +1,21 @@
 import type { ChatSession, Message, Contact, ContactInfo } from './models'
-import type { SummaryResult } from './ai'
+import type {
+  EmbeddingDevice,
+  EmbeddingDeviceStatus,
+  EmbeddingModelDownloadProgress,
+  EmbeddingModelProfile,
+  EmbeddingModelStatus,
+  SessionQAHistoryMessage,
+  SessionQAJobEvent,
+  SessionQAProgressEvent,
+  SessionQACancelResult,
+  SessionQAStartResult,
+  SessionQAResult,
+  SessionVectorIndexProgressEvent,
+  SessionVectorIndexState,
+  SummaryResult,
+  SummaryStructuredAnalysis
+} from './ai'
 import type { AccountProfile } from './account'
 
 
@@ -1015,7 +1031,7 @@ export interface ElectronAPI {
     }>
     getSummaryHistory: (sessionId: string, limit?: number) => Promise<{
       success: boolean
-      history?: any[]
+      history?: SummaryResult[]
       error?: string
     }>
     deleteSummary: (id: number) => Promise<{
@@ -1050,7 +1066,99 @@ export interface ElectronAPI {
       result?: SummaryResult
       error?: string
     }>
+    askSessionQuestion: (options: {
+      sessionId: string
+      sessionName?: string
+      question: string
+      summaryText?: string
+      structuredAnalysis?: SummaryStructuredAnalysis
+      history?: SessionQAHistoryMessage[]
+      provider: string
+      apiKey: string
+      model: string
+      enableThinking?: boolean
+    }) => Promise<{
+      success: boolean
+      result?: SessionQAResult
+      error?: string
+    }>
+    startSessionQuestion: (options: {
+      requestId?: string
+      sessionId: string
+      sessionName?: string
+      question: string
+      summaryText?: string
+      structuredAnalysis?: SummaryStructuredAnalysis
+      history?: SessionQAHistoryMessage[]
+      provider: string
+      apiKey: string
+      model: string
+      enableThinking?: boolean
+    }) => Promise<SessionQAStartResult>
+    cancelSessionQuestion: (requestId: string) => Promise<SessionQACancelResult>
+    getSessionVectorIndexState: (sessionId: string) => Promise<{
+      success: boolean
+      result?: SessionVectorIndexState
+      error?: string
+    }>
+    prepareSessionVectorIndex: (options: { sessionId: string }) => Promise<{
+      success: boolean
+      result?: SessionVectorIndexState
+      error?: string
+    }>
+    cancelSessionVectorIndex: (sessionId: string) => Promise<{
+      success: boolean
+      result?: SessionVectorIndexState
+      error?: string
+    }>
+    getEmbeddingModelProfiles: () => Promise<{
+      success: boolean
+      result?: EmbeddingModelProfile[]
+      currentProfileId?: string
+      error?: string
+    }>
+    setEmbeddingModelProfile: (profileId: string) => Promise<{
+      success: boolean
+      result?: string
+      error?: string
+    }>
+    getEmbeddingDeviceStatus: () => Promise<{
+      success: boolean
+      result?: EmbeddingDeviceStatus
+      error?: string
+    }>
+    setEmbeddingDevice: (device: EmbeddingDevice) => Promise<{
+      success: boolean
+      result?: EmbeddingDevice
+      status?: EmbeddingDeviceStatus
+      error?: string
+    }>
+    getEmbeddingModelStatus: (profileId?: string) => Promise<{
+      success: boolean
+      result?: EmbeddingModelStatus
+      error?: string
+    }>
+    downloadEmbeddingModel: (profileId?: string) => Promise<{
+      success: boolean
+      result?: EmbeddingModelStatus
+      error?: string
+    }>
+    clearEmbeddingModel: (profileId?: string) => Promise<{
+      success: boolean
+      result?: EmbeddingModelStatus
+      error?: string
+    }>
+    clearSemanticVectorIndex: (vectorModel?: string) => Promise<{
+      success: boolean
+      result?: { success: boolean; deletedCount: number; vectorModel: string }
+      error?: string
+    }>
     onSummaryChunk: (callback: (chunk: string) => void) => () => void
+    onSessionQAChunk: (callback: (chunk: string) => void) => () => void
+    onSessionQAProgress: (callback: (event: SessionQAProgressEvent) => void) => () => void
+    onSessionQAEvent: (callback: (event: SessionQAJobEvent) => void) => () => void
+    onSessionVectorIndexProgress: (callback: (event: SessionVectorIndexProgressEvent) => void) => () => void
+    onEmbeddingModelDownloadProgress: (callback: (event: EmbeddingModelDownloadProgress) => void) => () => void
   }
 
 }

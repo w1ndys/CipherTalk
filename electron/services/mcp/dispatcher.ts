@@ -80,6 +80,14 @@ export async function executeMcpTool(
       const payload = await readService.getSessionContext(args as any, defaults.mcpExposeMediaPaths, reporter)
       return { summary: buildToolResultText('get_session_context', payload), payload }
     }
+    case 'get_session_statistics': {
+      const payload = await readService.getSessionStatistics(args as any, reporter)
+      return { summary: buildToolResultText('get_session_statistics', payload), payload }
+    }
+    case 'get_keyword_statistics': {
+      const payload = await readService.getKeywordStatistics(args as any, reporter)
+      return { summary: buildToolResultText('get_keyword_statistics', payload), payload }
+    }
     default:
       throw new Error(`Unsupported MCP tool: ${toolName satisfies never}`)
   }

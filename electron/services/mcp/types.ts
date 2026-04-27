@@ -9,6 +9,8 @@ export const MCP_TOOL_NAMES = [
   'list_contacts',
   'search_messages',
   'get_session_context',
+  'get_session_statistics',
+  'get_keyword_statistics',
   'get_global_statistics',
   'get_contact_rankings',
   'get_activity_distribution'
@@ -340,6 +342,7 @@ export interface McpMessageItem {
   text: string
   sender: {
     username: string | null
+    displayName?: string | null
     isSelf: boolean
   }
   cursor: McpCursor
@@ -360,6 +363,22 @@ export interface McpSearchHit {
   excerpt: string
   matchedField: McpMessageMatchField
   score: number
+  retrievalSource?: McpSearchRetrievalSource
+}
+
+export type McpSearchRetrievalSource = 'keyword_index' | 'vector_index' | 'scan'
+
+export interface McpSearchVectorStatus {
+  requested: boolean
+  attempted: boolean
+  providerAvailable: boolean
+  indexComplete: boolean
+  hitCount: number
+  indexedMessages: number
+  vectorizedMessages: number
+  model?: string
+  skippedReason?: string
+  error?: string
 }
 
 export interface McpSearchMessagesPayload {
@@ -368,6 +387,14 @@ export interface McpSearchMessagesPayload {
   sessionsScanned: number
   messagesScanned: number
   truncated: boolean
+  source?: 'index' | 'scan'
+  indexStatus?: {
+    ready: boolean
+    indexedSessions: number
+    indexedMessages: number
+    error?: string
+  }
+  vectorSearch?: McpSearchVectorStatus
   sessionSummaries?: Array<{
     session: McpSessionRef
     hitCount: number
@@ -435,6 +462,73 @@ export interface McpSessionContextPayload {
   hasMoreAfter: boolean
 }
 
+export interface McpParticipantStatisticsItem {
+  senderUsername: string | null
+  displayName: string
+  role: 'self' | 'other' | 'member' | 'unknown'
+  messageCount: number
+  sentCount: number
+  receivedCount: number
+  firstMessageTime: number | null
+  firstMessageTimeMs: number | null
+  lastMessageTime: number | null
+  lastMessageTimeMs: number | null
+  kindCounts: Partial<Record<McpMessageKind, number>>
+}
+
+export interface McpSessionStatisticsPayload {
+  session: McpSessionRef
+  totalMessages: number
+  sentMessages: number
+  receivedMessages: number
+  firstMessageTime: number | null
+  firstMessageTimeMs: number | null
+  lastMessageTime: number | null
+  lastMessageTimeMs: number | null
+  activeDays: number
+  kindCounts: Partial<Record<McpMessageKind, number>>
+  messageTypeCounts: Record<number, number>
+  hourlyDistribution: Record<number, number>
+  weekdayDistribution: Record<number, number>
+  monthlyDistribution: Record<string, number>
+  participantRankings: McpParticipantStatisticsItem[]
+  samples?: McpMessageItem[]
+  scannedMessages: number
+  matchedMessages: number
+  truncated: boolean
+  timeRange: McpTimeRange
+}
+
+export interface McpKeywordStatisticsSample {
+  keyword: string
+  excerpt: string
+  message: McpMessageItem
+}
+
+export interface McpKeywordStatisticsItem {
+  keyword: string
+  matchMode: McpSearchMatchMode
+  hitCount: number
+  occurrenceCount: number
+  firstHitTime: number | null
+  firstHitTimeMs: number | null
+  lastHitTime: number | null
+  lastHitTimeMs: number | null
+  participantRankings: McpParticipantStatisticsItem[]
+  hourlyDistribution: Record<number, number>
+  monthlyDistribution: Record<string, number>
+  samples: McpKeywordStatisticsSample[]
+}
+
+export interface McpKeywordStatisticsPayload {
+  session: McpSessionRef
+  keywords: McpKeywordStatisticsItem[]
+  scannedMessages: number
+  matchedMessages: number
+  truncated: boolean
+  timeRange: McpTimeRange
+}
+
 export interface McpStreamMetaPayload {
   toolName: McpToolName
   requestId?: string
@@ -459,6 +553,8 @@ export interface McpStreamPartialPayloadMap {
   get_messages: Partial<McpMessagesPayload>
   search_messages: Partial<McpSearchMessagesPayload>
   get_session_context: Partial<McpSessionContextPayload>
+  get_session_statistics: Partial<McpSessionStatisticsPayload>
+  get_keyword_statistics: Partial<McpKeywordStatisticsPayload>
 }
 
 export type McpStreamPartialPayload =
@@ -468,6 +564,8 @@ export type McpStreamPartialPayload =
   | McpStreamPartialPayloadMap['get_messages']
   | McpStreamPartialPayloadMap['search_messages']
   | McpStreamPartialPayloadMap['get_session_context']
+  | McpStreamPartialPayloadMap['get_session_statistics']
+  | McpStreamPartialPayloadMap['get_keyword_statistics']
 
 export interface McpStreamMetaEvent {
   event: 'meta'

@@ -340,6 +340,52 @@
             .spin {
               animation: spin 1s linear infinite;
             }
+
+            &.vector-index-btn {
+              position: relative;
+
+              &.complete {
+                color: #16a34a;
+                background: rgba(22, 163, 74, 0.12);
+              }
+
+              &.pending {
+                color: #d97706;
+              }
+
+              &.running {
+                color: #0ea5e9;
+                background: rgba(14, 165, 233, 0.12);
+              }
+
+              .vector-index-radar {
+                animation: vectorRadarPulse 1.4s ease-in-out infinite;
+                transform-origin: center;
+              }
+
+              .vector-index-badge {
+                position: absolute;
+                top: -5px;
+                right: -8px;
+                min-width: 18px;
+                height: 16px;
+                padding: 0 4px;
+                border-radius: 999px;
+                background: var(--primary);
+                color: #fff;
+                border: 1px solid var(--card-bg);
+                font-size: 9px;
+                font-weight: 700;
+                line-height: 14px;
+                text-align: center;
+                pointer-events: none;
+                box-shadow: 0 2px 6px rgba(0, 0, 0, 0.18);
+              }
+
+              &.pending .vector-index-badge {
+                background: #d97706;
+              }
+            }
           }
 
           // 日期选择器包装器
@@ -1085,6 +1131,41 @@
     }
   }
 
+  .header-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-left: auto;
+  }
+
+  .icon-btn {
+    width: 32px;
+    height: 32px;
+    border: none;
+    background: transparent;
+    border-radius: 6px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--text-secondary);
+    position: relative;
+
+    &:hover {
+      background: var(--bg-hover);
+      color: var(--text-primary);
+    }
+
+    &:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+
+    .spin {
+      animation: spin 1s linear infinite;
+    }
+  }
+
   .refresh-messages-btn {
     width: 32px;
     height: 32px;
@@ -1110,6 +1191,49 @@
 
     .spin {
       animation: spin 1s linear infinite;
+    }
+  }
+
+  .vector-index-btn {
+    overflow: visible;
+
+    &.complete {
+      color: #16a34a;
+    }
+
+    &.pending {
+      color: #d97706;
+    }
+
+    &.running {
+      color: #0ea5e9;
+    }
+
+    .vector-index-radar {
+      animation: vectorRadarPulse 1.4s ease-in-out infinite;
+      transform-origin: center;
+    }
+
+    .vector-index-badge {
+      position: absolute;
+      top: -5px;
+      right: -8px;
+      min-width: 18px;
+      height: 16px;
+      padding: 0 4px;
+      border-radius: 999px;
+      background: var(--primary);
+      color: #fff;
+      border: 1px solid var(--card-bg);
+      font-size: 9px;
+      font-weight: 700;
+      line-height: 14px;
+      text-align: center;
+      pointer-events: none;
+    }
+
+    &.pending .vector-index-badge {
+      background: #d97706;
     }
   }
 }
@@ -2699,6 +2823,20 @@
 
   to {
     transform: rotate(360deg);
+  }
+}
+
+@keyframes vectorRadarPulse {
+
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+
+  50% {
+    opacity: 0.62;
+    transform: scale(1.12);
   }
 }
 

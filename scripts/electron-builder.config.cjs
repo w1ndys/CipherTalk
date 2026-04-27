@@ -91,6 +91,7 @@ function getFiles(buildTarget) {
       [
         ...commonFiles,
         '!node_modules/onnxruntime-node/bin/**/win32/arm64/**/*',
+        'node_modules/sqlite-vec*/**/*',
         'node_modules/koffi/build/koffi/win32_x64/**/*'
       ]
     )
@@ -108,6 +109,9 @@ function getFiles(buildTarget) {
         '!node_modules/onnxruntime-node/bin/**/linux/**/*',
         '!node_modules/onnxruntime-node/bin/**/win32/**/*',
         'node_modules/onnxruntime-node/bin/**/darwin/**/*',
+        '!node_modules/sqlite-vec-windows-*/**/*',
+        '!node_modules/sqlite-vec-linux-*/**/*',
+        'node_modules/sqlite-vec-darwin-*/**/*',
         '!node_modules/sherpa-onnx-win-*/**/*',
         '!node_modules/sherpa-onnx-linux-*/**/*',
         'node_modules/sherpa-onnx-darwin-*/**/*',
@@ -128,14 +132,14 @@ function getAsarUnpack(buildTarget) {
   if (buildTarget === 'win') {
     return appendUnique(
       withoutItems(baseAsarUnpack, ['node_modules/koffi/**/*']),
-      ['node_modules/koffi/build/koffi/win32_x64/**/*']
+      ['node_modules/sqlite-vec*/**/*', 'node_modules/koffi/build/koffi/win32_x64/**/*']
     )
   }
 
   if (buildTarget === 'mac') {
     return appendUnique(
       withoutItems(baseAsarUnpack, ['node_modules/koffi/**/*']),
-      ['node_modules/koffi/build/koffi/darwin_*/**/*']
+      ['node_modules/sqlite-vec*/**/*', 'node_modules/koffi/build/koffi/darwin_*/**/*']
     )
   }
 

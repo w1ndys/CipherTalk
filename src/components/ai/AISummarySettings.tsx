@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
-import { Eye, EyeOff, Sparkles, Check, ChevronDown, ChevronUp, Zap, Star, FileText, HelpCircle, X, Plus, Settings2 } from 'lucide-react'
-import { getAIProviders, type AIProviderInfo } from '../../types/ai'
+import { Eye, EyeOff, Sparkles, Check, ChevronDown, ChevronUp, Zap, Star, FileText, HelpCircle, X, Plus, Settings2, Download, Trash2, Database, CheckCircle, AlertCircle, RefreshCw, Layers, Cpu } from 'lucide-react'
+import { getAIProviders, type AIProviderInfo, type EmbeddingDevice, type EmbeddingDeviceStatus, type EmbeddingModelDownloadProgress, type EmbeddingModelProfile, type EmbeddingModelStatus } from '../../types/ai'
 import { marked } from 'marked'
 import DOMPurify from 'dompurify'
 import AIProviderLogo from './AIProviderLogo'
@@ -115,6 +115,34 @@ interface AISummarySettingsProps {
   showMessage: (text: string, success: boolean) => void
 }
 
+const DEEPSEEK_LEGACY_MODEL_MAP: Record<string, string> = {
+  'DeepSeek V3': 'deepseek-v4-flash',
+  'DeepSeek R1 (推理)': 'deepseek-v4-flash',
+  'deepseek-chat': 'deepseek-v4-flash',
+  'deepseek-reasoner': 'deepseek-v4-flash'
+}
+
+function normalizeProviderModel(providerId: string, modelName: string) {
+  if (providerId !== 'deepseek') {
+    return modelName
+  }
+
+  return DEEPSEEK_LEGACY_MODEL_MAP[modelName] || modelName
+}
+
+function formatBytes(bytes?: number): string {
+  const value = Number(bytes || 0)
+  if (value <= 0) return '0 B'
+  const units = ['B', 'KB', 'MB', 'GB']
+  let size = value
+  let unitIndex = 0
+  while (size >= 1024 && unitIndex < units.length - 1) {
+    size /= 1024
+    unitIndex += 1
+  }
+  return `${size.toFixed(unitIndex === 0 ? 0 : 1)} ${units[unitIndex]}`
+}
+
 function AISummarySettings({
   provider,
   setProvider,
@@ -158,6 +186,14 @@ function AISummarySettings({
   const [newPresetBaseURL, setNewPresetBaseURL] = useState('')
   const [currentPresetName, setCurrentPresetName] = useState('')
   const [editingPresetId, setEditingPresetId] = useState<string | null>(null)
+  const [embeddingProfiles, setEmbeddingProfiles] = useState<EmbeddingModelProfile[]>([])
+  const [embeddingProfileId, setEmbeddingProfileId] = useState('bge-large-zh-v1.5-int8')
+  const [embeddingDevice, setEmbeddingDevice] = useState<EmbeddingDevice>('cpu')
+  const [embeddingDeviceStatus, setEmbeddingDeviceStatus] = useState<EmbeddingDeviceStatus | null>(null)
+  const [embeddingStatus, setEmbeddingStatus] = useState<EmbeddingModelStatus | null>(null)
+  const [embeddingProgress, setEmbeddingProgress] = useState<EmbeddingModelDownloadProgress | null>(null)
+  const [isDownloadingEmbedding, setIsDownloadingEmbedding] = useState(false)
+  const [isClearingEmbedding, setIsClearingEmbedding] = useState(false)
 
   useEffect(() => {
     // 加载提供商列表和统计数据
@@ -165,7 +201,30 @@ function AISummarySettings({
     loadUsageStats()
     loadAllProviderConfigs()
     loadPresets()
+    loadEmbeddingModels()
+    loadEmbeddingDeviceStatus()
   }, [])
+
+  useEffect(() => {
+    if (!embeddingProfileId) return
+    loadEmbeddingStatus(embeddingProfileId)
+  }, [embeddingProfileId])
+
+  useEffect(() => {
+    const cleanup = window.electronAPI.ai.onEmbeddingModelDownloadProgress((progress) => {
+      if (progress.profileId === embeddingProfileId) {
+        setEmbeddingProgress(progress)
+      }
+    })
+    return cleanup
+  }, [embeddingProfileId])
+
+  useEffect(() => {
+    const normalizedModel = normalizeProviderModel(provider, model)
+    if (normalizedModel !== model) {
+      setModel(normalizedModel)
+    }
+  }, [provider, model, setModel])
 
   // 当 provider 改变时，加载对应的 baseURL
   useEffect(() => {
@@ -211,7 +270,16 @@ function AISummarySettings({
     try {
       const { getAllAiProviderConfigs } = await import('../../services/config')
       const configs = await getAllAiProviderConfigs()
-      setProviderConfigs(configs)
+      const normalizedConfigs = Object.fromEntries(
+        Object.entries(configs).map(([providerId, config]) => [
+          providerId,
+          {
+            ...config,
+            model: normalizeProviderModel(providerId, config.model)
+          }
+        ])
+      )
+      setProviderConfigs(normalizedConfigs)
     } catch (e) {
       console.error('加载提供商配置失败:', e)
     }
@@ -224,6 +292,123 @@ function AISummarySettings({
       setPresets(presetList)
     } catch (e) {
       console.error('加载配置预设失败:', e)
+    }
+  }
+
+  const loadEmbeddingModels = async () => {
+    try {
+      const result = await window.electronAPI.ai.getEmbeddingModelProfiles()
+      if (result.success && result.result) {
+        setEmbeddingProfiles(result.result)
+        setEmbeddingProfileId(result.currentProfileId || 'bge-large-zh-v1.5-int8')
+      }
+    } catch (e) {
+      console.error('加载语义模型失败:', e)
+    }
+  }
+
+  const loadEmbeddingStatus = async (profileId = embeddingProfileId) => {
+    try {
+      const result = await window.electronAPI.ai.getEmbeddingModelStatus(profileId)
+      if (result.success && result.result) {
+        setEmbeddingStatus(result.result)
+      }
+    } catch (e) {
+      console.error('加载语义模型状态失败:', e)
+    }
+  }
+
+  const loadEmbeddingDeviceStatus = async () => {
+    try {
+      const result = await window.electronAPI.ai.getEmbeddingDeviceStatus()
+      if (result.success && result.result) {
+        setEmbeddingDevice(result.result.currentDevice)
+        setEmbeddingDeviceStatus(result.result)
+      }
+    } catch (e) {
+      console.error('加载语义向量计算模式失败:', e)
+    }
+  }
+
+  const handleEmbeddingDeviceChange = async (device: EmbeddingDevice) => {
+    setEmbeddingDevice(device)
+    const result = await window.electronAPI.ai.setEmbeddingDevice(device)
+    if (!result.success) {
+      showMessage(result.error || '语义向量计算模式设置失败', false)
+      await loadEmbeddingDeviceStatus()
+      return
+    }
+    if (result.status) {
+      setEmbeddingDeviceStatus(result.status)
+      setEmbeddingDevice(result.status.currentDevice)
+    } else {
+      await loadEmbeddingDeviceStatus()
+    }
+    showMessage(device === 'dml' ? '已启用 DirectML GPU 实验模式' : '已切换到 CPU 计算模式', true)
+  }
+
+  const handleEmbeddingProfileChange = async (profileId: string | number) => {
+    const nextProfileId = String(profileId)
+    const profile = embeddingProfiles.find((item) => item.id === nextProfileId)
+    if (profile && !profile.enabled) return
+
+    setEmbeddingProfileId(nextProfileId)
+    setEmbeddingProgress(null)
+    const result = await window.electronAPI.ai.setEmbeddingModelProfile(nextProfileId)
+    if (!result.success) {
+      showMessage(result.error || '语义模型设置失败', false)
+      return
+    }
+    await loadEmbeddingStatus(nextProfileId)
+    showMessage('语义模型设置已保存', true)
+  }
+
+  const handleDownloadEmbeddingModel = async () => {
+    if (!embeddingProfileId || isDownloadingEmbedding) return
+    setIsDownloadingEmbedding(true)
+    setEmbeddingProgress(null)
+    try {
+      const result = await window.electronAPI.ai.downloadEmbeddingModel(embeddingProfileId)
+      if (!result.success || !result.result) {
+        throw new Error(result.error || '语义模型下载失败')
+      }
+      setEmbeddingStatus(result.result)
+      setEmbeddingProgress(null)
+      showMessage('语义模型下载完成', true)
+    } catch (e) {
+      showMessage(String(e), false)
+    } finally {
+      setIsDownloadingEmbedding(false)
+    }
+  }
+
+  const handleClearEmbeddingModel = async () => {
+    if (!embeddingProfileId || isClearingEmbedding) return
+    setIsClearingEmbedding(true)
+    try {
+      const result = await window.electronAPI.ai.clearEmbeddingModel(embeddingProfileId)
+      if (!result.success || !result.result) {
+        throw new Error(result.error || '语义模型清理失败')
+      }
+      setEmbeddingStatus(result.result)
+      setEmbeddingProgress(null)
+      showMessage('语义模型已清理', true)
+    } catch (e) {
+      showMessage(String(e), false)
+    } finally {
+      setIsClearingEmbedding(false)
+    }
+  }
+
+  const handleClearSemanticIndex = async () => {
+    try {
+      const result = await window.electronAPI.ai.clearSemanticVectorIndex(embeddingProfileId)
+      if (!result.success || !result.result) {
+        throw new Error(result.error || '语义索引清理失败')
+      }
+      showMessage(`已清理 ${result.result.deletedCount} 条语义索引`, true)
+    } catch (e) {
+      showMessage(String(e), false)
     }
   }
 
@@ -242,7 +427,7 @@ function AISummarySettings({
     setEditingPresetId(preset.id)
     setNewPresetProvider(preset.provider)
     setNewPresetApiKey(preset.apiKey)
-    setNewPresetModel(preset.model)
+    setNewPresetModel(normalizeProviderModel(preset.provider, preset.model))
     setNewPresetBaseURL(preset.baseURL || '')
     setPresetName(preset.name)
     setNewPresetStep('config')
@@ -279,7 +464,7 @@ function AISummarySettings({
         name: presetName.trim(),
         provider: newPresetProvider,
         apiKey: newPresetApiKey,
-        model: newPresetModel,
+        model: normalizeProviderModel(newPresetProvider, newPresetModel),
         baseURL: newPresetBaseURL
       }
 
@@ -307,7 +492,7 @@ function AISummarySettings({
       if (preset) {
         setProvider(preset.provider)
         setApiKey(preset.apiKey)
-        setModel(preset.model)
+        setModel(normalizeProviderModel(preset.provider, preset.model))
         setBaseURL(preset.baseURL || '')
         setCurrentPresetName(preset.name)
         showMessage(`已加载配置: ${preset.name}`, true)
@@ -332,10 +517,11 @@ function AISummarySettings({
     // 先保存当前提供商的配置
     if (provider && (apiKey || model || baseURL)) {
       const { setAiProviderConfig } = await import('../../services/config')
-      await setAiProviderConfig(provider, { apiKey, model, baseURL: baseURL || undefined })
+      const normalizedModel = normalizeProviderModel(provider, model)
+      await setAiProviderConfig(provider, { apiKey, model: normalizedModel, baseURL: baseURL || undefined })
       setProviderConfigs(prev => ({
         ...prev,
-        [provider]: { apiKey, model, baseURL: baseURL || undefined }
+        [provider]: { apiKey, model: normalizedModel, baseURL: baseURL || undefined }
       }))
     }
 
@@ -349,7 +535,7 @@ function AISummarySettings({
     if (savedConfig) {
       // 使用已保存的配置
       setApiKey(savedConfig.apiKey)
-      setModel(savedConfig.model)
+      setModel(normalizeProviderModel(newProvider, savedConfig.model))
       setBaseURL(savedConfig.baseURL || '')
     } else if (newProviderData) {
       // 使用默认配置
@@ -457,6 +643,9 @@ function AISummarySettings({
 
   const currentProvider = providers.find(p => p.id === provider) || providers[0]
   const modelOptions = currentProvider?.models.map(m => ({ value: m, label: m })) || []
+  const embeddingProgressPercent = embeddingProgress?.percent
+    ?? (embeddingProgress?.total ? Math.round(((embeddingProgress.loaded || 0) / embeddingProgress.total) * 100) : 0)
+  const embeddingProfile = embeddingProfiles.find(item => item.id === embeddingProfileId)
   const timeRangeOptions = [
     { value: 1, label: '最近 1 天' },
     { value: 3, label: '最近 3 天' },
@@ -670,6 +859,173 @@ function AISummarySettings({
             设置 AI 分析时获取的最大消息数量（1000-5000）。数量越多，分析越全面，但可能增加 Token 消耗。
           </div>
         </div>
+      </div>
+
+      <h3 className="section-title">本地语义检索</h3>
+      <p className="section-desc">
+        使用 ModelScope/魔塔社区的 BGE 模型在本地生成真实语义向量，用于问 AI 检索聊天记录。模型下载到缓存目录，仅需下载一次。
+      </p>
+
+      <h4 className="subsection-title semantic-vector-subtitle">语义模型版本</h4>
+      <div className="model-type-grid semantic-model-grid">
+        {embeddingProfiles.map(profile => (
+          <label
+            key={profile.id}
+            className={`model-card ${embeddingProfileId === profile.id ? 'active' : ''} ${isDownloadingEmbedding || !profile.enabled ? 'disabled' : ''}`}
+          >
+            <input
+              type="radio"
+              name="aiEmbeddingModelProfile"
+              value={profile.id}
+              checked={embeddingProfileId === profile.id}
+              onChange={() => handleEmbeddingProfileChange(profile.id)}
+              disabled={isDownloadingEmbedding || !profile.enabled}
+            />
+            <div className="model-icon">
+              {profile.dtype === 'q8' ? <Zap size={24} /> : <Layers size={24} />}
+            </div>
+            <div className="model-info">
+              <div className="model-header">
+                <span className="model-name">{profile.displayName}</span>
+                <span className="model-size">{profile.sizeLabel}</span>
+              </div>
+              <span className="model-desc">{profile.enabled ? profile.description : '即将支持'}</span>
+            </div>
+            {embeddingProfileId === profile.id && <div className="model-check"><Check size={14} /></div>}
+          </label>
+        ))}
+      </div>
+
+      <h4 className="subsection-title semantic-vector-subtitle">向量计算模式</h4>
+      <div className="model-type-grid semantic-device-grid">
+        <label className={`model-card ${embeddingDevice === 'cpu' ? 'active' : ''} ${isDownloadingEmbedding ? 'disabled' : ''}`}>
+          <input
+            type="radio"
+            name="aiEmbeddingDevice"
+            value="cpu"
+            checked={embeddingDevice === 'cpu'}
+            onChange={() => handleEmbeddingDeviceChange('cpu')}
+            disabled={isDownloadingEmbedding}
+          />
+          <div className="model-icon"><Cpu size={24} /></div>
+          <div className="model-info">
+            <div className="model-header">
+              <span className="model-name">CPU</span>
+              <span className="model-size">稳定</span>
+            </div>
+            <span className="model-desc">默认模式，兼容性最好，适合后台稳定索引。</span>
+          </div>
+          {embeddingDevice === 'cpu' && <div className="model-check"><Check size={14} /></div>}
+        </label>
+
+        <label className={`model-card ${embeddingDevice === 'dml' ? 'active' : ''} ${isDownloadingEmbedding ? 'disabled' : ''}`}>
+          <input
+            type="radio"
+            name="aiEmbeddingDevice"
+            value="dml"
+            checked={embeddingDevice === 'dml'}
+            onChange={() => handleEmbeddingDeviceChange('dml')}
+            disabled={isDownloadingEmbedding}
+          />
+          <div className="model-icon"><Zap size={24} /></div>
+          <div className="model-info">
+            <div className="model-header">
+              <span className="model-name">GPU DirectML</span>
+              <span className="model-size">实验</span>
+            </div>
+            <span className="model-desc">Windows GPU 加速，失败时自动回退 CPU。</span>
+          </div>
+          {embeddingDevice === 'dml' && <div className="model-check"><Check size={14} /></div>}
+        </label>
+      </div>
+
+      {embeddingDeviceStatus && (
+        <div className="semantic-device-status">
+          <div className={`status-indicator ${embeddingDeviceStatus.effectiveDevice === 'dml' ? 'ready' : 'missing'}`}>
+            {embeddingDeviceStatus.effectiveDevice === 'dml' ? <CheckCircle size={18} /> : <AlertCircle size={18} />}
+            <span>当前计算: {embeddingDeviceStatus.provider}</span>
+          </div>
+          <p>{embeddingDeviceStatus.info}</p>
+        </div>
+      )}
+
+      <div className="stt-model-status semantic-vector-model-status">
+        {embeddingStatus ? (
+          <div className="model-info">
+            <div className={`status-indicator ${embeddingStatus.exists ? 'ready' : 'missing'}`}>
+              {embeddingStatus.exists ? (
+                <>
+                  <CheckCircle size={20} />
+                  <span>语义模型已就绪</span>
+                </>
+              ) : (
+                <>
+                  <AlertCircle size={20} />
+                  <span>语义模型未下载</span>
+                </>
+              )}
+            </div>
+            <p className="model-size">
+              模型大小: {formatBytes(embeddingStatus.sizeBytes)}
+              <span> · {embeddingStatus.dim || embeddingProfile?.dim || 1024} 维</span>
+            </p>
+            <p className="model-path">模型目录: {embeddingStatus.modelDir}</p>
+          </div>
+        ) : (
+          <p>正在检查模型状态...</p>
+        )}
+      </div>
+
+      {isDownloadingEmbedding && (
+        <div className="download-progress semantic-download-progress">
+          <div className="progress-bar">
+            <div className="progress-fill" style={{ width: `${Math.max(3, Math.min(100, embeddingProgressPercent))}%` }} />
+          </div>
+          <span className="progress-text">
+            {embeddingProgress?.percent !== undefined
+              ? `${embeddingProgress.percent.toFixed(1)}%`
+              : (embeddingProgress?.remoteHost ? `连接 ${embeddingProgress.remoteHost}` : '准备中')}
+          </span>
+        </div>
+      )}
+
+      <div className="btn-row semantic-vector-actions">
+        {!embeddingStatus?.exists && (
+          <button
+            className="btn btn-primary"
+            onClick={handleDownloadEmbeddingModel}
+            disabled={isDownloadingEmbedding || embeddingProfile?.enabled === false}
+          >
+            <Download size={16} /> {isDownloadingEmbedding ? '下载中...' : '下载模型'}
+          </button>
+        )}
+        {embeddingStatus?.exists && (
+          <button
+            className="btn btn-danger"
+            onClick={async () => {
+              const modelSize = embeddingStatus.sizeLabel || embeddingProfile?.sizeLabel || '约 100 MB'
+              if (confirm(`确定要清除语义向量模型吗？下次使用需要重新下载 (${modelSize})。`)) {
+                await handleClearEmbeddingModel()
+              }
+            }}
+            disabled={isClearingEmbedding}
+          >
+            <Trash2 size={16} /> 清除模型
+          </button>
+        )}
+        <button
+          className="btn btn-secondary"
+          onClick={() => loadEmbeddingStatus(embeddingProfileId)}
+          disabled={isDownloadingEmbedding}
+        >
+          <RefreshCw size={16} className={isDownloadingEmbedding ? 'spin' : ''} /> 刷新状态
+        </button>
+        <button
+          className="btn btn-secondary"
+          onClick={handleClearSemanticIndex}
+        >
+          <Database size={16} /> 清理语义索引
+        </button>
       </div>
 
       {/* 3. 摘要偏好 */}

@@ -12,10 +12,12 @@ import type {
   McpHealthPayload,
   McpMomentsTimelinePayload,
   McpMessagesPayload,
+  McpKeywordStatisticsPayload,
   McpResolveSessionPayload,
   McpStreamEvent,
   McpSearchMessagesPayload,
   McpSessionContextPayload,
+  McpSessionStatisticsPayload,
   McpSessionsPayload,
   McpStatusPayload,
   McpToolName
@@ -319,6 +321,14 @@ export class McpReadService {
       ...rawArgs,
       includeMediaPaths: rawArgs.includeMediaPaths ?? defaultIncludeMediaPaths
     })
+  }
+
+  async getSessionStatistics(rawArgs: Record<string, unknown>): Promise<McpSessionStatisticsPayload> {
+    return this.callProxy<McpSessionStatisticsPayload>('get_session_statistics', rawArgs)
+  }
+
+  async getKeywordStatistics(rawArgs: Record<string, unknown>): Promise<McpKeywordStatisticsPayload> {
+    return this.callProxy<McpKeywordStatisticsPayload>('get_keyword_statistics', rawArgs)
   }
 
   async streamSearchMessages(
