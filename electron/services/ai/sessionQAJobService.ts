@@ -166,10 +166,12 @@ class SessionQAJobService {
       ? [
           join(process.resourcesPath, 'app.asar.unpacked', 'dist-electron', fileName),
           join(process.resourcesPath, 'dist-electron', fileName),
+          join(__dirname, fileName),
           join(__dirname, '..', '..', fileName),
           join(__dirname, '..', fileName)
         ]
       : [
+          join(__dirname, fileName),
           join(__dirname, '..', '..', fileName),
           join(__dirname, '..', fileName),
           join(app.getAppPath(), 'dist-electron', fileName)
