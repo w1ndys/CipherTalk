@@ -12,6 +12,9 @@ function SplashPage() {
   const [messageIndex, setMessageIndex] = useState(0)
 
   useEffect(() => {
+    // 强制 body 透明（覆盖 main.scss 的主题背景色）
+    document.body.classList.add('splash-transparent')
+
     const readyTimer = setTimeout(() => {
       try {
         // @ts-ignore - splashReady 方法在运行时可用
@@ -30,6 +33,7 @@ function SplashPage() {
     })
 
     return () => {
+      document.body.classList.remove('splash-transparent')
       clearTimeout(readyTimer)
       clearInterval(messageTimer)
       cleanup?.()

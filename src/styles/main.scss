@@ -362,6 +362,12 @@ body {
   user-select: none;
 }
 
+
+// 启动屏窗口：强制纯透明背景（覆盖主题色）
+body.splash-transparent {
+  background: transparent !important;
+}
+
 // 禁止图片拖动
 img {
   -webkit-user-drag: none;
