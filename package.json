@@ -181,7 +181,7 @@
         "to": "release-announcement.json"
       },
       {
-        "from": "skills/ct-mcp-copilot",
+        "from": "resources/builtin-skills/ct-mcp-copilot",
         "to": "builtin-skills/ct-mcp-copilot"
       }
     ],
@@ -198,7 +198,6 @@
     "files": [
       "dist/**/*",
       "dist-electron/**/*",
-      "skills/**/*",
       "!node_modules/**/*.{txt,md,js.map,ts,html}",
       "!node_modules/**/test/**/*",
       "!node_modules/**/docs/**/*",

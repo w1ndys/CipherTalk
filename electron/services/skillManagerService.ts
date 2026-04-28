@@ -62,6 +62,8 @@ function getSkillRoots(): string[] {
     join(process.resourcesPath, 'builtin-skills'),
     join(process.resourcesPath, 'app.asar'),
     join(process.resourcesPath, 'app.asar.unpacked'),
+    join(app.getAppPath(), 'resources', 'builtin-skills'),
+    join(process.cwd(), 'resources', 'builtin-skills'),
     app.getAppPath(),
     process.cwd(),
   ]
