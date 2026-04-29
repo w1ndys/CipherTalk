@@ -104,7 +104,7 @@ export function getNativeSessionQATools(): NativeToolDefinition[] {
       type: 'function',
       function: {
         name: 'read_latest',
-        description: '读取当前会话最近消息。只适合最近进展、寒暄上下文，或其它检索策略都无法提供证据时兜底。',
+        description: '读取当前会话最近若干条消息。只适合没有明确时间词时兜底；如果用户说刚才、刚刚、最近、今天、昨天，应优先用 read_by_time_range。',
         parameters: objectSchema({
           limit: {
             type: 'integer',
@@ -124,7 +124,7 @@ export function getNativeSessionQATools(): NativeToolDefinition[] {
       type: 'function',
       function: {
         name: 'read_by_time_range',
-        description: '按时间范围、关键词或参与者读取当前会话消息。适合用户问题带有昨天、上周、某日期、某人说过什么等范围线索。',
+        description: '按时间范围、关键词或参与者读取当前会话消息。适合用户问题带有刚才、刚刚、最近、今天、昨天、上周、某日期、某人说过什么等范围线索。',
         parameters: objectSchema({
           startTime: {
             type: 'integer',

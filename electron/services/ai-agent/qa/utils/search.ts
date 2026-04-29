@@ -100,7 +100,7 @@ export function normalizeCompactQuestion(value: string): string {
 export function isGenericSearchQuery(value: string): boolean {
   const normalized = normalizeSearchQuery(value).replace(/\s+/g, '')
   if (!normalized) return true
-  return /^(什么|哪个|哪些|什么时候|为什么|怎么|如何|最近|刚刚|刚才|我们|他们|对方|是否|有没有|是不是|可以|看到|知道|消息|聊天|内容|问题|回复|回答)$/.test(normalized)
+  return /^(什么|哪个|哪些|什么时候|为什么|怎么|如何|最近|刚刚|刚才|我们|他们|对方|是否|有没有|是不是|可以|看到|知道|消息|聊天|内容|问题|回复|回答|你好|您好|哈喽|嗨|谢谢|感谢|好的|收到|明白|了解|再见|拜拜)$/.test(normalized)
 }
 
 /**

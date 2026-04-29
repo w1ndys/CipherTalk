@@ -15,6 +15,14 @@ export interface IntentPattern {
 
 // ─── 统计 / 计数 类意图 ─────────────────────────────────────
 
+// ─── 直接回答 / 闲聊 类意图 ─────────────────────────────────
+
+export const DIRECT_ANSWER_PATTERNS: IntentPattern[] = [
+  { name: '寒暄', pattern: /^(你好|您好|hi|hello|hey|哈喽|嗨|在吗|早上好|上午好|中午好|下午好|晚上好|晚安)[!！。.\s]*$/i },
+  { name: '感谢确认', pattern: /^(谢谢|感谢|多谢|辛苦了|好的|好|ok|收到|明白|了解|可以|行|嗯|嗯嗯|再见|拜拜)[!！。.\s]*$/i },
+  { name: '能力询问', pattern: /^(你是谁|你能做什么|你可以做什么|你会什么|怎么用|如何使用|能帮我什么|你有什么功能)[?？!！。.\s]*$/i }
+]
+
 /** 统计计数类关键词 */
 export const STATS_PATTERNS: IntentPattern[] = [
   { name: '发言排行', pattern: /谁.*(最多|最少|发言|说话|次数)/ },

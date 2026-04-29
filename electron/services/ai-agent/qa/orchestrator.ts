@@ -12,7 +12,8 @@ import type {
   ContextWindow,
   SessionQAToolCall,
   IntentRoute,
-  NativeToolExecutionResult
+  NativeToolExecutionResult,
+  ToolObservation
 } from './types'
 import {
   MAX_CONTEXT_MESSAGES,
@@ -504,12 +505,23 @@ async function dispatchToolAction(ctx: AgentContext, action: ToolLoopAction): Pr
   }
 }
 
-function stringifyAssistantContent(content: OpenAI.Chat.ChatCompletionMessage['content'] | null | undefined): string {
+type AssistantContentPart = {
+  text?: unknown
+}
+
+function stringifyAssistantContent(content: unknown): string {
   if (!content) return ''
   if (typeof content === 'string') return stripThinkBlocks(content).trim()
   if (Array.isArray(content)) {
     return content
-      .map((part: any) => typeof part?.text === 'string' ? part.text : '')
+      .map((part) => {
+        if (typeof part === 'string') return part
+        if (part && typeof part === 'object') {
+          const text = (part as AssistantContentPart).text
+          return typeof text === 'string' ? text : ''
+        }
+        return ''
+      })
       .join('')
       .trim()
   }
@@ -594,7 +606,7 @@ async function executeNativeToolAction(
       args,
       summary,
       observations: [{ title: '开始回答', detail: summary }],
-      toolCalls: [],
+      toolCalls: [] as SessionQAToolCall[],
       evidenceQuality: ctx.evidenceQuality,
       state: buildNativeToolState(ctx)
     }
@@ -604,8 +616,8 @@ async function executeNativeToolAction(
   const beforeToolCallCount = ctx.toolCalls.length
   await dispatchToolAction(ctx, action)
 
-  const observations = ctx.observations.slice(beforeObservationCount)
-  const toolCalls = ctx.toolCalls.slice(beforeToolCallCount)
+  const observations: ToolObservation[] = ctx.observations.slice(beforeObservationCount)
+  const toolCalls: SessionQAToolCall[] = ctx.toolCalls.slice(beforeToolCallCount)
   const summary = observations.map((item) => `${item.title}: ${item.detail}`).join('\n\n')
     || toolCalls.map((item) => item.summary).join('\n')
     || `${action.action} 执行完成。`
@@ -638,6 +650,48 @@ function appendLocalFallbackResultMessage(
     role: 'user',
     content: `系统已自动执行本地补充工具 ${action.action}，结果如下。请基于这些观察继续：\n${compactToolObservationForModel(result)}`
   })
+}
+
+async function answerDirectlyWithoutTools(
+  ctx: AgentContext,
+  historyText: string,
+  maxTokens: number
+): Promise<SessionQAAgentResult> {
+  const promptText = `用户当前问题：
+${ctx.question}
+
+多轮上下文：
+${historyText || '无'}
+
+请直接、简洁地用中文回应。寒暄、确认、感谢不需要读取聊天记录；如果用户询问能力，可以说明你能查询和分析当前会话的聊天记录，但不要编造具体聊天事实。`
+  ctx.lastAgentPrompt = promptText
+
+  const messages: OpenAI.Chat.ChatCompletionMessageParam[] = [
+    { role: 'system', content: '你是 CipherTalk 的本地聊天记录问答助手。当前输入不需要工具或聊天记录证据，请自然回应。' },
+    { role: 'user', content: promptText }
+  ]
+
+  emitProgress(ctx.options, { id: 'answer', stage: 'answer', status: 'running', title: '生成回答', detail: '直接回答，无需调用工具' })
+  const thinkFilterState = { isThinking: false }
+  await ctx.options.provider.streamChat(messages, { model: ctx.options.model, temperature: 0.4, maxTokens, enableThinking: false }, (chunk) => {
+    const visibleChunk = filterThinkChunk(chunk, thinkFilterState)
+    if (!visibleChunk) return
+    ctx.answerText += visibleChunk
+    ctx.options.onChunk(visibleChunk)
+  })
+
+  const finalAnswerText = stripThinkBlocks(ctx.answerText)
+  ctx.trackAnswerTokens(promptText, finalAnswerText)
+  emitProgress(ctx.options, { id: 'answer', stage: 'answer', status: 'completed', title: '生成回答', detail: '回答生成完成' })
+  ctx.logger.lifecycle('Agent 直接回答完成', { ...ctx.getTokenUsage() })
+
+  return {
+    answerText: finalAnswerText,
+    evidenceRefs: [],
+    toolCalls: [],
+    promptText,
+    tokenUsage: ctx.getTokenUsage()
+  }
 }
 
 // ─── 普通文本自动推进：根据当前状态选择下一个工具 ────────
@@ -696,7 +750,9 @@ export async function answerSessionQuestionWithAgent(
   const structuredContext = buildStructuredContext(options.structuredAnalysis)
   const historyText = buildHistoryContext(options.history)
   const route = enforceConcreteEvidenceRoute(routeFromHeuristics(options.question, options.summaryText), options.question)
-  const contactMap = await loadSessionContactMap(options.sessionId)
+  const contactMap = route.intent === 'direct_answer' && !route.needsSearch
+    ? new Map<string, string>()
+    : await loadSessionContactMap(options.sessionId)
   if (options.sessionName && !contactMap.has(options.sessionId)) {
     contactMap.set(options.sessionId, options.sessionName)
   }
@@ -704,6 +760,11 @@ export async function answerSessionQuestionWithAgent(
 
   const agentDecisionMaxTokens = clampTokenBudget(options.agentDecisionMaxTokens, DEFAULT_AGENT_DECISION_MAX_TOKENS, 512, MAX_AGENT_DECISION_MAX_TOKENS)
   const agentAnswerMaxTokens = clampTokenBudget(options.agentAnswerMaxTokens, DEFAULT_AGENT_ANSWER_MAX_TOKENS, 512, MAX_AGENT_ANSWER_MAX_TOKENS)
+
+  if (route.intent === 'direct_answer' && !route.needsSearch) {
+    return answerDirectlyWithoutTools(ctx, historyText, Math.min(agentAnswerMaxTokens, 1024))
+  }
+
   const nativeTools = getNativeSessionQATools()
   const initialAgentPrompt = buildAutonomousAgentPrompt({
     sessionName: ctx.sessionName, question: ctx.question, route,
@@ -719,7 +780,7 @@ export async function answerSessionQuestionWithAgent(
   const toolLoopMessages: OpenAI.Chat.ChatCompletionMessageParam[] = [
     {
       role: 'system',
-      content: '你是 CipherTalk 的本地聊天记录问答 Agent。必须使用 OpenAI-compatible 原生 tools/tool_calls 调用工具；不要输出 JSON action。证据不足时继续调用工具或明确说明证据不足。'
+      content: '你是 CipherTalk 的本地聊天记录问答 Agent。你可以使用 OpenAI-compatible 原生 tools/tool_calls，也可以在问题不需要聊天记录证据时直接回答；不要输出 JSON action。事实类问题证据不足时继续调用工具或明确说明证据不足。'
     },
     {
       role: 'user',
@@ -812,6 +873,17 @@ export async function answerSessionQuestionWithAgent(
           const evidenceQuality = ctx.evidenceQuality
           const conclusiveSearchFailure = hasConclusiveSearchFailure(ctx.searchPayloads)
 
+          if (action.action === 'read_latest' && route.timeRange) {
+            action = {
+              action: 'read_by_time_range',
+              startTime: route.timeRange.startTime,
+              endTime: route.timeRange.endTime,
+              label: route.timeRange.label,
+              limit: action.limit,
+              reason: action.reason || '问题包含时间线索，改为按时间范围读取'
+            }
+          }
+
           if (evidenceQuality === 'none' && ctx.toolCallsUsed >= MAX_TOOL_CALLS - 1 && action.action !== 'read_latest' && action.action !== 'answer') {
             action = { action: 'read_latest', limit: MAX_CONTEXT_MESSAGES, reason: '工具预算即将耗尽' }
           }
@@ -899,7 +971,7 @@ export async function answerSessionQuestionWithAgent(
     }
 
     // ── 循环结束后的兜底读取 ──
-    if (!ctx.hasEvidence && ctx.toolCallsUsed < MAX_TOOL_CALLS) {
+    if (route.intent !== 'direct_answer' && !ctx.hasEvidence && ctx.toolCallsUsed < MAX_TOOL_CALLS) {
       await executeReadLatest(ctx, { action: 'read_latest', limit: MAX_CONTEXT_MESSAGES, reason: '回答前仍缺少证据，读取最近消息兜底' })
     }
   } catch (error) {

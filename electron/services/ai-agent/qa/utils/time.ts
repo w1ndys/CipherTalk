@@ -50,6 +50,26 @@ function shiftDays(date: Date, days: number): Date {
   return next
 }
 
+function rangeLastMinutes(now: Date, minutes: number, label: string): TimeRangeHint {
+  const start = new Date(now)
+  start.setMinutes(start.getMinutes() - minutes)
+  return {
+    startTime: toUnixSeconds(start),
+    endTime: toUnixSeconds(now),
+    label
+  }
+}
+
+function rangeLastHours(now: Date, hours: number, label: string): TimeRangeHint {
+  const start = new Date(now)
+  start.setHours(start.getHours() - hours)
+  return {
+    startTime: toUnixSeconds(start),
+    endTime: toUnixSeconds(now),
+    label
+  }
+}
+
 /**
  * 根据问题中的时段词细化时间范围
  */
@@ -97,7 +117,13 @@ export function inferTimeRangeFromQuestion(question: string, now = new Date()): 
   const normalized = question.replace(/\s+/g, '')
   let range: TimeRangeHint | undefined
 
-  if (/前天/.test(normalized)) {
+  if (/刚刚|刚才|方才|刚聊|刚说|刚发|刚问/.test(normalized)) {
+    range = rangeLastMinutes(now, 30, '刚才30分钟')
+  } else if (/不久前|这会儿|方才/.test(normalized)) {
+    range = rangeLastHours(now, 1, '最近1小时')
+  } else if (/最近|近来|当前|现在|最新/.test(normalized)) {
+    range = rangeLastHours(now, 24, '最近24小时')
+  } else if (/前天/.test(normalized)) {
     const date = shiftDays(now, -2)
     range = { startTime: toUnixSeconds(startOfDay(date)), endTime: toUnixSeconds(endOfDay(date)), label: '前天' }
   } else if (/昨天|昨日/.test(normalized)) {

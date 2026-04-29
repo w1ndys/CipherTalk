@@ -17,6 +17,7 @@ import {
 } from '../utils/search'
 import {
   matchesAny,
+  DIRECT_ANSWER_PATTERNS,
   STATS_PATTERNS,
   SUMMARY_PATTERNS,
   MEDIA_PATTERNS,
@@ -35,7 +36,7 @@ function buildDefaultPreferredPlan(intent: SessionQAIntentType): ToolLoopAction[
     case 'summary_answerable':
       return ['read_summary_facts', 'answer']
     case 'recent_status':
-      return ['read_summary_facts', 'get_session_statistics', 'read_latest', 'answer']
+      return ['read_by_time_range', 'aggregate_messages', 'answer']
     case 'time_range':
       return ['read_by_time_range', 'aggregate_messages', 'answer']
     case 'participant_focus':
@@ -57,6 +58,19 @@ function buildDefaultPreferredPlan(intent: SessionQAIntentType): ToolLoopAction[
  * 基于启发式规则进行意图路由
  */
 export function routeFromHeuristics(question: string, summaryText?: string): IntentRoute {
+  const normalizedQuestion = question.trim()
+  if (matchesAny(normalizedQuestion, DIRECT_ANSWER_PATTERNS)) {
+    return {
+      intent: 'direct_answer',
+      confidence: 'high',
+      reason: '寒暄/确认/能力询问，不需要读取聊天记录',
+      participantHints: [],
+      searchQueries: [],
+      needsSearch: false,
+      preferredPlan: ['answer']
+    }
+  }
+
   const timeRange = inferTimeRangeFromQuestion(question)
   const hasSummary = Boolean(stripThinkBlocks(summaryText || '').trim())
   const queries = mergeSearchQueriesForQuestion(question, extractHeuristicQueries(question))

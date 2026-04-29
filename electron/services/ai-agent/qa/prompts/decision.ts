@@ -24,7 +24,7 @@ function buildAvailableToolSchemaText(): string {
 3. read_context args={"hitId":"h1","beforeLimit":6,"afterLimit":6}
    围绕 search_messages 命中读取前后文。必须已有命中 h1/h2 后再用。
 4. read_latest args={"limit":40}
-   读取最近消息。只适合最近进展或其它工具无法提供线索时兜底。
+   读取最近若干条消息。只适合没有明确时间词时兜底；如果问题有“刚才/刚刚/最近/今天/昨天”等时间词，优先 read_by_time_range，根据时间自主判断，然后对消息进行取舍。
 5. read_by_time_range args={"startTime":秒级时间戳,"endTime":秒级时间戳,"label":"昨天晚上","limit":80,"keyword":"可选关键词","participantName":"可选昵称"}
    按时间/关键词/参与者读取消息。
 6. resolve_participant args={"name":"张三"}
@@ -122,6 +122,7 @@ ${buildAvailableToolSchemaText()}
 - 使用 API 提供的 tools/tool_calls，不要输出 JSON action，不要把工具调用过程写成自然语言给用户。
 - 寒暄、感谢、能力询问等不需要聊天记录的问题，可以直接用普通文本回答，不要调用工具。
 - 事实类、证据类、原话类、是否提到某词、统计类问题，必须先调用工具取得证据；证据足够后必须停止检索并调用 answer。
+- 用户问“刚才/刚刚/最近/今天/昨天在聊什么”时，优先按已推断时间范围调用 read_by_time_range，再 aggregate_messages，总结主题；不要直接 read_latest。
 - 如果证据质量是 sufficient，或已知搜索命中已经直接包含问题所问答案，不要再 search_messages、read_context、read_latest 或 aggregate_messages，立即调用 answer。
 - 如果已读取上下文消息数很多（接近或超过 40 条），除非问题明确要求统计全量，否则不要继续扩大上下文，调用 answer 用现有证据回答。
 - 证据质量为 none 时，不要直接回答；优先 search_messages、get_session_statistics、get_keyword_statistics、read_by_time_range 或 read_summary_facts。例外：工具观察明确为 content_not_found 时，应调用 answer 或直接回答证据不足。
