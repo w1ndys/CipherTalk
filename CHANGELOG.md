@@ -10,6 +10,31 @@
 ### 变更
 - 暂无
 
+## [5.0.4] - 2026-05-07
+
+### 新增
+- 新增节流滚动钩子 `useThrottledScroll`，优化消息列表滚动性能
+- 新增技能处理器（`skillHandlers`）与导出请求验证脚本
+- 新增系统与窗口管理 IPC 处理器：文件操作、外壳打开、窗口管理器（启动屏/聊天/动态/群分析等）
+
+### 重构
+- 聊天页模块化重构：ChatPage.tsx（5000+ 行）拆分为组件、hooks、utils，ChatPage.scss 拆为 9 个 partial
+- Electron 主进程模块化拆分：IPC handler 按功能独立（ai/chat/media/stt/window/sns 等），引入窗口管理器
+- 可读性优化：重命名 WhatsNewModal 和 ChatPage 组件样式类名
+- AppDatePicker 替换 DateRangePicker，集成 JumpToDateDialog，简化日期选择流程
+- 优化 AI 数据库查询与向量加载逻辑，改进历史记录日志输出
+
+### 性能
+- video:readFile 同步改异步，避免大视频文件读取阻塞主线程
+- 移除 dataManagement:updateAvailable 重复监听，统一由 startup 广播
+- chatService.checkUpdates 加并发保护，防止定时同步与强制刷新重入
+- 后台同步首次扫描延后执行，减少启动期磁盘 IO 竞争
+- 降低主进程同步卡顿，减少事件循环阻塞
+
+### 修复
+- 修复 macOS 打包后 WCDB.framework dyld 加载失败问题
+- 修复 MCP 错误 schema 校验问题
+
 ## [5.0.3] - 2026-05-06
 
 ### 修复
