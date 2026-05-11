@@ -85,6 +85,7 @@ function ChatPage(_props: ChatPageProps) {
   const scrollToBottomAfterRenderRef = useRef(false)
   const pendingPrependAnchorRef = useRef<ScrollAnchor | null>(null)
   const currentSessionIdRef = useRef<string | null>(null)
+  const messageLoadSeqRef = useRef(0)
   const lastUpdateTimeRef = useRef<number>(0)
   const updateTimerRef = useRef<NodeJS.Timeout | null>(null)
   const updateStatusTimerRef = useRef<NodeJS.Timeout | null>(null)
@@ -736,6 +737,7 @@ function ChatPage(_props: ChatPageProps) {
 
   // 加载消息
   const loadMessages = async (sessionId: string, offset = 0) => {
+    const loadSeq = ++messageLoadSeqRef.current
     const anchor = offset > 0 ? captureScrollAnchor() : null
     if (offset === 0) {
       setLoadingMessages(true)
@@ -779,6 +781,10 @@ function ChatPage(_props: ChatPageProps) {
           typeof oldestLoadedMessage.localId === 'number' ? oldestLoadedMessage.localId : undefined
         )
         : await window.electronAPI.chat.getMessages(sessionId, offset, 50)
+
+      if (currentSessionIdRef.current !== sessionId || loadSeq !== messageLoadSeqRef.current) {
+        return
+      }
 
       if (result.success && result.messages) {
         const msgs = result.messages
@@ -876,9 +882,11 @@ function ChatPage(_props: ChatPageProps) {
     if (session.username === currentSessionId) {
       // 如果是当前会话，重新加载消息（用于刷新）
       setCurrentOffset(0)
+      currentSessionIdRef.current = session.username
       loadMessages(session.username, 0)
       return
     }
+    currentSessionIdRef.current = session.username
     setCurrentSession(session.username)
     setCurrentOffset(0)
     loadMessages(session.username, 0)
@@ -1125,6 +1133,7 @@ function ChatPage(_props: ChatPageProps) {
         }
 
         const messagesResult = await window.electronAPI.chat.getNewMessages(currentId, minTime, 1000)
+        if (currentSessionIdRef.current !== currentId) return
         if (!messagesResult.success || !messagesResult.messages || messagesResult.messages.length === 0) return
 
         const latestMessages = useChatStore.getState().messages || []
@@ -1642,6 +1651,7 @@ function ChatPage(_props: ChatPageProps) {
 
         // 获取最新 50 条消息（增量获取开销小）
         const messagesResult = await window.electronAPI.chat.getMessages(currentId, 0, 50)
+        if (currentSessionIdRef.current !== currentId) return
 
         if (messagesResult.success && messagesResult.messages) {
           const fetchedMessages = messagesResult.messages

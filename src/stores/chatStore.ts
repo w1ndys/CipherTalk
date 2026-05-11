@@ -1,6 +1,23 @@
 import { create } from 'zustand'
 import type { ChatSession, Message, Contact } from '../types/models'
 
+function messageKey(message: Message): string {
+  return `${message.serverId}-${message.localId}-${message.createTime}-${message.sortSeq}`
+}
+
+function sortMessagesAsc(messages: Message[]): Message[] {
+  return [...messages].sort((a, b) => {
+    const aSortSeq = Number(a.sortSeq || 0)
+    const bSortSeq = Number(b.sortSeq || 0)
+    if (aSortSeq > 0 && bSortSeq > 0 && aSortSeq !== bSortSeq) {
+      return aSortSeq - bSortSeq
+    }
+    return Number(a.createTime || 0) - Number(b.createTime || 0) ||
+      Number(a.localId || 0) - Number(b.localId || 0) ||
+      aSortSeq - bSortSeq
+  })
+}
+
 export interface ChatState {
   // 连接状态
   isConnected: boolean
@@ -83,18 +100,18 @@ export const useChatStore = create<ChatState>((set, get) => ({
   setLoadingSessions: (loading) => set({ isLoadingSessions: loading }),
 
   setMessages: (messages) => set((state) => ({
-    messages: typeof messages === 'function' ? messages(state.messages) : messages
+    messages: sortMessagesAsc(typeof messages === 'function' ? messages(state.messages) : messages)
   })),
 
-  appendMessages: (newMessages, prepend = false) => set((state) => {
+  appendMessages: (newMessages, _prepend = false) => set((state) => {
     // 使用与后端一致的多维 Key (serverId + localId + createTime + sortSeq) 进行去重
     const existingKeys = new Set(
-      state.messages.map(m => `${m.serverId}-${m.localId}-${m.createTime}-${m.sortSeq}`)
+      state.messages.map(messageKey)
     )
 
     // 过滤掉已存在的消息
     const uniqueNewMessages = newMessages.filter(
-      msg => !existingKeys.has(`${msg.serverId}-${msg.localId}-${msg.createTime}-${msg.sortSeq}`)
+      msg => !existingKeys.has(messageKey(msg))
     )
 
     // 如果没有新消息，直接返回原状态
@@ -103,9 +120,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
     }
 
     return {
-      messages: prepend
-        ? [...uniqueNewMessages, ...state.messages]
-        : [...state.messages, ...uniqueNewMessages]
+      messages: sortMessagesAsc([...state.messages, ...uniqueNewMessages])
     }
   }),
 

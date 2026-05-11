@@ -369,9 +369,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   // 图片解密（新 API）
   image: {
-    decrypt: (payload: { sessionId?: string; imageMd5?: string; imageDatName?: string; force?: boolean }) =>
+    decrypt: (payload: { sessionId?: string; imageMd5?: string; imageDatName?: string; createTime?: number; force?: boolean }) =>
       ipcRenderer.invoke('image:decrypt', payload),
-    resolveCache: (payload: { sessionId?: string; imageMd5?: string; imageDatName?: string }) =>
+    resolveCache: (payload: { sessionId?: string; imageMd5?: string; imageDatName?: string; createTime?: number }) =>
       ipcRenderer.invoke('image:resolveCache', payload),
     onUpdateAvailable: (callback: (data: { cacheKey: string; imageMd5?: string; imageDatName?: string }) => void) => {
       ipcRenderer.on('image:updateAvailable', (_, data) => callback(data))

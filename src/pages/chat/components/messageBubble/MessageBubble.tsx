@@ -169,6 +169,7 @@ function MessageBubble({ message, session, showTime, myAvatarUrl, isGroupChat, h
           sessionId: session.username,
           imageMd5: message.imageMd5 || undefined,
           imageDatName: message.imageDatName,
+          createTime: message.createTime,
           force: forceUpdate
         })
 
@@ -705,7 +706,8 @@ function MessageBubble({ message, session, showTime, myAvatarUrl, isGroupChat, h
           const result = await window.electronAPI.image.resolveCache({
             sessionId: session.username,
             imageMd5: message.imageMd5 || undefined,
-            imageDatName: message.imageDatName
+            imageDatName: message.imageDatName,
+            createTime: message.createTime
           })
           if (cancelled) return { cancelled: true }
           if (result.success && result.localPath) {
@@ -723,6 +725,7 @@ function MessageBubble({ message, session, showTime, myAvatarUrl, isGroupChat, h
             sessionId: session.username,
             imageMd5: message.imageMd5 || undefined,
             imageDatName: message.imageDatName,
+            createTime: message.createTime,
             force: false
           })
           if (cancelled) return { cancelled: true }
@@ -823,7 +826,8 @@ function MessageBubble({ message, session, showTime, myAvatarUrl, isGroupChat, h
       const payload = {
         sessionId: session.username,
         imageMd5: message.imageMd5 || undefined,
-        imageDatName: message.imageDatName
+        imageDatName: message.imageDatName,
+        createTime: message.createTime
       }
 
       try {

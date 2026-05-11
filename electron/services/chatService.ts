@@ -120,9 +120,14 @@ function compareMessageCursorAsc(
   a: Pick<Message, 'sortSeq' | 'createTime' | 'localId'>,
   b: Pick<Message, 'sortSeq' | 'createTime' | 'localId'>
 ): number {
-  return Number(a.sortSeq || 0) - Number(b.sortSeq || 0)
-    || Number(a.createTime || 0) - Number(b.createTime || 0)
+  const aSortSeq = Number(a.sortSeq || 0)
+  const bSortSeq = Number(b.sortSeq || 0)
+  if (aSortSeq > 0 && bSortSeq > 0 && aSortSeq !== bSortSeq) {
+    return aSortSeq - bSortSeq
+  }
+  return Number(a.createTime || 0) - Number(b.createTime || 0)
     || Number(a.localId || 0) - Number(b.localId || 0)
+    || aSortSeq - bSortSeq
 }
 
 function compareMessageCursorDesc(
@@ -130,6 +135,10 @@ function compareMessageCursorDesc(
   b: Pick<Message, 'sortSeq' | 'createTime' | 'localId'>
 ): number {
   return compareMessageCursorAsc(b, a)
+}
+
+function messageIdentityKey(msg: Pick<Message, 'serverId' | 'localId' | 'createTime' | 'sortSeq'>): string {
+  return `${msg.serverId}-${msg.localId}-${msg.createTime}-${msg.sortSeq}`
 }
 
 // 表情包缓存
@@ -857,13 +866,121 @@ class ChatService extends EventEmitter {
     return null
   }
 
+  private coerceRowNumber(value: any, fallback = 0): number {
+    if (value === null || value === undefined || value === '') return fallback
+    if (typeof value === 'number') return Number.isFinite(value) ? value : fallback
+    if (typeof value === 'bigint') return Number(value)
+    const text = String(value).trim()
+    if (!text) return fallback
+    const parsed = Number(text)
+    return Number.isFinite(parsed) ? parsed : fallback
+  }
+
+  private coerceRowString(value: any): string | undefined {
+    if (value === null || value === undefined) return undefined
+    if (Buffer.isBuffer(value)) return value.toString('utf-8')
+    if (value instanceof Uint8Array) return Buffer.from(value).toString('utf-8')
+    const text = String(value).trim()
+    return text || undefined
+  }
+
+  private isMessageVisibleForSession(sessionId: string, msg: Message): boolean {
+    const target = String(sessionId || '').trim()
+    if (!target) return true
+    if (target.includes('@chatroom')) return true
+    const sender = String(msg.senderUsername || '').trim()
+    if (!sender || sender === target) return true
+    if (msg.isSend === 1) return true
+    console.warn(`[ChatService] 过滤疑似串会话消息: sessionId=${target}, sender=${sender}, localId=${msg.localId}, createTime=${msg.createTime}`)
+    return false
+  }
+
+  private normalizeMessagesForUi(messages: Message[], sessionId: string, limit?: number): { messages: Message[]; hasExtra: boolean } {
+    const seen = new Set<string>()
+    const normalized = messages
+      .filter(msg => this.isMessageVisibleForSession(sessionId, msg))
+      .sort(compareMessageCursorDesc)
+      .filter(msg => {
+        const key = messageIdentityKey(msg)
+        if (seen.has(key)) return false
+        seen.add(key)
+        return true
+      })
+
+    const takeLimit = limit && limit > 0 ? limit : normalized.length
+    const page = normalized.slice(0, takeLimit).reverse()
+    return { messages: page, hasExtra: normalized.length > takeLimit }
+  }
+
+  private updateSessionCursorFromPage(sessionId: string, page: Message[]): void {
+    if (page.length === 0) return
+    const latestMsg = page[page.length - 1]
+    const currentCursor = this.sessionCursor.get(sessionId) || 0
+    if (latestMsg.sortSeq > currentCursor) {
+      this.sessionCursor.set(sessionId, latestMsg.sortSeq)
+    }
+  }
+
+  private async getMessagesViaNativeCursor(
+    sessionId: string,
+    limit: number
+  ): Promise<{ success: boolean; messages?: Message[]; hasMore?: boolean; error?: string }> {
+    const batchSize = Math.max(limit + 20, 80)
+    const nativeOpen = await wcdbService.openMessageCursor(sessionId, batchSize, false, 0, 0)
+    if (!nativeOpen.success || !nativeOpen.cursor) {
+      return { success: false, error: nativeOpen.error || '打开消息游标失败' }
+    }
+
+    try {
+      const collected: Message[] = []
+      let cursorHasMore = false
+      let attempts = 0
+
+      while (collected.length < limit + 1 && attempts < 5) {
+        attempts += 1
+        const batch = await wcdbService.fetchMessageBatch(nativeOpen.cursor)
+        if (!batch.success) {
+          return { success: false, error: batch.error || '获取消息批次失败' }
+        }
+
+        const rows = Array.isArray(batch.rows) ? batch.rows : []
+        cursorHasMore = batch.hasMore === true
+        if (rows.length === 0) break
+
+        for (const row of rows) {
+          const msg = this.rowToMessage(row)
+          if (this.isMessageVisibleForSession(sessionId, msg)) {
+            collected.push(msg)
+          }
+        }
+
+        if (!cursorHasMore) break
+      }
+
+      const normalized = this.normalizeMessagesForUi(collected, sessionId, limit)
+      this.updateSessionCursorFromPage(sessionId, normalized.messages)
+      return {
+        success: true,
+        messages: normalized.messages,
+        hasMore: normalized.hasExtra || cursorHasMore
+      }
+    } finally {
+      await wcdbService.closeMessageCursor(nativeOpen.cursor).catch(() => undefined)
+    }
+  }
+
   private rowToMessage(row: any): Message {
     const content = this.decodeMessageContent(
-      row.message_content ?? row.messageContent ?? row.rawContent ?? row.content,
-      row.compress_content ?? row.compressContent
+      this.getRowField(row, ['message_content', 'messageContent', 'rawContent', 'raw_content', 'content', 'Content']),
+      this.getRowField(row, ['compress_content', 'compressContent', 'compressedContent', 'CompressContent'])
     )
-    const localType = row.local_type || row.localType || row.type || 1
-    const senderUsername = row.sender_username || row.senderUsername || row.sender || row.talker || row.src || null
+    const localType = this.coerceRowNumber(
+      this.getRowField(row, ['local_type', 'localType', 'type', 'Type', 'msg_type', 'msgType', 'MsgType', 'message_type', 'messageType', 'WCDB_CT_local_type']),
+      1
+    )
+    const senderUsername = this.coerceRowString(
+      this.getRowField(row, ['sender_username', 'senderUsername', 'sender', 'talker', 'src'])
+    ) || null
     const isSend = this.resolveRowIsSend(row, senderUsername)
 
     let emojiCdnUrl: string | undefined
@@ -888,8 +1005,29 @@ class ChatService extends EventEmitter {
       emojiProductId = emojiInfo.productId
     } else if (localType === 3 && content) {
       const imageInfo = this.parseImageInfo(content)
-      imageMd5 = imageInfo.md5
-      imageDatName = this.parseImageDatNameFromRow(row)
+      imageMd5 = this.coerceRowString(this.getRowField(row, [
+        'imageMd5',
+        'image_md5',
+        'md5',
+        'MD5',
+        'cdnthumbmd5',
+        'cdnThumbMd5',
+        'thumbfullmd5',
+        'thumbFullMd5',
+        'fullmd5',
+        'fullMd5'
+      ])) || imageInfo.md5
+      imageDatName = this.coerceRowString(this.getRowField(row, [
+        'imageDatName',
+        'image_dat_name',
+        'datName',
+        'dat_name',
+        'fileName',
+        'file_name',
+        'filename',
+        'path',
+        'filePath'
+      ])) || this.parseImageDatNameFromRow(row)
       isLivePhoto = imageInfo.isLivePhoto
     } else if (localType === 43 && content) {
       videoMd5 = this.parseVideoMd5(content)
@@ -936,14 +1074,14 @@ class ChatService extends EventEmitter {
     }
 
     return {
-      localId: row.local_id || row.localId || row.id || row.ID || 0,
-      serverId: row.server_id || row.serverId || row.MsgSvrID || row.msgSvrId || 0,
+      localId: this.coerceRowNumber(this.getRowField(row, ['local_id', 'localId', 'id', 'ID']), 0),
+      serverId: this.coerceRowNumber(this.getRowField(row, ['server_id', 'serverId', 'MsgSvrID', 'msgSvrId']), 0),
       localType,
-      createTime: row.create_time || row.createTime || row.CreateTime || 0,
-      sortSeq: row.sort_seq || row.sortSeq || row.sequence || 0,
+      createTime: this.coerceRowNumber(this.getRowField(row, ['create_time', 'createTime', 'CreateTime']), 0),
+      sortSeq: this.coerceRowNumber(this.getRowField(row, ['sort_seq', 'sortSeq', 'sequence', 'Sequence']), 0),
       isSend,
       senderUsername,
-      parsedContent: row.parsedContent || this.parseMessageContent(content, localType),
+      parsedContent: this.coerceRowString(this.getRowField(row, ['parsedContent', 'parsed_content'])) || this.parseMessageContent(content, localType),
       rawContent: content,
       emojiCdnUrl: row.emojiCdnUrl || emojiCdnUrl,
       emojiMd5: row.emojiMd5 || emojiMd5,
@@ -953,8 +1091,8 @@ class ChatService extends EventEmitter {
       quotedImageMd5: row.quotedImageMd5 || quotedImageMd5,
       quotedEmojiMd5: row.quotedEmojiMd5 || quotedEmojiMd5,
       quotedEmojiCdnUrl: row.quotedEmojiCdnUrl || quotedEmojiCdnUrl,
-      imageMd5: row.imageMd5 || imageMd5,
-      imageDatName: row.imageDatName || imageDatName,
+      imageMd5,
+      imageDatName,
       isLivePhoto: row.isLivePhoto ?? isLivePhoto,
       videoMd5: row.videoMd5 || videoMd5,
       videoDuration: row.videoDuration || videoDuration,
@@ -981,58 +1119,21 @@ class ChatService extends EventEmitter {
       const normalizedLimit = Math.max(1, Math.min(500, Math.floor(Number(limit) || 50)))
 
       if (Math.max(0, Math.floor(Number(offset) || 0)) === 0) {
-        const nativeDirect = await wcdbService.getNativeMessages(sessionId, normalizedLimit + 1, 0)
-        if (nativeDirect.success && nativeDirect.rows) {
-          const seen = new Set<string>()
-          const messages = nativeDirect.rows
-            .map(row => this.rowToMessage(row))
-            .sort(compareMessageCursorDesc)
-            .filter(msg => {
-              const key = `${msg.serverId}-${msg.localId}-${msg.createTime}-${msg.sortSeq}`
-              if (seen.has(key)) return false
-              seen.add(key)
-              return true
-            })
-          const page = messages.slice(0, normalizedLimit).reverse()
-          if (page.length > 0) {
-            const latestMsg = page[page.length - 1]
-            const currentCursor = this.sessionCursor.get(sessionId) || 0
-            if (latestMsg.sortSeq > currentCursor) {
-              this.sessionCursor.set(sessionId, latestMsg.sortSeq)
-            }
-          }
-          return { success: true, messages: page, hasMore: messages.length > normalizedLimit }
+        const nativeCursor = await this.getMessagesViaNativeCursor(sessionId, normalizedLimit)
+        if (nativeCursor.success) {
+          return nativeCursor
         }
 
-        const nativeOpen = await wcdbService.openMessageCursor(sessionId, normalizedLimit + 1, false, 0, 0)
-        if (nativeOpen.success && nativeOpen.cursor) {
-          try {
-            const batch = await wcdbService.fetchMessageBatch(nativeOpen.cursor)
-            if (batch.success && batch.rows) {
-              const seen = new Set<string>()
-              const messages = batch.rows
-                .map(row => this.rowToMessage(row))
-                .sort(compareMessageCursorDesc)
-                .filter(msg => {
-                  const key = `${msg.serverId}-${msg.localId}-${msg.createTime}-${msg.sortSeq}`
-                  if (seen.has(key)) return false
-                  seen.add(key)
-                  return true
-                })
-              const hasMore = messages.length > normalizedLimit || batch.hasMore === true
-              const page = messages.slice(0, normalizedLimit).reverse()
-              if (page.length > 0) {
-                const latestMsg = page[page.length - 1]
-                const currentCursor = this.sessionCursor.get(sessionId) || 0
-                if (latestMsg.sortSeq > currentCursor) {
-                  this.sessionCursor.set(sessionId, latestMsg.sortSeq)
-                }
-              }
-              return { success: true, messages: page, hasMore }
-            }
-          } finally {
-            await wcdbService.closeMessageCursor(nativeOpen.cursor).catch(() => undefined)
-          }
+        const nativeDirect = await wcdbService.getNativeMessages(sessionId, normalizedLimit + 1, 0)
+        if (nativeDirect.success && nativeDirect.rows) {
+          const normalized = this.normalizeMessagesForUi(
+            nativeDirect.rows.map(row => this.rowToMessage(row)),
+            sessionId,
+            normalizedLimit
+          )
+          const page = normalized.messages
+          this.updateSessionCursorFromPage(sessionId, page)
+          return { success: true, messages: page, hasMore: normalized.hasExtra }
         }
       }
 
@@ -1212,7 +1313,8 @@ class ChatService extends EventEmitter {
       // 去重（同一条消息可能在多个数据库中）
       const seen = new Set<string>()
       allMessages = allMessages.filter(msg => {
-        const key = `${msg.serverId}-${msg.localId}-${msg.createTime}-${msg.sortSeq}`
+        if (!this.isMessageVisibleForSession(sessionId, msg)) return false
+        const key = messageIdentityKey(msg)
         if (seen.has(key)) return false
         seen.add(key)
         return true
@@ -1260,13 +1362,14 @@ class ChatService extends EventEmitter {
       if (nativeResult.success) {
         let messages = (nativeResult.rows || [])
           .map(row => this.rowToMessage(row))
+          .filter(msg => this.isMessageVisibleForSession(sessionId, msg))
           .filter(msg => Number(msg.createTime || 0) >= normalizedMinTime)
 
         const seen = new Set<string>()
         messages = messages
           .sort(compareMessageCursorAsc)
           .filter(msg => {
-            const key = `${msg.serverId}-${msg.localId}-${msg.createTime}-${msg.sortSeq}`
+            const key = messageIdentityKey(msg)
             if (seen.has(key)) return false
             seen.add(key)
             return true
@@ -2763,12 +2866,15 @@ class ChatService extends EventEmitter {
       // 提取图片 md5 时，先去掉 <live> 段避免误匹配
       const contentNoLive = content.replace(/<live>[\s\S]*?<\/live>/gi, '')
       const md5 =
-        this.extractXmlAttribute(contentNoLive, 'img', 'md5') ||
         this.extractXmlValue(contentNoLive, 'md5') ||
+        this.extractXmlAttribute(contentNoLive, 'img', 'md5') ||
+        this.extractXmlAttribute(contentNoLive, 'img', 'cdnthumbmd5') ||
+        this.extractXmlAttribute(contentNoLive, 'img', 'thumbfullmd5') ||
+        this.extractXmlAttribute(contentNoLive, 'img', 'fullmd5') ||
         undefined
       const aesKey = this.extractXmlAttribute(content, 'img', 'aeskey') || undefined
 
-      return { md5, aesKey, isLivePhoto: isLivePhoto || undefined }
+      return { md5: md5?.toLowerCase(), aesKey, isLivePhoto: isLivePhoto || undefined }
     } catch {
       return {}
     }
@@ -2850,10 +2956,17 @@ class ChatService extends EventEmitter {
       'packedInfo',
       'PackedInfoData',
       'PackedInfo',
+      'packed_info_blob',
+      'packedInfoBlob',
+      'BytesExtra',
+      'bytes_extra',
+      'reserved0',
+      'Reserved0',
       'WCDB_CT_packed_info_data',
       'WCDB_CT_packed_info',
       'WCDB_CT_PackedInfoData',
-      'WCDB_CT_PackedInfo'
+      'WCDB_CT_PackedInfo',
+      'WCDB_CT_Reserved0'
     ])
     const buffer = this.decodePackedInfo(packed)
     if (!buffer || buffer.length === 0) return undefined
@@ -2880,6 +2993,16 @@ class ChatService extends EventEmitter {
     for (const name of fieldNames) {
       if (row[name] !== undefined && row[name] !== null) {
         return row[name]
+      }
+    }
+    const lowerMap = new Map<string, string>()
+    for (const actual of Object.keys(row || {})) {
+      lowerMap.set(actual.toLowerCase(), actual)
+    }
+    for (const name of fieldNames) {
+      const actual = lowerMap.get(name.toLowerCase())
+      if (actual && row[actual] !== undefined && row[actual] !== null) {
+        return row[actual]
       }
     }
     return undefined

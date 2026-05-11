@@ -53,6 +53,14 @@ type ResolveDatDiagnostics = {
   source?: string
 }
 
+type ImageLookupPayload = {
+  sessionId?: string
+  imageMd5?: string
+  imageDatName?: string
+  createTime?: number
+  force?: boolean
+}
+
 export class ImageDecryptService {
   private configService = new ConfigService()
   private hardlinkCache = new Map<string, HardlinkState>()
@@ -69,7 +77,7 @@ export class ImageDecryptService {
   private hdNotFoundCache = new Set<string>()  // 高清图失败缓存
   private nativeLogged = false
 
-  async resolveCachedImage(payload: { sessionId?: string; imageMd5?: string; imageDatName?: string }): Promise<DecryptResult & { hasUpdate?: boolean }> {
+  async resolveCachedImage(payload: ImageLookupPayload): Promise<DecryptResult & { hasUpdate?: boolean }> {
     // 不再等待缓存索引，直接查找
     const cacheKeys = this.getCacheKeys(payload)
     const cacheKey = cacheKeys[0]
@@ -125,20 +133,21 @@ export class ImageDecryptService {
     return { success: false, error: '未找到缓存图片' }
   }
 
-  async decryptImage(payload: { sessionId?: string; imageMd5?: string; imageDatName?: string; force?: boolean }): Promise<DecryptResult> {
+  async decryptImage(payload: ImageLookupPayload): Promise<DecryptResult> {
     const cacheKey = payload.imageMd5 || payload.imageDatName
     if (!cacheKey) {
       return { success: false, error: '缺少图片标识' }
     }
+    const lookupCacheKey = this.buildLookupCacheKey(payload, cacheKey)
 
     // 失败缓存：跳过已知找不到的图片（force 时忽略，允许重试）
-    if (!payload.force && this.notFoundCache.has(cacheKey)) {
+    if (!payload.force && this.notFoundCache.has(lookupCacheKey)) {
       return { success: false, error: '未找到图片文件' }
     }
 
     // 即使 force=true，也先检查是否有高清图缓存
     if (payload.force) {
-      if (this.hdNotFoundCache.has(cacheKey)) {
+      if (this.hdNotFoundCache.has(lookupCacheKey)) {
         return { success: false, error: '未找到高清图，请在微信中点开该图片查看后重试' }
       }
       // 快速查找高清图缓存
@@ -177,9 +186,10 @@ export class ImageDecryptService {
   }
 
   private async decryptImageInternal(
-    payload: { sessionId?: string; imageMd5?: string; imageDatName?: string; force?: boolean },
+    payload: ImageLookupPayload,
     cacheKey: string
   ): Promise<DecryptResult> {
+    const lookupCacheKey = this.buildLookupCacheKey(payload, cacheKey)
     const totalStartedAt = Date.now()
     let resolveDatMs = 0
     let cacheLookupMs = 0
@@ -216,6 +226,7 @@ export class ImageDecryptService {
         payload.imageMd5,
         payload.imageDatName,
         payload.sessionId,
+        payload.createTime,
         { allowThumbnail: !payload.force, skipResolvedCache: Boolean(payload.force) },
         datDiagnostics
       )
@@ -223,7 +234,7 @@ export class ImageDecryptService {
 
       // 如果要求高清图但没找到，直接返回提示
       if (!datPath && payload.force) {
-        this.hdNotFoundCache.add(cacheKey)
+        this.hdNotFoundCache.add(lookupCacheKey)
         console.warn(`[ImageDecrypt] 未找到高清图: ${payload.imageDatName || payload.imageMd5}`)
         this.logDecryptTiming({
           cacheKey,
@@ -249,7 +260,7 @@ export class ImageDecryptService {
         return { success: false, error: '未找到高清图，请在微信中点开该图片查看后重试' }
       }
       if (!datPath) {
-        this.notFoundCache.add(cacheKey)
+        this.notFoundCache.add(lookupCacheKey)
         console.warn(`[ImageDecrypt] 未找到图片文件: ${payload.imageDatName || payload.imageMd5} sessionId=${payload.sessionId}`)
         this.logDecryptTiming({
           cacheKey,
@@ -697,11 +708,20 @@ export class ImageDecryptService {
     return trimmed
   }
 
+  private buildLookupCacheKey(payload: ImageLookupPayload, cacheKey: string): string {
+    return [
+      String(cacheKey || '').trim().toLowerCase(),
+      String(payload.sessionId || '').trim().toLowerCase(),
+      String(payload.createTime || 0)
+    ].join('|')
+  }
+
   private async resolveDatPath(
     accountDir: string,
     imageMd5?: string,
     imageDatName?: string,
     sessionId?: string,
+    createTime?: number,
     options?: { allowThumbnail?: boolean; skipResolvedCache?: boolean },
     diagnostics?: ResolveDatDiagnostics
   ): Promise<string | null> {
@@ -739,8 +759,8 @@ export class ImageDecryptService {
           if (imageDatName) this.cacheDatPath(accountDir, imageDatName, hdInDir)
           return hdInDir
         }
-        // 该目录也没找到，返回 null（不进行全局搜索，避免性能问题）
-        return null
+        // 该目录也没找到；如果有消息时间，继续按会话月份精确查找旧图。
+        if (!createTime && !imageDatName) return null
       }
     }
 
@@ -770,13 +790,30 @@ export class ImageDecryptService {
           this.cacheDatPath(accountDir, imageDatName, hdInDir)
           return hdInDir
         }
-        return null
+        if (!createTime) return null
       }
     }
 
-    if (!imageDatName) {
+    const primaryDatName = imageDatName || imageMd5
+    if (!primaryDatName) {
       return null
     }
+
+    const monthPath = this.searchDatInSessionMonth(accountDir, sessionId, primaryDatName, createTime, allowThumbnail)
+    if (monthPath) {
+      diagnostics && (diagnostics.source = 'session_month')
+      this.cacheSessionDatRoot(accountDir, sessionId, monthPath)
+      this.resolvedCache.set(primaryDatName, monthPath)
+      this.cacheDatPath(accountDir, primaryDatName, monthPath)
+      if (imageMd5) this.cacheDatPath(accountDir, imageMd5, monthPath)
+      if (imageDatName) this.cacheDatPath(accountDir, imageDatName, monthPath)
+      return monthPath
+    }
+
+    if (!imageDatName) {
+      imageDatName = primaryDatName
+    }
+
     if (!skipResolvedCache) {
       const cached = this.resolvedCache.get(imageDatName)
       if (cached && existsSync(cached)) {
@@ -1825,6 +1862,43 @@ export class ImageDecryptService {
       }
     }
     return null
+  }
+
+  private searchDatInSessionMonth(
+    accountDir: string,
+    sessionId: string | undefined,
+    datName: string,
+    createTime: number | undefined,
+    allowThumbnail = true
+  ): string | null {
+    if (!sessionId || !datName || !createTime) return null
+    const monthDir = this.resolveYearMonthFromCreateTime(createTime)
+    if (!monthDir) return null
+
+    const sessionHash = crypto.createHash('md5').update(this.cleanAccountDirName(sessionId)).digest('hex')
+    const roots = [
+      join(accountDir, 'msg', 'attach', sessionHash, monthDir),
+      join(accountDir, 'msg', 'attach', crypto.createHash('md5').update(sessionId).digest('hex'), monthDir)
+    ]
+    const subDirs = ['Img', 'Image', 'mg', 'MsgImg']
+    for (const root of Array.from(new Set(roots))) {
+      for (const subDir of subDirs) {
+        const hit = this.searchDatInKnownDir(join(root, subDir), datName, allowThumbnail)
+        if (hit) return hit
+      }
+      const directHit = this.searchDatInKnownDir(root, datName, allowThumbnail)
+      if (directHit) return directHit
+    }
+    return null
+  }
+
+  private resolveYearMonthFromCreateTime(createTime?: number): string {
+    const raw = Number(createTime)
+    if (!Number.isFinite(raw) || raw <= 0) return ''
+    const ts = raw > 1e12 ? raw : raw * 1000
+    const date = new Date(ts)
+    if (Number.isNaN(date.getTime())) return ''
+    return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`
   }
 
   private extractSessionDatRoot(accountDir: string, datPath: string): string | null {
