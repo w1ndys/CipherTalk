@@ -1,6 +1,22 @@
 import { create } from 'zustand'
 import type { ChatSession, Message, Contact } from '../types/models'
 
+const SESSION_MESSAGE_CACHE_LIMIT = 20
+const SESSION_MESSAGE_CACHE_MAX_MESSAGES = 300
+
+export interface SessionMessageCacheEntry {
+  messages: Message[]
+  hasMoreMessages: boolean
+  currentOffset: number
+  loadedAt: number
+  scrollTop?: number
+  scrollHeight?: number
+}
+
+type SessionMessageCachePayload = Omit<SessionMessageCacheEntry, 'loadedAt'> & {
+  loadedAt?: number
+}
+
 function messageKey(message: Message): string {
   return `${message.serverId}-${message.localId}-${message.createTime}-${message.sortSeq}`
 }
@@ -35,6 +51,7 @@ export interface ChatState {
   isLoadingMessages: boolean
   isLoadingMore: boolean
   hasMoreMessages: boolean
+  sessionMessageCache: Map<string, SessionMessageCacheEntry>
 
   // 联系人缓存
   contacts: Map<string, Contact>
@@ -58,6 +75,9 @@ export interface ChatState {
   setLoadingMessages: (loading: boolean) => void
   setLoadingMore: (loading: boolean) => void
   setHasMoreMessages: (hasMore: boolean) => void
+  saveSessionMessageCache: (sessionId: string, cache: SessionMessageCachePayload) => void
+  restoreSessionMessageCache: (sessionId: string) => SessionMessageCacheEntry | null
+  clearSessionMessageCache: (sessionId?: string) => void
   setContacts: (contacts: Contact[]) => void
   addContact: (contact: Contact) => void
   setSearchKeyword: (keyword: string) => void
@@ -77,6 +97,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   isLoadingMessages: false,
   isLoadingMore: false,
   hasMoreMessages: true,
+  sessionMessageCache: new Map(),
   contacts: new Map(),
   searchKeyword: '',
   syncVersion: 0,
@@ -128,6 +149,68 @@ export const useChatStore = create<ChatState>((set, get) => ({
   setLoadingMore: (loading) => set({ isLoadingMore: loading }),
   setHasMoreMessages: (hasMore) => set({ hasMoreMessages: hasMore }),
 
+  saveSessionMessageCache: (sessionId, cache) => {
+    if (!sessionId) return
+    set((state) => {
+      const messages = sortMessagesAsc(cache.messages).slice(-SESSION_MESSAGE_CACHE_MAX_MESSAGES)
+      const next = new Map(state.sessionMessageCache)
+      next.delete(sessionId)
+      next.set(sessionId, {
+        messages,
+        hasMoreMessages: cache.hasMoreMessages,
+        currentOffset: Math.max(cache.currentOffset, messages.length),
+        loadedAt: cache.loadedAt ?? Date.now(),
+        scrollTop: cache.scrollTop,
+        scrollHeight: cache.scrollHeight
+      })
+
+      while (next.size > SESSION_MESSAGE_CACHE_LIMIT) {
+        const oldestKey = next.keys().next().value
+        if (!oldestKey) break
+        next.delete(oldestKey)
+      }
+
+      return { sessionMessageCache: next }
+    })
+  },
+
+  restoreSessionMessageCache: (sessionId) => {
+    const cached = get().sessionMessageCache.get(sessionId)
+    if (!cached) return null
+
+    const restored: SessionMessageCacheEntry = {
+      ...cached,
+      messages: [...cached.messages],
+      loadedAt: Date.now()
+    }
+
+    set((state) => {
+      const next = new Map(state.sessionMessageCache)
+      next.delete(sessionId)
+      next.set(sessionId, restored)
+      return {
+        sessionMessageCache: next,
+        messages: restored.messages,
+        hasMoreMessages: restored.hasMoreMessages,
+        isLoadingMessages: false,
+        isLoadingMore: false
+      }
+    })
+
+    return restored
+  },
+
+  clearSessionMessageCache: (sessionId) => set((state) => {
+    if (!sessionId) {
+      return { sessionMessageCache: new Map() }
+    }
+
+    if (!state.sessionMessageCache.has(sessionId)) return state
+    const next = new Map(state.sessionMessageCache)
+    next.delete(sessionId)
+    return { sessionMessageCache: next }
+  }),
+
   setContacts: (contacts) => set({
     contacts: new Map(contacts.map(c => [c.username, c]))
   }),
@@ -154,6 +237,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
     isLoadingMessages: false,
     isLoadingMore: false,
     hasMoreMessages: true,
+    sessionMessageCache: new Map(),
     contacts: new Map(),
     searchKeyword: ''
   })

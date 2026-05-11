@@ -83,6 +83,17 @@ parentPort.on('message', async (msg: any) => {
       case 'fetchMessageBatch':
         result = await core.fetchMessageBatch(payload.cursor)
         break
+      case 'getMessageBatchViaCursor':
+        result = await core.getMessageBatchViaCursor(
+          payload.sessionId,
+          payload.batchSize,
+          payload.ascending,
+          payload.beginTimestamp,
+          payload.endTimestamp,
+          payload.useLite,
+          payload.maxBatches
+        )
+        break
       case 'closeMessageCursor':
         result = await core.closeMessageCursor(payload.cursor)
         break

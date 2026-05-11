@@ -589,6 +589,47 @@ export class WcdbCore {
     }
   }
 
+  async getMessageBatchViaCursor(
+    sessionId: string,
+    batchSize: number,
+    ascending: boolean,
+    beginTimestamp: number,
+    endTimestamp: number,
+    useLite: boolean = true,
+    maxBatches: number = 1
+  ): Promise<{ success: boolean; rows?: any[]; hasMore?: boolean; error?: string }> {
+    const openRes = useLite
+      ? await this.openMessageCursorLite(sessionId, batchSize, ascending, beginTimestamp, endTimestamp)
+      : await this.openMessageCursor(sessionId, batchSize, ascending, beginTimestamp, endTimestamp)
+
+    if (!openRes.success || !openRes.cursor) {
+      return { success: false, error: openRes.error || '创建消息游标失败' }
+    }
+
+    try {
+      const rows: any[] = []
+      let hasMore = false
+      const safeMaxBatches = Math.max(1, Math.min(10, Math.floor(Number(maxBatches) || 1)))
+
+      for (let i = 0; i < safeMaxBatches; i++) {
+        const batch = await this.fetchMessageBatch(openRes.cursor)
+        if (!batch.success) {
+          return { success: false, error: batch.error || '获取消息批次失败' }
+        }
+
+        const batchRows = Array.isArray(batch.rows) ? batch.rows : []
+        rows.push(...batchRows)
+        hasMore = batch.hasMore === true
+
+        if (!hasMore || batchRows.length === 0) break
+      }
+
+      return { success: true, rows, hasMore }
+    } finally {
+      await this.closeMessageCursor(openRes.cursor).catch(() => undefined)
+    }
+  }
+
   async closeMessageCursor(cursor: number): Promise<{ success: boolean; error?: string }> {
     if (!this.initialized || this.handle === null) {
       return { success: false, error: 'WCDB 未初始化' }

@@ -41,6 +41,10 @@ type ScrollAnchor = {
   scrollTop: number
 }
 
+function getMessageCacheKey(message: Message): string {
+  return `${message.serverId}-${message.localId}-${message.createTime}-${message.sortSeq}`
+}
+
 function ChatPage(_props: ChatPageProps) {
   const [quoteStyle, setQuoteStyle] = useState<'default' | 'wechat'>('default')
 
@@ -73,6 +77,9 @@ function ChatPage(_props: ChatPageProps) {
     setLoadingMessages,
     setLoadingMore,
     setHasMoreMessages,
+    saveSessionMessageCache,
+    restoreSessionMessageCache,
+    clearSessionMessageCache,
     setSearchKeyword,
     incrementSyncVersion
   } = useChatStore()
@@ -94,6 +101,9 @@ function ChatPage(_props: ChatPageProps) {
   const isUserOperatingRef = useRef<boolean>(false) // 标记用户是否正在操作
   const [currentOffset, setCurrentOffset] = useState(0)
   const [isDateJumpMode, setIsDateJumpMode] = useState(false)
+  const currentOffsetRef = useRef(0)
+  const hasMoreMessagesRef = useRef(true)
+  const isDateJumpModeRef = useRef(false)
   // 向上滑动游标（最早消息）
   const [dateJumpCursorSortSeq, setDateJumpCursorSortSeq] = useState<number | null>(null)
   const [dateJumpCursorCreateTime, setDateJumpCursorCreateTime] = useState<number | null>(null)
@@ -554,6 +564,33 @@ function ChatPage(_props: ChatPageProps) {
     }
   }, [])
 
+  const saveCurrentSessionMessageCache = useCallback((sessionId: string | null = currentSessionIdRef.current) => {
+    if (!sessionId || isDateJumpModeRef.current) return
+    const cachedMessages = messagesRef.current
+    if (cachedMessages.length === 0) return
+
+    const listEl = messageListRef.current
+    saveSessionMessageCache(sessionId, {
+      messages: cachedMessages,
+      hasMoreMessages: hasMoreMessagesRef.current,
+      currentOffset: currentOffsetRef.current,
+      scrollTop: listEl?.scrollTop,
+      scrollHeight: listEl?.scrollHeight
+    })
+  }, [saveSessionMessageCache])
+
+  const restoreCachedSessionScroll = useCallback((scrollTop?: number, scrollHeight?: number) => {
+    requestAnimationFrame(() => {
+      const listEl = messageListRef.current
+      if (!listEl || typeof scrollTop !== 'number') return
+      if (typeof scrollHeight === 'number') {
+        listEl.scrollTop = Math.max(0, scrollTop + listEl.scrollHeight - scrollHeight)
+      } else {
+        listEl.scrollTop = Math.max(0, scrollTop)
+      }
+    })
+  }, [])
+
   useLayoutEffect(() => {
     const anchor = pendingPrependAnchorRef.current
     if (!anchor) return
@@ -720,6 +757,7 @@ function ChatPage(_props: ChatPageProps) {
     setIsRefreshingMessages(true)
     setIsUpdating(true) // 显示更新指示器
     try {
+      clearSessionMessageCache(currentSessionId)
       // 清空后端缓存
       await window.electronAPI.chat.refreshCache()
       // 重新加载会话列表，以确保联系人信息被重新加载
@@ -804,8 +842,15 @@ function ChatPage(_props: ChatPageProps) {
           }
         }
         if (offset === 0) {
-          setHasMoreMessages(result.hasMore ?? false)
-          setCurrentOffset(offset + msgs.length)
+          const hasMore = result.hasMore ?? false
+          const nextOffset = offset + msgs.length
+          setHasMoreMessages(hasMore)
+          setCurrentOffset(nextOffset)
+          saveSessionMessageCache(sessionId, {
+            messages: msgs,
+            hasMoreMessages: hasMore,
+            currentOffset: nextOffset
+          })
         }
       }
     } catch (e) {
@@ -870,31 +915,111 @@ function ChatPage(_props: ChatPageProps) {
     }
   }, [currentSessionId])
 
+  const syncCachedSessionMessages = useCallback(async (sessionId: string, loadSeq: number) => {
+    const cachedMessages = useChatStore.getState().messages || []
+    const lastMsg = cachedMessages[cachedMessages.length - 1]
+    const minTime = Number(lastMsg?.createTime || 0)
+    if (cachedMessages.length === 0 || minTime <= 0) return
+
+    const listEl = messageListRef.current
+    let isNearBottom = false
+    if (listEl) {
+      const { scrollTop, scrollHeight, clientHeight } = listEl
+      isNearBottom = scrollHeight - scrollTop - clientHeight < 300
+    }
+
+    try {
+      const messagesResult = await window.electronAPI.chat.getNewMessages(sessionId, minTime, 1000)
+      if (currentSessionIdRef.current !== sessionId || loadSeq !== messageLoadSeqRef.current) return
+      if (!messagesResult.success || !messagesResult.messages || messagesResult.messages.length === 0) return
+
+      const latestMessages = useChatStore.getState().messages || []
+      const existingKeys = new Set(latestMessages.map(getMessageCacheKey))
+      const uniqueNewMessages = messagesResult.messages
+        .filter((msg) => {
+          const key = getMessageCacheKey(msg)
+          if (existingKeys.has(key)) return false
+          existingKeys.add(key)
+          return true
+        })
+        .sort((a, b) => a.createTime - b.createTime || a.localId - b.localId)
+
+      if (uniqueNewMessages.length === 0) return
+
+      appendMessages(uniqueNewMessages, false)
+      const nextOffset = currentOffsetRef.current + uniqueNewMessages.length
+      setCurrentOffset(nextOffset)
+      incrementSyncVersion()
+
+      const nextMessages = useChatStore.getState().messages || []
+      const nextListEl = messageListRef.current
+      saveSessionMessageCache(sessionId, {
+        messages: nextMessages,
+        hasMoreMessages: hasMoreMessagesRef.current,
+        currentOffset: nextOffset,
+        scrollTop: nextListEl?.scrollTop,
+        scrollHeight: nextListEl?.scrollHeight
+      })
+
+      if (isNearBottom) {
+        requestAnimationFrame(() => {
+          if (messageListRef.current) {
+            messageListRef.current.scrollTo({ top: messageListRef.current.scrollHeight, behavior: 'smooth' })
+          }
+        })
+      }
+    } catch (e) {
+      console.error('[ChatPage] 缓存会话增量同步失败:', e)
+    }
+  }, [appendMessages, incrementSyncVersion, saveSessionMessageCache])
+
   // 组件卸载时取消当前会话
   useEffect(() => {
     return () => {
+      saveCurrentSessionMessageCache(currentSessionIdRef.current)
       window.electronAPI.chat.setCurrentSession(null)
     }
-  }, [])
+  }, [saveCurrentSessionMessageCache])
 
   // 选择会话
   const handleSelectSession = (session: ChatSession) => {
     if (session.username === currentSessionId) {
       // 如果是当前会话，重新加载消息（用于刷新）
+      clearSessionMessageCache(session.username)
       setCurrentOffset(0)
       currentSessionIdRef.current = session.username
       loadMessages(session.username, 0)
       return
     }
+
+    saveCurrentSessionMessageCache(currentSessionId)
     currentSessionIdRef.current = session.username
     setCurrentSession(session.username)
-    setCurrentOffset(0)
-    loadMessages(session.username, 0)
     // 重置详情面板
     setSessionDetail(null)
     if (showDetailPanel) {
       loadSessionDetail(session.username)
     }
+
+    const cached = restoreSessionMessageCache(session.username)
+    if (cached) {
+      const loadSeq = ++messageLoadSeqRef.current
+      setCurrentOffset(cached.currentOffset)
+      setIsDateJumpMode(false)
+      setDateJumpCursorSortSeq(null)
+      setDateJumpCursorCreateTime(null)
+      setDateJumpCursorLocalId(null)
+      setDateJumpCursorSortSeqEnd(null)
+      setDateJumpCursorCreateTimeEnd(null)
+      setDateJumpCursorLocalIdEnd(null)
+      setHasMoreMessagesAfter(false)
+      restoreCachedSessionScroll(cached.scrollTop, cached.scrollHeight)
+      void syncCachedSessionMessages(session.username, loadSeq)
+      return
+    }
+
+    setCurrentOffset(0)
+    loadMessages(session.username, 0)
   }
 
   // 搜索过滤
@@ -1568,6 +1693,18 @@ function ChatPage(_props: ChatPageProps) {
   useEffect(() => {
     messagesRef.current = messages
   }, [messages])
+
+  useEffect(() => {
+    currentOffsetRef.current = currentOffset
+  }, [currentOffset])
+
+  useEffect(() => {
+    hasMoreMessagesRef.current = hasMoreMessages
+  }, [hasMoreMessages])
+
+  useEffect(() => {
+    isDateJumpModeRef.current = isDateJumpMode
+  }, [isDateJumpMode])
 
   useEffect(() => {
     currentSessionIdRef.current = currentSessionId

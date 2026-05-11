@@ -128,7 +128,7 @@ export function MessageList({
     setContextMenu
   ])
 
-  if (isLoadingMessages) {
+  if (isLoadingMessages && messages.length === 0) {
     return (
       <div className="loading-messages">
         <Loader2 size={24} />

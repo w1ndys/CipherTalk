@@ -172,6 +172,26 @@ export class WcdbService extends EventEmitter {
     return this.callWithAutoOpen('fetchMessageBatch', { cursor })
   }
 
+  async getMessageBatchViaCursor(
+    sessionId: string,
+    batchSize: number,
+    ascending: boolean,
+    beginTimestamp: number,
+    endTimestamp: number,
+    useLite: boolean = true,
+    maxBatches: number = 1
+  ): Promise<{ success: boolean; rows?: any[]; hasMore?: boolean; error?: string }> {
+    return this.callWithAutoOpen('getMessageBatchViaCursor', {
+      sessionId,
+      batchSize,
+      ascending,
+      beginTimestamp,
+      endTimestamp,
+      useLite,
+      maxBatches
+    })
+  }
+
   async closeMessageCursor(cursor: number): Promise<{ success: boolean; error?: string }> {
     return this.callWithAutoOpen('closeMessageCursor', { cursor })
   }

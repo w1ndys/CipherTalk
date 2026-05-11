@@ -926,46 +926,26 @@ class ChatService extends EventEmitter {
     limit: number
   ): Promise<{ success: boolean; messages?: Message[]; hasMore?: boolean; error?: string }> {
     const batchSize = Math.max(limit + 20, 80)
-    const nativeOpen = await wcdbService.openMessageCursor(sessionId, batchSize, false, 0, 0)
-    if (!nativeOpen.success || !nativeOpen.cursor) {
-      return { success: false, error: nativeOpen.error || '打开消息游标失败' }
+    const batch = await wcdbService.getMessageBatchViaCursor(sessionId, batchSize, false, 0, 0, true, 5)
+    if (!batch.success) {
+      return { success: false, error: batch.error || '获取消息批次失败' }
     }
 
-    try {
-      const collected: Message[] = []
-      let cursorHasMore = false
-      let attempts = 0
-
-      while (collected.length < limit + 1 && attempts < 5) {
-        attempts += 1
-        const batch = await wcdbService.fetchMessageBatch(nativeOpen.cursor)
-        if (!batch.success) {
-          return { success: false, error: batch.error || '获取消息批次失败' }
-        }
-
-        const rows = Array.isArray(batch.rows) ? batch.rows : []
-        cursorHasMore = batch.hasMore === true
-        if (rows.length === 0) break
-
-        for (const row of rows) {
-          const msg = this.rowToMessage(row)
-          if (this.isMessageVisibleForSession(sessionId, msg)) {
-            collected.push(msg)
-          }
-        }
-
-        if (!cursorHasMore) break
+    const collected: Message[] = []
+    const rows = Array.isArray(batch.rows) ? batch.rows : []
+    for (const row of rows) {
+      const msg = this.rowToMessage(row)
+      if (this.isMessageVisibleForSession(sessionId, msg)) {
+        collected.push(msg)
       }
+    }
 
-      const normalized = this.normalizeMessagesForUi(collected, sessionId, limit)
-      this.updateSessionCursorFromPage(sessionId, normalized.messages)
-      return {
-        success: true,
-        messages: normalized.messages,
-        hasMore: normalized.hasExtra || cursorHasMore
-      }
-    } finally {
-      await wcdbService.closeMessageCursor(nativeOpen.cursor).catch(() => undefined)
+    const normalized = this.normalizeMessagesForUi(collected, sessionId, limit)
+    this.updateSessionCursorFromPage(sessionId, normalized.messages)
+    return {
+      success: true,
+      messages: normalized.messages,
+      hasMore: normalized.hasExtra || batch.hasMore === true
     }
   }
 
@@ -1119,11 +1099,6 @@ class ChatService extends EventEmitter {
       const normalizedLimit = Math.max(1, Math.min(500, Math.floor(Number(limit) || 50)))
 
       if (Math.max(0, Math.floor(Number(offset) || 0)) === 0) {
-        const nativeCursor = await this.getMessagesViaNativeCursor(sessionId, normalizedLimit)
-        if (nativeCursor.success) {
-          return nativeCursor
-        }
-
         const nativeDirect = await wcdbService.getNativeMessages(sessionId, normalizedLimit + 1, 0)
         if (nativeDirect.success && nativeDirect.rows) {
           const normalized = this.normalizeMessagesForUi(
@@ -1134,6 +1109,11 @@ class ChatService extends EventEmitter {
           const page = normalized.messages
           this.updateSessionCursorFromPage(sessionId, page)
           return { success: true, messages: page, hasMore: normalized.hasExtra }
+        }
+
+        const nativeCursor = await this.getMessagesViaNativeCursor(sessionId, normalizedLimit)
+        if (nativeCursor.success) {
+          return nativeCursor
         }
       }
 
