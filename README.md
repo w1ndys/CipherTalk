@@ -94,6 +94,19 @@ npm install
 npm run dev
 ```
 
+### 🧰 命令行子项目
+
+`CipherTalk-CLI/` 是密语仓库内的独立 CLI 子项目，提供 `miyu` 命令骨架和基础数据链路。它属于同一个 Git 仓库，但拥有自己的 `package.json`、锁文件、依赖、测试、构建产物和单独发布工作流，不参与桌面端 Electron 构建：
+
+桌面端打包配置已显式排除 `CipherTalk-CLI/**/*`，CLI 只通过自己的工作流单独构建和发布。
+
+```bash
+npm run cli:install
+npm run cli -- status
+npm run cli:typecheck
+npm run cli:test
+```
+
 ### 📦 构建应用
 
 构建生产版本：

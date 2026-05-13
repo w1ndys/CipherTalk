@@ -67,3 +67,9 @@ xkey
 .claude/
 .tmp
 Agent示例UI/
+
+# Embedded CLI local outputs
+CipherTalk-CLI/node_modules/
+CipherTalk-CLI/dist/
+CipherTalk-CLI/coverage/
+CipherTalk-CLI/.miyu-test/
