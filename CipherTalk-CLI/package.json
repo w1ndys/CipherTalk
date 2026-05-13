@@ -1,6 +1,6 @@
 {
   "name": "ciphertalk-cli",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "密语 CLI：用于脚本化读取和导出微信本地数据",
   "license": "MIT",
   "type": "module",

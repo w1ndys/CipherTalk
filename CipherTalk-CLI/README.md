@@ -8,6 +8,8 @@
 
 ## 安装
 
+**npm：**
+
 ```bash
 npm install -g ciphertalk-cli
 miyu status
@@ -22,13 +24,32 @@ npm install -g ciphertalk-cli --registry https://registry.npmmirror.com
 更新：
 
 ```bash
-npm update -g ciphertalk-cli
+npm install -g ciphertalk-cli@latest
 ```
 
 卸载：
 
 ```bash
 npm uninstall -g ciphertalk-cli
+```
+
+**pnpm：**
+
+```bash
+pnpm add -g ciphertalk-cli
+miyu status
+```
+
+更新：
+
+```bash
+pnpm update -g ciphertalk-cli
+```
+
+卸载：
+
+```bash
+pnpm remove -g ciphertalk-cli
 ```
 
 ## 开发
@@ -115,6 +136,8 @@ miyu key set <64位十六进制密钥>
 CLI 的验证和发布由父仓库中的 `.github/workflows/ciphertalk-cli.yml` 单独处理。该工作流只监听 `CipherTalk-CLI/**` 相关改动，不参与桌面版打包。
 
 发布目标是 npm 官方公开包仓库：`https://registry.npmjs.org`。手动触发工作流并启用 `publish` 后，会以公开 npm 包 `ciphertalk-cli` 发布，用户安装后使用 `miyu` 命令。国内用户可以等待 npmmirror 等镜像同步，或配置 npm 官方源安装。
+
+发布时工作流会先读取 npm 官方仓库中的最新版本，再自动准备本次版本号。默认使用 `patch` 修订版本；需要小版本或大版本发布时，在手动触发工作流时将 `version_bump` 选择为 `minor` 或 `major`。如果已经在 `package.json` 中手动写入了高于 npm 最新版本的版本号，发布脚本会保留该手动版本。
 
 ## 命令
 

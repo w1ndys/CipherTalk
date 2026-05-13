@@ -100,6 +100,8 @@ npm run dev
 
 **直接安装使用：**
 
+## npm：
+
 ```bash
 npm install -g ciphertalk-cli
 miyu status
@@ -114,13 +116,32 @@ npm install -g ciphertalk-cli --registry https://registry.npmmirror.com
 更新：
 
 ```bash
-npm update -g ciphertalk-cli
+npm install -g ciphertalk-cli@latest
 ```
 
 卸载：
 
 ```bash
 npm uninstall -g ciphertalk-cli
+```
+
+## pnpm：
+
+```bash
+pnpm add -g ciphertalk-cli
+miyu status
+```
+
+更新：
+
+```bash
+pnpm update -g ciphertalk-cli
+```
+
+卸载：
+
+```bash
+pnpm remove -g ciphertalk-cli
 ```
 
 桌面端打包配置已显式排除 `CipherTalk-CLI/**/*`，CLI 只通过自己的工作流单独构建和发布。
