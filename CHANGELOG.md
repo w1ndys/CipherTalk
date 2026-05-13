@@ -208,7 +208,7 @@
 - 优化 .gitignore 配置
 - 改进代码组织结构
 
-## [1.0.1] - 2024-01-08
+## [1.0.1] - 2025-11-08
 
 ### 新增
 - 💬 现代化聊天记录查看界面
@@ -230,7 +230,7 @@
 - 优化了组件渲染性能
 - 改进了错误处理机制
 
-## [1.0.0] - 2024-01-01
+## [1.0.0] - 2025-11-01
 
 ### 新增
 - 🎉 项目初始版本
@@ -261,4 +261,4 @@
 
 ---
 
-更多详细信息请查看 [GitHub Releases](https://github.com/your-repo/releases)。
+更多详细信息请查看 [GitHub Releases](https://github.com/ILoveBingLu/CipherTalk/releases)。
