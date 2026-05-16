@@ -40,6 +40,7 @@ export function registerAgentHandlers(ctx: MainProcessContext): void {
     enableThinking?: boolean
     systemPrompt?: string
     enabledTools?: Array<{ type: string; function: { name: string; description?: string; parameters?: Record<string, unknown> } }>
+    scopedSessions?: Array<{ id: string; name: string }>
   }) => {
     const requestId = options.requestId?.trim() || genRequestId()
     if (requestMap.has(requestId)) {
@@ -66,6 +67,15 @@ export function registerAgentHandlers(ctx: MainProcessContext): void {
         let assistantText = ''
         let reasoningText = ''
         try {
+          const { BUILTIN_TOOL_SCHEMAS } = await import('../../services/agentBuiltinTools')
+          const mergedTools = [...BUILTIN_TOOL_SCHEMAS, ...(options.enabledTools || [])]
+
+          let systemPromptSuffix: string | undefined
+          if (options.scopedSessions && options.scopedSessions.length > 0) {
+            const list = options.scopedSessions.map(s => `- ${s.name}（sessionId: ${s.id}）`).join('\n')
+            systemPromptSuffix = `用户已指定以下会话范围，请优先围绕这些会话回答，使用工具时传入对应的 sessionId：\n${list}`
+          }
+
           assistantText = await agentChatService.sendMessage({
             history: options.history as any,
             message: options.message,
@@ -73,9 +83,10 @@ export function registerAgentHandlers(ctx: MainProcessContext): void {
             apiKey: options.apiKey,
             model: options.model,
             enableThinking: options.enableThinking !== false,
-            systemPrompt: options.systemPrompt,
+            systemPrompt: options.systemPrompt || undefined,
+            systemPromptSuffix,
             signal: controller.signal,
-            enabledTools: options.enabledTools as any,
+            enabledTools: mergedTools as any,
             onStreamEvent: (streamEvent) => {
               if (streamEvent.type === 'reasoning_delta') {
                 reasoningText += streamEvent.text
@@ -91,6 +102,15 @@ export function registerAgentHandlers(ctx: MainProcessContext): void {
               event.sender.send('agent:streamEvent', { requestId, event: streamEvent })
             },
             mcpCallTool: async (serverName, toolName, args) => {
+              if (!serverName && toolName.startsWith('ct_')) {
+                try {
+                  const { executeBuiltinTool } = await import('../../services/agentBuiltinTools')
+                  const result = await executeBuiltinTool(toolName, args as Record<string, unknown>)
+                  return { success: true, result }
+                } catch (e) {
+                  return { success: false, error: String(e) }
+                }
+              }
               try {
                 const { mcpClientService } = await import('../../services/mcpClientService')
                 return await mcpClientService.callTool(serverName, toolName, args)

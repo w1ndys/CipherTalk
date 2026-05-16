@@ -738,6 +738,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
       enableThinking?: boolean
       systemPrompt?: string
       enabledTools?: Array<{ type: string; function: { name: string; description?: string; parameters?: Record<string, unknown> } }>
+      scopedSessions?: Array<{ id: string; name: string }>
     }) => ipcRenderer.invoke('agent:sendMessage', opts),
 
     cancel: (requestId: string) => ipcRenderer.invoke('agent:cancel', requestId),

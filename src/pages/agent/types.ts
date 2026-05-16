@@ -35,6 +35,7 @@ export interface Message {
   content?: string
   blocks?: AssistantBlock[]
   streaming?: boolean
+  attached?: AttachedResource[]
 }
 
 export interface ConversationItem {

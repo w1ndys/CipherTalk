@@ -31,6 +31,7 @@ export type AIStreamEvent =
   | { type: 'tool_call_delta'; index: number; delta: unknown }
   | { type: 'tool_call_done'; toolCall: AIStreamToolCall }
   | { type: 'tool_result'; toolCallId?: string; toolName: string; result: unknown; error?: string }
+  | { type: 'round_start' }
   | {
       type: 'message_done'
       content: string

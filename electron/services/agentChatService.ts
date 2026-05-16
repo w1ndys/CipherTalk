@@ -7,6 +7,7 @@ export interface AgentChatMessage {
   tool_call_id?: string
   name?: string
   tool_calls?: AIStreamToolCall[]
+  reasoning_content?: string
 }
 
 export interface McpToolDef {
@@ -26,6 +27,7 @@ export interface AgentChatOptions {
   model: string
   enableThinking?: boolean
   systemPrompt?: string
+  systemPromptSuffix?: string
   signal?: AbortSignal
   onStreamEvent: (event: AIStreamEvent) => void
   enabledTools?: McpToolDef[]
@@ -63,7 +65,9 @@ function buildDefaultAgentSystemPrompt(options: AgentChatOptions): string {
 
 function buildMessages(options: AgentChatOptions): AgentChatMessage[] {
   const msgs: AgentChatMessage[] = []
-  msgs.push({ role: 'system', content: options.systemPrompt || buildDefaultAgentSystemPrompt(options) })
+  const base = options.systemPrompt || buildDefaultAgentSystemPrompt(options)
+  const system = options.systemPromptSuffix ? `${base}\n\n${options.systemPromptSuffix}` : base
+  msgs.push({ role: 'system', content: system })
   msgs.push(...options.history)
   msgs.push({ role: 'user', content: options.message })
   return msgs
@@ -75,7 +79,9 @@ function toOpenAI(messages: AgentChatMessage[]) {
       return { role: 'tool' as const, tool_call_id: m.tool_call_id ?? '', content: m.content, ...(m.name ? { name: m.name } : {}) }
     }
     if (m.role === 'assistant' && m.tool_calls?.length) {
-      return { role: 'assistant' as const, content: m.content || null, tool_calls: m.tool_calls }
+      const msg: any = { role: 'assistant' as const, content: m.content || null, tool_calls: m.tool_calls }
+      if (m.reasoning_content) msg.reasoning_content = m.reasoning_content
+      return msg
     }
     return { role: m.role as 'user' | 'assistant' | 'system', content: m.content }
   })
@@ -127,6 +133,8 @@ async function runToolLoop(
   for (let i = 0; i < MAX_TOOL_CALLS; i++) {
     if (options.signal?.aborted) throw new DOMException('Aborted', 'AbortError')
 
+    console.log(`[Agent] 第 ${i + 1} 轮 LLM 调用，上下文消息数: ${loopMsgs.length}`)
+
     let iterText = ''
     let result: NativeToolCallResult
     let streamedToolDone = false
@@ -147,6 +155,7 @@ async function runToolLoop(
         result = await provider.chatWithTools(toOpenAI(loopMsgs), { model: options.model, tools })
       }
     } catch (err) {
+      console.error(`[Agent] 第 ${i + 1} 轮 LLM 调用异常:`, err)
       if (options.signal?.aborted) throw new DOMException('Aborted', 'AbortError')
       throw err
     }
@@ -155,7 +164,12 @@ async function runToolLoop(
     lastText = assistantText
 
     const toolCalls = result.message.tool_calls
-    if (!toolCalls || toolCalls.length === 0) return assistantText
+    console.log(`[Agent] 第 ${i + 1} 轮完成: content="${assistantText.slice(0, 80)}", toolCalls=${toolCalls?.length ?? 0}, finishReason=${result.finishReason}`)
+
+    if (!toolCalls || toolCalls.length === 0) {
+      console.log(`[Agent] 无更多工具调用，退出循环`)
+      return assistantText
+    }
 
     if (!streamedToolDone) {
       toolCalls.forEach((toolCall) => {
@@ -163,13 +177,17 @@ async function runToolLoop(
       })
     }
 
-    loopMsgs.push({ role: 'assistant', content: assistantText, tool_calls: toolCalls as AIStreamToolCall[] })
+    const assistantMsg: AgentChatMessage = { role: 'assistant', content: assistantText, tool_calls: toolCalls as AIStreamToolCall[] }
+    if (result.message.reasoning_content) assistantMsg.reasoning_content = result.message.reasoning_content
+    loopMsgs.push(assistantMsg)
 
     for (const tc of toolCalls) {
       const compoundName = tc.function?.name ?? ''
       const { serverName, toolName } = splitToolName(compoundName)
       let args: Record<string, unknown> = {}
       try { args = tc.function?.arguments ? JSON.parse(tc.function.arguments) : {} } catch { args = {} }
+
+      console.log(`[Agent] 执行工具: ${compoundName}, args=${JSON.stringify(args).slice(0, 120)}`)
 
       let toolResult: unknown = null
       let toolError: string | undefined
@@ -187,6 +205,9 @@ async function runToolLoop(
         toolResult = { error: toolError }
       }
 
+      const resultStr = JSON.stringify(toolResult)
+      console.log(`[Agent] 工具结果: ${toolError ? '错误=' + toolError : '长度=' + resultStr.length} chars`)
+
       options.onStreamEvent({
         type: 'tool_result',
         toolCallId: tc.id,
@@ -196,6 +217,9 @@ async function runToolLoop(
       })
       loopMsgs.push({ role: 'tool', tool_call_id: tc.id ?? '', name: compoundName, content: JSON.stringify(toolResult) })
     }
+
+    console.log(`[Agent] 工具执行完毕，准备第 ${i + 2} 轮 LLM 调用`)
+    options.onStreamEvent({ type: 'round_start' })
   }
 
   return lastText

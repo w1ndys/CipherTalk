@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { KeyboardEvent, ReactNode } from 'react'
 import {
   AtSign,
@@ -22,7 +22,7 @@ import type { McpServerStatus } from '../../../hooks/useMcpSkillsData'
 import type { AgentSkill, AttachedResource, AttachMenuItem, McpServer, SlashCommand } from '../types'
 
 interface Props {
-  onSend: (text: string) => void
+  onSend: (text: string, attached: AttachedResource[]) => void
   disabled?: boolean
   suggestions: string[]
   slashCommands: SlashCommand[]
@@ -58,7 +58,56 @@ export function ChatInput({
   const [enabledSkills, setEnabledSkills] = useState<Set<string>>(new Set())
   const [temperature, setTemperature] = useState(0.7)
   const [contextLength, setContextLength] = useState<ContextLength>('8k')
+  const [mentionSessions, setMentionSessions] = useState<Array<{ id: string; name: string; summary?: string; avatarUrl?: string }>>([])
+  const [mentionLoading, setMentionLoading] = useState(false)
+  const [mentionQuery, setMentionQuery] = useState('')
   const textareaRef = useRef<HTMLTextAreaElement>(null)
+  const mentionSearchRef = useRef<HTMLInputElement>(null)
+  const mentionLoadingRef = useRef(false)
+  const mentionLoadedRef = useRef(false)
+
+  // 一次性拉取所有会话（最多 1000 条），后续纯客户端过滤
+  const loadMentionSessions = useCallback(async () => {
+    if (mentionLoadingRef.current || mentionLoadedRef.current) return
+    mentionLoadingRef.current = true
+    setMentionLoading(true)
+    try {
+      const result = await window.electronAPI?.chat?.getSessions?.(0, 1000)
+      if (result?.success && result.sessions) {
+        mentionLoadedRef.current = true
+        setMentionSessions(result.sessions.map((s: { username: string; displayName?: string; summary?: string; avatarUrl?: string }) => ({
+          id: s.username,
+          name: s.displayName || s.username,
+          summary: s.summary,
+          avatarUrl: s.avatarUrl
+        })))
+      }
+    } catch {
+      // ignore
+    } finally {
+      mentionLoadingRef.current = false
+      setMentionLoading(false)
+    }
+  }, [])
+
+  // 过滤逻辑：名字或摘要包含关键词（拼音首字母粗匹配）
+  const filteredMentionSessions = useMemo(() => {
+    const q = mentionQuery.trim().toLowerCase()
+    if (!q) return mentionSessions
+    return mentionSessions.filter(s =>
+      s.name.toLowerCase().includes(q) ||
+      (s.summary || '').toLowerCase().includes(q)
+    )
+  }, [mentionSessions, mentionQuery])
+
+  // 弹窗打开时自动聚焦搜索框
+  useEffect(() => {
+    if (showMention) {
+      requestAnimationFrame(() => mentionSearchRef.current?.focus())
+    } else {
+      setMentionQuery('')
+    }
+  }, [showMention])
 
   const visibleSlashCommands = useMemo(() => {
     if (!value.startsWith('/')) return slashCommands
@@ -90,8 +139,9 @@ export function ChatInput({
   const submit = () => {
     const text = value.trim()
     if (!text || disabled) return
-    onSend(text)
+    onSend(text, attached)
     setValue('')
+    setAttached([])
     closeAll()
     requestAnimationFrame(() => resizeTextarea())
   }
@@ -106,7 +156,7 @@ export function ChatInput({
   const handleKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); submit() }
     if (e.key === '/' && !value) { setShowSlash(true); setShowAttach(false) }
-    if (e.key === '@' && !value) { setShowMention(true); setShowAttach(false); setShowSlash(false) }
+    if (e.key === 'Escape' && showMention) { setShowMention(false); return }
     if (e.key === 'Escape') closeAll()
   }
 
@@ -127,7 +177,7 @@ export function ChatInput({
       {suggestions.length ? (
         <div className="agent-suggestions">
           {suggestions.map(suggestion => (
-            <button key={suggestion} type="button" onClick={() => onSend(suggestion)} disabled={disabled}>
+            <button key={suggestion} type="button" onClick={() => onSend(suggestion, [])} disabled={disabled}>
               <Sparkles size={12} />
               {suggestion}
             </button>
@@ -168,8 +218,16 @@ export function ChatInput({
           className="agent-composer__textarea"
           placeholder="给 Agent 安排一个任务... 按 @ 引用，按 / 输入命令"
           onChange={event => {
-            setValue(event.target.value)
-            setShowSlash(event.target.value.startsWith('/'))
+            const text = event.target.value
+            setValue(text)
+            // 检测光标前的 @query 模式，自动打开 / 更新引用搜索
+            const cursor = event.target.selectionStart ?? text.length
+            const match = text.slice(0, cursor).match(/@(\S*)$/)
+            if (match) {
+              if (!showMention) { setShowMention(true); loadMentionSessions() }
+              setMentionQuery(match[1])
+            }
+            setShowSlash(text.startsWith('/'))
             resizeTextarea()
           }}
           onKeyDown={handleKeyDown}
@@ -205,7 +263,7 @@ export function ChatInput({
                         }}
                       >
                         <span className="agent-popover-row__icon"><Icon size={15} /></span>
-                        <span>
+                        <span className="agent-popover-row__text">
                           <strong>{item.label}</strong>
                           <small>{item.description}</small>
                         </span>
@@ -221,17 +279,65 @@ export function ChatInput({
               <button
                 type="button"
                 className={`agent-mention-button${showMention ? ' is-open' : ''}`}
-                onClick={event => { event.stopPropagation(); closeAll(); setShowMention(v => !v) }}
+                onClick={event => { event.stopPropagation(); closeAll(); setShowMention(v => { if (!v) loadMentionSessions(); return !v }) }}
                 title="引用对象"
               >
                 <AtSign size={15} />
               </button>
               {showMention ? (
-                <ComposerPopover title="引用对象" onClose={() => setShowMention(false)}>
-                  <div className="agent-popover-empty">
-                    <UserRoundSearch size={16} />
-                    <span>暂无可引用对象</span>
+                <ComposerPopover title="引用会话" onClose={() => setShowMention(false)}>
+                  <div className="agent-mention-search-wrap">
+                    <UserRoundSearch size={13} />
+                    <input
+                      ref={mentionSearchRef}
+                      className="agent-mention-search"
+                      placeholder="搜索会话..."
+                      value={mentionQuery}
+                      onChange={e => setMentionQuery(e.target.value)}
+                      onKeyDown={e => { if (e.key === 'Escape') setShowMention(false) }}
+                    />
                   </div>
+                  {mentionLoading ? (
+                    <div className="agent-popover-empty"><span>加载中...</span></div>
+                  ) : filteredMentionSessions.length === 0 ? (
+                    <div className="agent-popover-empty">
+                      <UserRoundSearch size={16} />
+                      <span>{mentionQuery ? `没有匹配"${mentionQuery}"的会话` : '暂无会话'}</span>
+                    </div>
+                  ) : filteredMentionSessions.map(session => {
+                    const alreadyAttached = attached.some(r => r.id === session.id)
+                    return (
+                      <button
+                        className={`agent-popover-row${alreadyAttached ? ' is-active' : ''}`}
+                        key={session.id}
+                        type="button"
+                        onClick={() => {
+                          if (!alreadyAttached) {
+                            setAttached(current => [
+                              ...current,
+                              { id: session.id, label: session.name, icon: 'database' as const }
+                            ])
+                          }
+                          // 清除 textarea 里的 @query 文本
+                          const textarea = textareaRef.current
+                          if (textarea) {
+                            const cursor = textarea.selectionStart ?? value.length
+                            const before = value.slice(0, cursor)
+                            const m = before.match(/@\S*$/)
+                            if (m) setValue(before.slice(0, -m[0].length) + value.slice(cursor))
+                          }
+                          setShowMention(false)
+                          requestAnimationFrame(() => textareaRef.current?.focus())
+                        }}
+                      >
+                        <SessionAvatar name={session.name} avatarUrl={session.avatarUrl} />
+                        <span className="agent-popover-row__text">
+                          <strong>{session.name}</strong>
+                          {session.summary ? <small>{session.summary}</small> : null}
+                        </span>
+                      </button>
+                    )
+                  })}
                 </ComposerPopover>
               ) : null}
             </div>
@@ -299,7 +405,7 @@ export function ChatInput({
                         onClick={() => onToggleServer(server.name, server.status)}
                       >
                         <span className={`agent-server-status agent-server-status--${server.status}`} />
-                        <span>
+                        <span className="agent-popover-row__text">
                           <strong>{server.name}</strong>
                           <small>
                             {server.status === 'error' && server.error
@@ -343,7 +449,7 @@ export function ChatInput({
                             onClick={() => toggleSkill(skill.id)}
                           >
                             <span className="agent-popover-row__icon"><Hammer size={14} /></span>
-                            <span>
+                            <span className="agent-popover-row__text">
                               <strong>{skill.name}</strong>
                               <small>{skill.description}</small>
                             </span>
@@ -440,11 +546,23 @@ function ComposerPopover({
   title,
   children,
   onClose,
+  onScrollNearBottom,
 }: {
   title: string
   children: ReactNode
   onClose: () => void
+  onScrollNearBottom?: () => void
 }) {
+  const listRef = useRef<HTMLDivElement>(null)
+
+  const handleScroll = () => {
+    const el = listRef.current
+    if (!el || !onScrollNearBottom) return
+    if (el.scrollTop + el.clientHeight >= el.scrollHeight - 60) {
+      onScrollNearBottom()
+    }
+  }
+
   return (
     <div className="agent-popover" onClick={event => event.stopPropagation()}>
       <div className="agent-popover__title">
@@ -453,7 +571,31 @@ function ComposerPopover({
           <X size={12} />
         </button>
       </div>
-      <div className="agent-popover__list">{children}</div>
+      <div className="agent-popover__list" ref={listRef} onScroll={handleScroll}>{children}</div>
     </div>
+  )
+}
+
+function SessionAvatar({ name, avatarUrl }: { name: string; avatarUrl?: string }) {
+  const initial = (name || '?')[0].toUpperCase()
+  const hue = [...(name || '')].reduce((acc, c) => acc + c.charCodeAt(0), 0) % 360
+
+  if (avatarUrl) {
+    return (
+      <img
+        className="agent-session-avatar"
+        src={avatarUrl}
+        alt={name}
+        onError={e => { (e.currentTarget as HTMLImageElement).style.display = 'none' }}
+      />
+    )
+  }
+  return (
+    <span
+      className="agent-session-avatar agent-session-avatar--fallback"
+      style={{ background: `hsl(${hue} 55% 48%)` }}
+    >
+      {initial}
+    </span>
   )
 }

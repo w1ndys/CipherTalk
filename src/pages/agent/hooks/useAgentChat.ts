@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from 'react'
 import type { AgentConversationSummary, AgentMessageRecord } from '../../../types/electron'
-import type { Message, AssistantBlock, ToolBlock, TextBlock, ThinkingBlock } from '../types'
+import type { AttachedResource, Message, AssistantBlock, ToolBlock, TextBlock, ThinkingBlock } from '../types'
 
 function recordToMessage(r: AgentMessageRecord): Message {
   let blocks: AssistantBlock[] | undefined
@@ -306,6 +306,17 @@ export function useAgentChat() {
         setMessages(prev => finalizeToolBlock(prev, streamingMsgIdRef.current, event.toolName, event.result, event.error))
         return
       }
+      if (event.type === 'round_start') {
+        const prevMsgId = streamingMsgIdRef.current
+        const newMsgId = `a-${Date.now()}`
+        streamingMsgIdRef.current = newMsgId
+        contentThinkModeRef.current = false
+        setMessages(prev => [
+          ...markStreamingDone(prev, prevMsgId),
+          { id: newMsgId, role: 'assistant' as const, blocks: [], streaming: true }
+        ])
+        return
+      }
       if (event.type === 'message_done') {
         if (event.toolCalls?.length) return
         setMessages(prev => markStreamingDone(prev, streamingMsgIdRef.current))
@@ -367,12 +378,12 @@ export function useAgentChat() {
     }
   }, [])
 
-  const send = async (text: string) => {
+  const send = async (text: string, attached?: AttachedResource[]) => {
     if (!text.trim() || loading) return
 
     const agentApi = window.electronAPI?.agent
     if (!agentApi) {
-      const userMsg: Message = { id: `u-${Date.now()}`, role: 'user', content: text }
+      const userMsg: Message = { id: `u-${Date.now()}`, role: 'user', content: text, attached: attached?.length ? attached : undefined }
       setMessages(prev => [...prev, userMsg])
       setLoading(true)
       setTimeout(() => {
@@ -386,7 +397,7 @@ export function useAgentChat() {
       return
     }
 
-    const userMsg: Message = { id: `u-${Date.now()}`, role: 'user', content: text }
+    const userMsg: Message = { id: `u-${Date.now()}`, role: 'user', content: text, attached: attached?.length ? attached : undefined }
     const assistantMsgId = `a-${Date.now()}`
     const requestId = createAgentRequestId()
     currentRequestIdRef.current = requestId
@@ -407,6 +418,10 @@ export function useAgentChat() {
     const history = buildHistory(messages)
     const providerSettings = await getProviderSettings()
 
+    const scopedSessions = (attached || [])
+      .filter(r => r.icon === 'database')
+      .map(r => ({ id: r.id, name: r.label }))
+
     const result = await agentApi.sendMessage({
       requestId,
       conversationId: conversationId ?? undefined,
@@ -415,7 +430,8 @@ export function useAgentChat() {
       provider: providerSettings.provider,
       apiKey: providerSettings.apiKey,
       model: providerSettings.model,
-      enableThinking: providerSettings.enableThinking
+      enableThinking: providerSettings.enableThinking,
+      scopedSessions: scopedSessions.length > 0 ? scopedSessions : undefined
     })
 
     if (!result.success) {
