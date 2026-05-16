@@ -741,6 +741,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
       readLimit?: number
       enabledTools?: Array<{ type: string; function: { name: string; description?: string; parameters?: Record<string, unknown> } }>
       scopedSessions?: Array<{ id: string; name: string }>
+      skillIds?: string[]
     }) => ipcRenderer.invoke('agent:sendMessage', opts),
 
     cancel: (requestId: string) => ipcRenderer.invoke('agent:cancel', requestId),

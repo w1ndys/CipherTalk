@@ -529,7 +529,7 @@ export function useAgentChat() {
     }
   }, [])
 
-  const send = async (text: string, attached?: AttachedResource[], readLimit = 500) => {
+  const send = async (text: string, attached?: AttachedResource[], readLimit = 500, skillIds?: string[]) => {
     lastReadLimitRef.current = readLimit
     const trimmed = text.trim()
     if (!trimmed || loading) return
@@ -655,7 +655,8 @@ export function useAgentChat() {
       enableThinking: forceThinking ?? providerSettings.enableThinking,
       commandHint,
       readLimit,
-      scopedSessions: scopedSessions.length > 0 ? scopedSessions : undefined
+      scopedSessions: scopedSessions.length > 0 ? scopedSessions : undefined,
+      skillIds: skillIds && skillIds.length > 0 ? skillIds : undefined,
     })
 
     if (!result.success) {

@@ -37,6 +37,44 @@ export interface ContactInfo {
   lastContactTime?: number
 }
 
+const SYSTEM_CONTACT_USERNAMES = new Set([
+  'filehelper',
+  'fmessage',
+  'floatbottle',
+  'medianote',
+  'newsapp',
+  'qmessage',
+  'qqmail',
+  'weixin',
+  'brandsessionholder',
+  'brandservicesessionholder',
+  'notifymessage',
+  'opencustomerservicemsg',
+  'notification_messages',
+  'userexperience_alarm'
+])
+
+function isSystemContactUsername(username: string): boolean {
+  const lower = username.trim().toLowerCase()
+  if (!lower) return true
+  if (SYSTEM_CONTACT_USERNAMES.has(lower)) return true
+  return lower.startsWith('fake_') || lower.includes('@kefu.openim') || lower.includes('service_')
+}
+
+function detectContactInfoType(username: string, row: Record<string, any>): ContactInfo['type'] | null {
+  const lower = username.trim().toLowerCase()
+  if (isSystemContactUsername(lower)) return null
+  if (lower.includes('@chatroom')) return 'group'
+  if (lower.startsWith('gh_')) return 'official'
+
+  const rawType = row.local_type ?? row.type
+  const numericType = rawType === null || rawType === undefined || rawType === '' ? Number.NaN : Number(rawType)
+  if (Number.isFinite(numericType) && numericType === 3) return 'official'
+
+  // 不同微信版本的 contact.local_type 含义不稳定；普通个人号在排除系统号后应作为好友保留。
+  return 'friend'
+}
+
 export interface Message {
   localId: number
   serverId: number
@@ -607,11 +645,13 @@ class ChatService extends EventEmitter {
       const hasBigHeadUrl = columnNames.includes('big_head_url')
       const hasSmallHeadUrl = columnNames.includes('small_head_url')
       const hasLocalType = columnNames.includes('local_type')
+      const hasType = columnNames.includes('type')
 
       const selectCols = ['username', 'remark', 'nick_name', 'alias', 'quan_pin', 'flag']
       if (hasBigHeadUrl) selectCols.push('big_head_url')
       if (hasSmallHeadUrl) selectCols.push('small_head_url')
       if (hasLocalType) selectCols.push('local_type')
+      if (hasType) selectCols.push('type')
 
       const rows = await dbAdapter.all<any>(
         'contact',
@@ -620,27 +660,13 @@ class ChatService extends EventEmitter {
       )
 
       const contacts: ContactInfo[] = []
-      const excludeNames = ['medianote', 'floatbottle', 'qmessage', 'qqmail', 'fmessage']
 
       for (const row of rows) {
         const username = row.username || ''
         if (!username) continue
 
-        let type: 'friend' | 'group' | 'official' | 'former_friend' | 'other' = 'other'
-        const localType = hasLocalType ? (row.local_type || 0) : 0
-        const quanPin = row.quan_pin || ''
-
-        if (username.includes('@chatroom')) {
-          type = 'group'
-        } else if (username.startsWith('gh_')) {
-          type = 'official'
-        } else if (/^(?!.*(gh_|@chatroom)).*$/.test(username) && localType === 1 && !excludeNames.includes(username)) {
-          type = 'friend'
-        } else if (/^(?!.*(gh_|@chatroom)).*$/.test(username) && localType === 0 && quanPin) {
-          type = 'former_friend'
-        } else {
-          continue
-        }
+        const type = detectContactInfoType(username, row)
+        if (!type) continue
 
         const displayName = row.remark || row.nick_name || row.alias || username
         let avatarUrl: string | undefined

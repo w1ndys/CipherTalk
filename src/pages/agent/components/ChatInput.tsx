@@ -17,7 +17,7 @@ import type { McpServerStatus } from '../../../hooks/useMcpSkillsData'
 import type { AgentSkill, AttachedResource, McpServer, SlashCommand } from '../types'
 
 interface Props {
-  onSend: (text: string, attached: AttachedResource[], readLimit: number) => void
+  onSend: (text: string, attached: AttachedResource[], readLimit: number, skillIds: string[]) => void
   disabled?: boolean
   suggestions: string[]
   slashCommands: SlashCommand[]
@@ -151,7 +151,7 @@ export function ChatInput({
   const submit = () => {
     const text = value.trim()
     if (!text || disabled) return
-    onSend(text, attached, readLimit)
+    onSend(text, attached, readLimit, [...enabledSkills])
     setValue('')
     setAttached([])
     closeAll()
@@ -189,7 +189,7 @@ export function ChatInput({
       {suggestions.length ? (
         <div className="agent-suggestions">
           {suggestions.map(suggestion => (
-            <button key={suggestion} type="button" onClick={() => onSend(suggestion, [], readLimit)} disabled={disabled}>
+            <button key={suggestion} type="button" onClick={() => onSend(suggestion, [], readLimit, [])} disabled={disabled}>
               <Sparkles size={12} />
               {suggestion}
             </button>

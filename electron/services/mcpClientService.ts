@@ -309,6 +309,16 @@ export class McpClientService {
     return results
   }
 
+  getConnectedToolSchemas(): Array<{ serverName: string; tools: McpToolInfo[] }> {
+    const result: Array<{ serverName: string; tools: McpToolInfo[] }> = []
+    for (const [name, conn] of this.connections) {
+      if (conn.tools.length > 0) {
+        result.push({ serverName: name, tools: conn.tools })
+      }
+    }
+    return result
+  }
+
   async restoreSavedConnections(): Promise<void> {
     const configs = loadConfigs()
     const targets = Object.entries(configs)

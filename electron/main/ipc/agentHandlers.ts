@@ -239,6 +239,7 @@ export function registerAgentHandlers(ctx: MainProcessContext): void {
     readLimit?: number
     enabledTools?: Array<{ type: string; function: { name: string; description?: string; parameters?: Record<string, unknown> } }>
     scopedSessions?: Array<{ id: string; name: string }>
+    skillIds?: string[]
   }) => {
     const requestId = options.requestId?.trim() || genRequestId()
     if (requestMap.has(requestId)) {
@@ -289,7 +290,19 @@ export function registerAgentHandlers(ctx: MainProcessContext): void {
         }
         try {
           const { BUILTIN_TOOL_SCHEMAS } = await import('../../services/agentBuiltinTools')
-          const mergedTools = [...BUILTIN_TOOL_SCHEMAS, ...(options.enabledTools || [])]
+          const { mcpClientService } = await import('../../services/mcpClientService')
+          const mcpToolSchemas = mcpClientService.getConnectedToolSchemas()
+            .flatMap(({ serverName, tools }) =>
+              tools.map(tool => ({
+                type: 'function' as const,
+                function: {
+                  name: `${serverName}__${tool.name}`,
+                  description: tool.description || '',
+                  parameters: (tool.inputSchema as Record<string, unknown>) ?? { type: 'object', properties: {} },
+                }
+              }))
+            )
+          const mergedTools = [...BUILTIN_TOOL_SCHEMAS, ...mcpToolSchemas, ...(options.enabledTools || [])]
 
           const suffixParts: string[] = []
           if (options.scopedSessions && options.scopedSessions.length > 0) {
@@ -298,6 +311,15 @@ export function registerAgentHandlers(ctx: MainProcessContext): void {
           }
           if (options.commandHint) {
             suffixParts.push(options.commandHint)
+          }
+          if (options.skillIds && options.skillIds.length > 0) {
+            const { skillManagerService } = await import('../../services/skillManagerService')
+            for (const skillId of options.skillIds) {
+              const r = skillManagerService.readSkillContent(skillId)
+              if (r.success && r.content) {
+                suffixParts.push(r.content)
+              }
+            }
           }
           const systemPromptSuffix = suffixParts.length > 0 ? suffixParts.join('\n\n') : undefined
 
