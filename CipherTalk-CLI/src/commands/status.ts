@@ -9,6 +9,8 @@ export function registerStatusCommand(program: Command, context: CommandContext)
     .description('检查配置和数据库连接状态')
     .action(async () => {
       const globalOptions = status.optsWithGlobals() as GlobalCliOptions
+      // TTY + 未指定 --quiet / --format 时，跑完 /status 留在交互 shell 里继续操作；
+      // 否则按纯命令模式打印 JSON 后退出（脚本场景）。
       const shouldEnterShell = (context.interactive || Boolean(globalOptions.ui)) && !globalOptions.quiet && !globalOptions.format
       if (shouldEnterShell) {
         await startInteractiveShell(context, globalOptions, { initialCommand: '/status' })

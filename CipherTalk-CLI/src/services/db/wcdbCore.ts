@@ -1,8 +1,20 @@
-import { basename, join } from 'path'
+import { basename, delimiter, dirname, join } from 'path'
 import { existsSync, readdirSync, statSync } from 'fs'
 import { createRequire } from 'module'
 
 const require = createRequire(import.meta.url)
+
+// Windows 在加载 DLL 时不会自动把 DLL 自身所在目录加入搜索路径——
+// 把 native 目录前置到 PATH，确保 WCDB.dll 的 VC++ 依赖（VCRUNTIME140.dll 等）
+// 能在同目录或系统目录里被找到。多次调用会去重。
+function ensureDirInPath(dir: string): void {
+  if (process.platform !== 'win32') return
+  if (!dir) return
+  const current = process.env.PATH || ''
+  const segments = current.split(delimiter)
+  if (segments.some((seg) => seg.toLowerCase() === dir.toLowerCase())) return
+  process.env.PATH = `${dir}${delimiter}${current}`
+}
 
 /**
  * WcdbCore —— 直连微信加密数据库的底层封装。
@@ -79,8 +91,12 @@ export class WcdbCore {
         return { success: false, error: `WCDB 原生库不存在: ${libraryPath}` }
       }
 
+      // 让 Windows DLL 加载器能在同目录解析隐式依赖
+      ensureDirInPath(dirname(libraryPath))
+
       if (process.platform === 'win32') {
         const wcdbCorePath = this.getWindowsCoreLibraryPath()
+        ensureDirInPath(dirname(wcdbCorePath))
         if (existsSync(wcdbCorePath)) {
           try {
             this.koffi.load(wcdbCorePath)
@@ -295,52 +311,16 @@ export class WcdbCore {
   isConnected(): boolean { return this.initialized && this.handle !== null }
 
   async testConnection(dbPath: string, hexKey: string, wxid: string): Promise<{ success: boolean; error?: string; sessionCount?: number }> {
+    // 开源版 wcdb_api 在同一进程对同一个 session.db 调用 wcdb_open_account 第二次会
+    // 让进程硬退出（C++ 析构留作 no-op，残留资源在第二次 open 时炸锅）。
+    // 因此 testConnection 不再独立 open+shutdown，改成走 open() 复用句柄。
+    // 后续查询会命中 open() 的缓存命中分支，零代价。
     try {
-      if (this.handle !== null && this.currentPath === dbPath && this.currentKey === hexKey && this.currentWxid === wxid) {
-        return { success: true, sessionCount: 0 }
-      }
-
-      const hadActive = this.handle !== null
-      const prevPath = this.currentPath
-      const prevKey = this.currentKey
-      const prevWxid = this.currentWxid
-
-      const initRes = await this.initialize()
-      if (!initRes.success) return { success: false, error: initRes.error || 'WCDB 初始化失败' }
-
-      const dbStoragePath = this.resolveDbStoragePath(dbPath, wxid)
-      if (!dbStoragePath) return { success: false, error: `未找到账号目录或 db_storage: ${dbPath}` }
-
-      const sessionDbPaths = this.getCandidateSessionDbs(dbStoragePath)
-      if (sessionDbPaths.length === 0) return { success: false, error: `未找到 session.db 文件: ${dbStoragePath}` }
-
-      const openResult = this.tryOpenWithCandidates(sessionDbPaths, hexKey)
-      if (!openResult.success || !openResult.handle || !openResult.matchedPath) {
+      const ok = await this.open(dbPath, hexKey, wxid)
+      if (!ok) {
         const logs = await this.printLogs()
-        return {
-          success: false,
-          error: `数据库打开失败 | db_storage=${dbStoragePath} | tried=${sessionDbPaths.join(', ')}${openResult.errors.length ? ` | details=${openResult.errors.join(' ; ')}` : ''}${logs ? ` | logs=${logs}` : ''}`
-        }
+        return { success: false, error: `数据库打开失败${logs ? ` | logs=${logs}` : ''}` }
       }
-
-      if (openResult.handle <= 0) return { success: false, error: '无效的数据库句柄' }
-
-      try {
-        this.wcdbShutdown()
-        this.handle = null
-        this.currentPath = null
-        this.currentKey = null
-        this.currentWxid = null
-        this.currentDbStoragePath = null
-        this.initialized = false
-      } catch (e) {
-        console.error('关闭测试数据库时出错:', e)
-      }
-
-      if (hadActive && prevPath && prevKey && prevWxid) {
-        try { await this.open(prevPath, prevKey, prevWxid) } catch { /* ignore restore failure */ }
-      }
-
       return { success: true, sessionCount: 0 }
     } catch (e) {
       console.error('测试连接异常:', e)

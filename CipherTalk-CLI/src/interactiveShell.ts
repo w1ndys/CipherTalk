@@ -2,7 +2,8 @@ import * as readline from 'node:readline'
 import { clearConfig, patchConfig, parseLimit, readConfig, resolveRuntimeConfig } from './config.js'
 import { errorEnvelope, successEnvelope, writeEnvelope } from './output.js'
 import type { CommandContext } from './commandRunner.js'
-import type { GlobalCliOptions, OutputFormat, RuntimeConfig } from './types.js'
+import type { ConfigFile } from './config.js'
+import { OUTPUT_FORMATS, type GlobalCliOptions, type OutputFormat, type RuntimeConfig } from './types.js'
 import type { StatusData } from './services/types.js'
 
 export interface InteractiveCommand {
@@ -17,7 +18,7 @@ export interface InteractiveShellOptions {
 
 const COMMANDS: InteractiveCommand[] = [
   { name: '/status', usage: '/status', description: '检查配置和数据库连接状态' },
-  { name: '/config', usage: '/config show|set|clear', description: '查看或修改配置' },
+  { name: '/config', usage: '/config [show|set|clear]', description: '配置向导（直接回车进入），或 show/set/clear 子命令' },
   { name: '/sessions', usage: '/sessions [--limit 20] [--type private|group|mp]', description: '列出会话' },
   { name: '/messages', usage: '/messages <会话> [--limit 50] [--cursor n]', description: '查询会话消息' },
   { name: '/contacts', usage: '/contacts [--limit 50] [--type friend|group|mp]', description: '列出联系人' },
@@ -49,13 +50,31 @@ const ANSI = {
   teal: '\x1b[38;5;43m',
   mint: '\x1b[38;5;121m',
   white: '\x1b[97m',
-  gray: '\x1b[38;5;245m',
-  amber: '\x1b[38;5;221m'
+  gray: '\x1b[38;5;245m'
 } as const
 
 function paint(text: string, ...codes: string[]): string {
   if (process.env.NO_COLOR) return text
   return `${codes.join('')}${text}${ANSI.reset}`
+}
+
+export function renderWelcomeScreen(): string {
+  return [
+    paint('┌──────────────────────────────────────────────┐', ANSI.cyan),
+    `${paint('│', ANSI.cyan)}  ${paint('Welcome to CipherTalk CLI', ANSI.bold, ANSI.white)}                   ${paint('│', ANSI.cyan)}`,
+    `${paint('│', ANSI.cyan)}  ${paint('欢迎使用密语命令行工具', ANSI.mint)}                      ${paint('│', ANSI.cyan)}`,
+    paint('└──────────────────────────────────────────────┘', ANSI.cyan),
+    '',
+    paint(' ██████╗ ██╗ ██████╗  ██╗  ██╗ ███████╗ ██████╗  ████████╗  █████╗  ██╗      ██╗  ██╗', ANSI.blue),
+    paint('██╔════╝ ██║ ██╔══██╗ ██║  ██║ ██╔════╝ ██╔══██╗ ╚══██╔══╝ ██╔══██╗ ██║      ██║ ██╔╝', ANSI.blue),
+    paint('██║      ██║ ██████╔╝ ███████║ █████╗   ██████╔╝    ██║    ███████║ ██║      █████╔╝', ANSI.teal),
+    paint('██║      ██║ ██╔═══╝  ██╔══██║ ██╔══╝   ██╔══██╗    ██║    ██╔══██║ ██║      ██╔═██╗', ANSI.teal),
+    paint('╚██████╗ ██║ ██║      ██║  ██║ ███████╗ ██║  ██║    ██║    ██║  ██║ ███████╗ ██║  ██╗', ANSI.cyan),
+    paint(' ╚═════╝ ╚═╝ ╚═╝      ╚═╝  ╚═╝ ╚══════╝ ╚═╝  ╚═╝    ╚═╝    ╚═╝  ╚═╝ ╚══════╝ ╚═╝  ╚═╝', ANSI.cyan, ANSI.dim),
+    '',
+    paint('本地微信数据命令行工作台', ANSI.gray),
+    ''
+  ].join('\n')
 }
 
 export function getInteractiveCommands(): InteractiveCommand[] {
@@ -151,26 +170,6 @@ function showCommandList(): string {
   ].join('\n')
 }
 
-export function renderWelcomeScreen(): string {
-  return [
-    paint('┌──────────────────────────────────────────────┐', ANSI.cyan),
-    `${paint('│', ANSI.cyan)}  ${paint('Welcome to CipherTalk CLI', ANSI.bold, ANSI.white)}                   ${paint('│', ANSI.cyan)}`,
-    `${paint('│', ANSI.cyan)}  ${paint('欢迎使用密语命令行工具', ANSI.mint)}                      ${paint('│', ANSI.cyan)}`,
-    paint('└──────────────────────────────────────────────┘', ANSI.cyan),
-    '',
-    paint(' ██████╗ ██╗ ██████╗  ██╗  ██╗ ███████╗ ██████╗  ████████╗  █████╗  ██╗      ██╗  ██╗', ANSI.blue),
-    paint('██╔════╝ ██║ ██╔══██╗ ██║  ██║ ██╔════╝ ██╔══██╗ ╚══██╔══╝ ██╔══██╗ ██║      ██║ ██╔╝', ANSI.blue),
-    paint('██║      ██║ ██████╔╝ ███████║ █████╗   ██████╔╝    ██║    ███████║ ██║      █████╔╝', ANSI.teal),
-    paint('██║      ██║ ██╔═══╝  ██╔══██║ ██╔══╝   ██╔══██╗    ██║    ██╔══██║ ██║      ██╔═██╗', ANSI.teal),
-    paint('╚██████╗ ██║ ██║      ██║  ██║ ███████╗ ██║  ██║    ██║    ██║  ██║ ███████╗ ██║  ██╗', ANSI.cyan),
-    paint(' ╚═════╝ ╚═╝ ╚═╝      ╚═╝  ╚═╝ ╚══════╝ ╚═╝  ╚═╝    ╚═╝    ╚═╝  ╚═╝ ╚══════╝ ╚═╝  ╚═╝', ANSI.cyan, ANSI.dim),
-    '',
-    paint('本地微信数据命令行工作台', ANSI.gray),
-    '',
-    paint('按 Enter 继续', ANSI.amber)
-  ].join('\n')
-}
-
 function shellFormat(config: RuntimeConfig, globals: GlobalCliOptions, options: Record<string, string | boolean>): OutputFormat {
   const explicit = asString(options.format) || globals.format
   if (explicit === 'json' || explicit === 'jsonl' || explicit === 'csv' || explicit === 'markdown' || explicit === 'table') {
@@ -225,17 +224,48 @@ function statusHint(data: StatusData): string | null {
 }
 
 async function askLine(promptText: string): Promise<string> {
-  process.stdin.setRawMode?.(false)
-  const rl = readline.createInterface({
-    input: process.stdin,
-    output: process.stdout
+  const input = process.stdin
+  const output = process.stdout
+  input.setRawMode?.(true)
+  input.resume()
+  output.write(promptText)
+
+  return new Promise<string>((resolve) => {
+    let line = ''
+    const handler = (char: string | undefined, key: readline.Key | undefined) => {
+      const name = key?.name
+      if (name === 'return' || name === 'enter') {
+        input.off('keypress', handler)
+        output.write('\n')
+        resolve(line.trim())
+        return
+      }
+      if (key?.ctrl && name === 'c') {
+        input.off('keypress', handler)
+        output.write('\n')
+        resolve('')
+        return
+      }
+      if (name === 'backspace') {
+        if (line.length > 0) {
+          line = line.slice(0, -1)
+          output.write('\b \b')
+        }
+        return
+      }
+      if (!char) return
+      if (char === '\r' || char === '\n') {
+        input.off('keypress', handler)
+        output.write('\n')
+        resolve(line.trim())
+        return
+      }
+      if (char < ' ' || char === '\x7f') return
+      line += char
+      output.write(char)
+    }
+    input.on('keypress', handler)
   })
-  const answer = await new Promise<string>((resolve) => {
-    rl.question(promptText, resolve)
-  })
-  rl.close()
-  process.stdin.setRawMode?.(true)
-  return answer.trim()
 }
 
 async function runKeySetup(context: CommandContext, config: RuntimeConfig, format: OutputFormat): Promise<void> {
@@ -259,6 +289,119 @@ async function runKeySetup(context: CommandContext, config: RuntimeConfig, forma
     return
   }
   throw new Error('已取消：请输入 1 选择自动获取，或输入 2 选择手动填写')
+}
+
+function stripWrappingQuotes(input: string): string {
+  const trimmed = input.trim()
+  if (trimmed.length < 2) return trimmed
+  const first = trimmed[0]
+  const last = trimmed[trimmed.length - 1]
+  if ((first === '"' && last === '"') || (first === "'" && last === "'")) {
+    return trimmed.slice(1, -1)
+  }
+  return trimmed
+}
+
+function maskKey(hex: string | undefined): string {
+  if (!hex) return '未配置'
+  if (hex.length < 12) return '已设置'
+  return `${hex.slice(0, 8)}...${hex.slice(-4)} (已设置)`
+}
+
+type ConfigItem = {
+  key: 'dbPath' | 'wxid' | 'keyHex' | 'defaultFormat' | 'defaultLimit' | 'cacheDir'
+  label: string
+  display: string
+  kind: 'path' | 'string' | 'key' | 'enum' | 'number'
+}
+
+function buildConfigItems(current: ConfigFile): ConfigItem[] {
+  return [
+    { key: 'dbPath',        label: '数据库路径',     display: formatShellValue(current.dbPath),        kind: 'path' },
+    { key: 'wxid',          label: '微信账号 wxid',  display: formatShellValue(current.wxid),          kind: 'string' },
+    { key: 'keyHex',        label: '密钥 keyHex',    display: maskKey(current.keyHex),                  kind: 'key' },
+    { key: 'defaultFormat', label: '默认输出格式',   display: formatShellValue(current.defaultFormat), kind: 'enum' },
+    { key: 'defaultLimit',  label: '默认条数限制',   display: formatShellValue(current.defaultLimit),  kind: 'number' },
+    { key: 'cacheDir',      label: '缓存目录',       display: formatShellValue(current.cacheDir),      kind: 'path' }
+  ]
+}
+
+async function runConfigWizard(context: CommandContext, config: RuntimeConfig, format: OutputFormat): Promise<void> {
+  while (true) {
+    const items = buildConfigItems(readConfig())
+    const width = Math.max(...items.map((item) => item.label.length))
+    const lines = ['当前配置：']
+    items.forEach((item, index) => {
+      lines.push(`  ${String(index + 1)}. ${item.label.padEnd(width)}  ${item.display}`)
+    })
+    lines.push('')
+    lines.push('  c. 清空全部配置')
+    lines.push('  q. 退出（直接回车也可）')
+    lines.push('')
+    context.output.stdout(lines.join('\n'))
+
+    const choice = (await askLine('请输入编号选择要修改的项：')).trim()
+    if (!choice || choice === 'q' || choice === 'Q') return
+
+    if (choice === 'c' || choice === 'C') {
+      const confirm = (await askLine('确认清空全部配置？(y/N)：')).trim().toLowerCase()
+      if (confirm === 'y' || confirm === 'yes') {
+        const saved = clearConfig()
+        writeEnvelope(context.output, successEnvelope({ 已清空: saved, 配置文件: config.configPath }), format)
+      } else {
+        context.output.stdout('已取消')
+      }
+      continue
+    }
+
+    const idx = Number(choice) - 1
+    if (!Number.isInteger(idx) || idx < 0 || idx >= items.length) {
+      context.output.stderr(`无效的编号：${choice}`)
+      continue
+    }
+
+    const item = items[idx]
+    if (item.kind === 'key') {
+      await runKeySetup(context, config, format)
+      continue
+    }
+
+    let promptText = `请输入新的 ${item.label}（直接回车取消）：`
+    if (item.kind === 'path') {
+      promptText = `把文件夹拖到此处或粘贴绝对路径（直接回车取消）：`
+    } else if (item.kind === 'enum') {
+      promptText = `可选值：${OUTPUT_FORMATS.join(' | ')}\n请输入（直接回车取消）：`
+    } else if (item.kind === 'number') {
+      promptText = `请输入正整数（直接回车取消）：`
+    }
+
+    const raw = await askLine(promptText)
+    if (!raw) {
+      context.output.stdout('已取消')
+      continue
+    }
+    const value = stripWrappingQuotes(raw)
+
+    try {
+      const patch: ConfigFile = {}
+      if (item.key === 'defaultLimit') {
+        const n = Number(value)
+        if (!Number.isInteger(n) || n <= 0) throw new Error(`必须是正整数：${value}`)
+        patch.defaultLimit = n
+      } else if (item.key === 'defaultFormat') {
+        if (!(OUTPUT_FORMATS as readonly string[]).includes(value)) {
+          throw new Error(`无效格式：${value}（可选 ${OUTPUT_FORMATS.join('|')}）`)
+        }
+        patch.defaultFormat = value as OutputFormat
+      } else {
+        patch[item.key] = value
+      }
+      const saved = patchConfig(patch)
+      writeEnvelope(context.output, successEnvelope({ 已保存: saved }), format)
+    } catch (error) {
+      writeEnvelope(context.output, errorEnvelope(error), format)
+    }
+  }
 }
 
 async function runShellCommand(line: string, context: CommandContext, globals: GlobalCliOptions): Promise<boolean> {
@@ -290,7 +433,11 @@ async function runShellCommand(line: string, context: CommandContext, globals: G
         return true
       }
       case '/config': {
-        const action = positional[0] || 'show'
+        const action = positional[0] || 'wizard'
+        if (action === 'wizard') {
+          await runConfigWizard(context, config, format)
+          return true
+        }
         if (action === 'show') {
           writeEnvelope(context.output, successEnvelope({
             配置: readConfig(),
@@ -317,7 +464,7 @@ async function runShellCommand(line: string, context: CommandContext, globals: G
           writeEnvelope(context.output, successEnvelope({ 已保存: saved, 配置文件: config.configPath }), format)
           return true
         }
-        throw new Error('用法: /config show|set|clear')
+        throw new Error('用法: /config | /config show | /config set --key value | /config clear [字段...]')
       }
       case '/sessions': {
         const limit = commandLimit(options, config.defaultLimit)
@@ -481,22 +628,18 @@ export async function startInteractiveShell(
   let buffer = ''
   let closed = false
   let selectedSuggestion = 0
-  let enteredMainScreen = false
 
   readline.emitKeypressEvents(input)
   input.setRawMode?.(true)
   input.resume()
 
   const enterScreen = () => {
-    output.write('\x1b[?1049h\x1b[2J\x1b[H\x1b[?25l')
+    // 启用 alternate screen buffer + 光标可见（之前是 ?25l 隐藏光标用于欢迎屏，现在直接显示）
+    output.write('\x1b[?1049h\x1b[2J\x1b[H\x1b[?25h')
   }
 
   const leaveScreen = () => {
     output.write('\x1b[?25h\x1b[?1049l')
-  }
-
-  const clearScreen = () => {
-    output.write('\x1b[2J\x1b[H')
   }
 
   const renderHeader = () => {
@@ -510,30 +653,30 @@ export async function startInteractiveShell(
 
   const currentSuggestions = () => filterInteractiveCommands(buffer)
 
-  const renderSuggestions = () => {
+  const render = () => {
+    // 假定光标停在提示符所在行：\r 回到行首，\x1b[J 清掉光标到屏幕末，
+    // 这样既能擦掉旧的提示符行 + suggestions，又不会动上方已经打印过的命令输出。
+    output.write('\r\x1b[J')
+    output.write(`${prompt}${buffer}`)
+
     const suggestions = currentSuggestions()
     if (!buffer.startsWith('/') || suggestions.length === 0) return
 
     const limit = Math.min(suggestions.length, 8)
     const width = Math.max(...suggestions.slice(0, limit).map((command) => command.usage.length))
-    output.write('\n')
+    let rows = 0
     for (let index = 0; index < limit; index += 1) {
       const command = suggestions[index]
       const prefix = index === selectedSuggestion ? '›' : ' '
-      output.write(`${prefix} ${command.usage.padEnd(width)}  ${command.description}\n`)
+      output.write(`\n${prefix} ${command.usage.padEnd(width)}  ${command.description}`)
+      rows += 1
     }
     if (suggestions.length > limit) {
-      output.write(`  还有 ${suggestions.length - limit} 个命令，继续输入可缩小范围\n`)
+      output.write(`\n  还有 ${suggestions.length - limit} 个命令，继续输入可缩小范围`)
+      rows += 1
     }
-  }
-
-  const render = () => {
-    clearScreen()
-    renderHeader()
-    readline.clearLine(output, 0)
-    readline.cursorTo(output, 0)
-    output.write(`${prompt}${buffer}`)
-    renderSuggestions()
+    // 把光标移回提示符行末，方便继续输入
+    output.write(`\x1b[${rows}A\r\x1b[${(prompt + buffer).length}C`)
   }
 
   const printList = () => {
@@ -542,7 +685,6 @@ export async function startInteractiveShell(
   }
 
   enterScreen()
-  output.write(renderWelcomeScreen())
 
   await new Promise<void>((resolve) => {
     const close = () => {
@@ -555,10 +697,9 @@ export async function startInteractiveShell(
       resolve()
     }
 
-    const enterMainScreen = async () => {
-      enteredMainScreen = true
-      clearScreen()
-      output.write('\x1b[?25h')
+    const bootstrap = async () => {
+      output.write(renderWelcomeScreen())
+      output.write('\n')
       renderHeader()
       if (options.initialCommand) {
         await runShellCommand(options.initialCommand, context, globals)
@@ -571,27 +712,30 @@ export async function startInteractiveShell(
       const line = buffer.trim()
       buffer = ''
       output.write('\n')
-      input.setRawMode?.(false)
-      const shouldContinue = await runShellCommand(line, context, globals)
+      input.off('keypress', onKeypress)
+      let shouldContinue = true
+      try {
+        shouldContinue = await runShellCommand(line, context, globals)
+      } catch (error) {
+        // execute() 是 `void execute()` 火地忘形调用，若 promise reject
+        // 在 Node 22+ 默认会作为 unhandled rejection 终止进程。
+        // 在此兜底所有异常，把消息打出来后继续 shell 循环。
+        const message = error instanceof Error ? (error.stack || error.message) : String(error)
+        context.output.stderr(`命令执行异常: ${message}`)
+      }
       if (!shouldContinue) {
         close()
         return
       }
-      input.setRawMode?.(true)
+      input.on('keypress', onKeypress)
+      // 命令输出末尾换一行，提示符画在输出下方而不是把屏幕清掉
+      output.write('\n')
       render()
     }
 
     const onKeypress = (char: string, key: readline.Key) => {
       if (key.ctrl && key.name === 'c') {
         close()
-        return
-      }
-
-      if (!enteredMainScreen) {
-        if (key.name === 'return' || key.name === 'enter') {
-          void enterMainScreen()
-          return
-        }
         return
       }
 
@@ -655,5 +799,6 @@ export async function startInteractiveShell(
     }
 
     input.on('keypress', onKeypress)
+    void bootstrap()
   })
 }

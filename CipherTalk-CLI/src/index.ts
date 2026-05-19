@@ -4,6 +4,16 @@ import { startInteractiveShell } from './interactiveShell.js'
 import { createDefaultServices } from './services/index.js'
 import { processOutput } from './output.js'
 
+// Node 22+ 默认会因 unhandled promise rejection 终止进程；交互 shell 用 `void execute()`
+// 火地忘形调用 async 函数，需要进程级兜底以免命令执行抛错把 CLI 整死。
+process.on('unhandledRejection', (reason) => {
+  const message = reason instanceof Error ? (reason.stack || reason.message) : String(reason)
+  process.stderr.write(`未捕获的异常: ${message}\n`)
+})
+process.on('uncaughtException', (error) => {
+  process.stderr.write(`未捕获的异常: ${error.stack || error.message}\n`)
+})
+
 const argv = process.argv.slice(2)
 
 // 无子命令 + TTY → 自动进入交互模式

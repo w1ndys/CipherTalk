@@ -163,6 +163,5 @@ describe('cli command registration', () => {
     const screen = renderWelcomeScreen()
     expect(screen).toContain('Welcome to CipherTalk CLI')
     expect(screen).toContain('欢迎使用密语命令行工具')
-    expect(screen).toContain('按 Enter 继续')
   })
 })
