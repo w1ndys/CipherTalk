@@ -14,9 +14,10 @@ import SecurityTab from './tabs/SecurityTab'
 import type { UpdateInfo } from './types'
 import { formatFileSize } from './utils'
 import { useSettingsStore } from './settingsStore'
+import { ConfirmDialog, FloatingSaveButton, Toast } from './ui'
 import {
   Eye, EyeOff, Key, FolderSearch, FolderOpen, Search,
-  RotateCcw, Trash2, Save, Plug, X, Check, Sun, Moon, Monitor,
+  RotateCcw, Trash2, Plug, X, Check, Sun, Moon, Monitor,
   Palette, Database, ImageIcon, Download, HardDrive, Info, RefreshCw, Shield, CheckCircle, AlertCircle, Mic,
   Zap, Layers, User, Sparkles, Lock, ShieldCheck, Minus, Plus, Smile, ChevronDown
 } from 'lucide-react'
@@ -1342,57 +1343,43 @@ function SettingsLayout() {
       {/* 动态粒子背景 */}
       <BackgroundFx />
 
-      {message && <div className={`message-toast ${message.success ? 'success' : 'error'}`}>{message.text}</div>}
+      <Toast message={message} />
 
       {/* 清除确认对话框 */}
       {showClearDialog && (
-        <div className="clear-dialog-overlay">
-          <div className="clear-dialog">
-            <h3>{showClearDialog.title}</h3>
-            <p>{showClearDialog.message}</p>
-            <div className="dialog-actions">
-              <button
-                className="btn btn-danger"
-                onClick={confirmClear}
-              >
+        <ConfirmDialog
+          title={showClearDialog.title}
+          message={showClearDialog.message}
+          actions={(
+            <>
+              <button className="btn btn-danger" onClick={confirmClear}>
                 确定
               </button>
-              <button
-                className="btn btn-secondary dialog-cancel"
-                onClick={() => setShowClearDialog(null)}
-              >
+              <button className="btn btn-secondary dialog-cancel" onClick={() => setShowClearDialog(null)}>
                 取消
               </button>
-            </div>
-          </div>
-        </div>
+            </>
+          )}
+        />
       )}
 
       {/* 账号操作确认对话框 */}
       {securityConfirm.show && (
-        <div className="clear-dialog-overlay">
-          <div className="clear-dialog">
-            <h3 style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-              <AlertCircle className="text-warning" size={20} color="#f59e0b" />
-              {securityConfirm.title}
-            </h3>
-            <p>{securityConfirm.message}</p>
-            <div className="dialog-actions">
-              <button
-                className="btn btn-secondary"
-                onClick={() => setSecurityConfirm(prev => ({ ...prev, show: false }))}
-              >
+        <ConfirmDialog
+          title={securityConfirm.title}
+          titleIcon={<AlertCircle className="text-warning" size={20} color="#f59e0b" />}
+          message={securityConfirm.message}
+          actions={(
+            <>
+              <button className="btn btn-secondary" onClick={() => setSecurityConfirm(prev => ({ ...prev, show: false }))}>
                 取消
               </button>
-              <button
-                className="btn btn-primary"
-                onClick={securityConfirm.onConfirm}
-              >
+              <button className="btn btn-primary" onClick={securityConfirm.onConfirm}>
                 确定
               </button>
-            </div>
-          </div>
-        </div>
+            </>
+          )}
+        />
       )}
 
       <div className="settings-tabs">
@@ -1446,15 +1433,11 @@ function SettingsLayout() {
         )}
       </div>
 
-      {/* 悬浮保存按钮 */}
-      <button 
-        className={`floating-save-btn ${storeHasUnsavedChanges ? 'has-changes' : ''}`} 
-        onClick={handleSaveConfig} 
-        disabled={isLoading || storeIsSaving} 
-        title={storeHasUnsavedChanges ? '有未保存的更改，点击保存' : '保存配置'}
-      >
-        <Save size={20} />
-      </button>
+      <FloatingSaveButton
+        hasChanges={storeHasUnsavedChanges}
+        onClick={handleSaveConfig}
+        disabled={isLoading || storeIsSaving}
+      />
 
     </div>
   )

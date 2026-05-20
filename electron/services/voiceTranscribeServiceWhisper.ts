@@ -4,7 +4,7 @@
  */
 import { app } from 'electron'
 import { join } from 'path'
-import { existsSync, mkdirSync, createWriteStream, statSync, unlinkSync, writeFileSync } from 'fs'
+import { existsSync, mkdirSync, createWriteStream, statSync, unlinkSync, writeFileSync, renameSync, type WriteStream } from 'fs'
 import { spawn, ChildProcess } from 'child_process'
 import * as https from 'https'
 import * as http from 'http'
@@ -16,6 +16,14 @@ interface ModelConfig {
     sizeLabel: string
     quality: string
 }
+
+type DownloadCancelState = {
+    cancelled: boolean
+    request?: http.ClientRequest
+    writer?: WriteStream
+}
+
+const DOWNLOAD_CANCELLED_MESSAGE = '下载已暂停'
 
 const MODELS: Record<string, ModelConfig> = {
     tiny: {
@@ -81,6 +89,7 @@ export class VoiceTranscribeServiceWhisper {
     private whisperExe: string
     private whisperDir: string
     private useGPU: boolean = false
+    private downloadCancels = new Map<string, DownloadCancelState>()
 
     constructor() {
         this.modelsDir = join(app.getPath('appData'), 'ciphertalk', 'whisper-models')
@@ -413,6 +422,14 @@ export class VoiceTranscribeServiceWhisper {
         modelType: keyof typeof MODELS,
         onProgress?: (progress: { downloadedBytes: number; totalBytes?: number; percent?: number }) => void
     ): Promise<{ success: boolean; error?: string }> {
+        const existingCancel = this.downloadCancels.get(String(modelType))
+        if (existingCancel) {
+            return { success: false, error: '该 Whisper 模型正在下载' }
+        }
+
+        const cancelState: DownloadCancelState = { cancelled: false }
+        this.downloadCancels.set(String(modelType), cancelState)
+
         try {
             const config = MODELS[modelType]
             const modelPath = join(this.modelsDir, config.filename)
@@ -427,12 +444,29 @@ export class VoiceTranscribeServiceWhisper {
                     totalBytes: config.size,
                     percent
                 })
-            })
+            }, cancelState)
             return { success: true }
         } catch (error) {
+            if (cancelState.cancelled) {
+                return { success: false, error: DOWNLOAD_CANCELLED_MESSAGE }
+            }
             console.error('[Whisper] 下载失败:', error)
             return { success: false, error: String(error) }
+        } finally {
+            this.downloadCancels.delete(String(modelType))
         }
+    }
+
+    cancelDownloadModel(modelType: keyof typeof MODELS): { success: boolean; cancelled: boolean; error?: string } {
+        const cancelState = this.downloadCancels.get(String(modelType))
+        if (!cancelState) {
+            return { success: true, cancelled: false, error: '没有正在下载的 Whisper 模型' }
+        }
+
+        cancelState.cancelled = true
+        try { cancelState.request?.destroy(new Error(DOWNLOAD_CANCELLED_MESSAGE)) } catch { }
+        try { cancelState.writer?.destroy(new Error(DOWNLOAD_CANCELLED_MESSAGE)) } catch { }
+        return { success: true, cancelled: true }
     }
 
     /**
@@ -442,18 +476,40 @@ export class VoiceTranscribeServiceWhisper {
         url: string,
         targetPath: string,
         onProgress?: (downloaded: number, total?: number) => void,
+        cancelState?: DownloadCancelState,
         remainingRedirects = 5,
         timeout = 30000 // 30秒超时
     ): Promise<void> {
         return new Promise((resolve, reject) => {
+            if (cancelState?.cancelled) {
+                reject(new Error(DOWNLOAD_CANCELLED_MESSAGE))
+                return
+            }
+
+            if (existsSync(targetPath)) {
+                const downloaded = statSync(targetPath).size
+                onProgress?.(downloaded, downloaded)
+                resolve()
+                return
+            }
+
             const protocol = url.startsWith('https') ? https : http
+            const tempPath = `${targetPath}.tmp`
+            let downloadedBytes = existsSync(tempPath) ? statSync(tempPath).size : 0
 
             const request = protocol.get(url, {
                 headers: {
-                    'User-Agent': 'Mozilla/5.0'
+                    'User-Agent': 'Mozilla/5.0',
+                    ...(downloadedBytes > 0 ? { Range: `bytes=${downloadedBytes}-` } : {})
                 },
                 timeout
             }, (response) => {
+                if (cancelState?.cancelled) {
+                    response.destroy(new Error(DOWNLOAD_CANCELLED_MESSAGE))
+                    reject(new Error(DOWNLOAD_CANCELLED_MESSAGE))
+                    return
+                }
+
                 // 处理重定向
                 if ([301, 302, 303, 307, 308].includes(response.statusCode || 0) && response.headers.location) {
                     if (remainingRedirects <= 0) {
@@ -461,42 +517,72 @@ export class VoiceTranscribeServiceWhisper {
                         return
                     }
 
-                    this.downloadFile(response.headers.location, targetPath, onProgress, remainingRedirects - 1, timeout)
+                    this.downloadFile(response.headers.location, targetPath, onProgress, cancelState, remainingRedirects - 1, timeout)
                         .then(resolve)
                         .catch(reject)
                     return
                 }
 
-                if (response.statusCode !== 200) {
+                const isResumeResponse = response.statusCode === 206
+                if (downloadedBytes > 0 && response.statusCode === 200) {
+                    try { unlinkSync(tempPath) } catch { }
+                    downloadedBytes = 0
+                }
+
+                if (response.statusCode !== 200 && response.statusCode !== 206) {
                     reject(new Error(`下载失败: HTTP ${response.statusCode}`))
                     return
                 }
 
-                const totalBytes = Number(response.headers['content-length'] || 0) || undefined
-                let downloadedBytes = 0
+                const contentLength = Number(response.headers['content-length'] || 0) || 0
+                const rangeTotal = isResumeResponse
+                    ? Number(String(response.headers['content-range'] || '').match(/\/(\d+)$/)?.[1] || 0)
+                    : 0
+                const totalBytes = rangeTotal || (contentLength ? downloadedBytes + contentLength : undefined)
 
-                const writer = createWriteStream(targetPath)
+                const writer = createWriteStream(tempPath, { flags: downloadedBytes > 0 ? 'a' : 'w' })
+                if (cancelState) {
+                    cancelState.request = request
+                    cancelState.writer = writer
+                }
 
                 response.on('data', (chunk) => {
+                    if (cancelState?.cancelled) {
+                        response.destroy(new Error(DOWNLOAD_CANCELLED_MESSAGE))
+                        writer.destroy(new Error(DOWNLOAD_CANCELLED_MESSAGE))
+                        return
+                    }
                     downloadedBytes += chunk.length
                     onProgress?.(downloadedBytes, totalBytes)
                 })
 
-                response.on('error', reject)
-                writer.on('error', reject)
+                response.on('error', (error) => {
+                    reject(cancelState?.cancelled ? new Error(DOWNLOAD_CANCELLED_MESSAGE) : error)
+                })
+                writer.on('error', (error) => {
+                    reject(cancelState?.cancelled ? new Error(DOWNLOAD_CANCELLED_MESSAGE) : error)
+                })
                 writer.on('finish', () => {
                     writer.close()
+                    if (cancelState?.cancelled) {
+                        reject(new Error(DOWNLOAD_CANCELLED_MESSAGE))
+                        return
+                    }
+                    renameSync(tempPath, targetPath)
                     resolve()
                 })
 
                 response.pipe(writer)
             })
 
-            request.on('error', reject)
+            request.on('error', (error) => {
+                reject(cancelState?.cancelled ? new Error(DOWNLOAD_CANCELLED_MESSAGE) : error)
+            })
             request.on('timeout', () => {
                 request.destroy()
                 reject(new Error('下载超时'))
             })
+            if (cancelState) cancelState.request = request
         })
     }
 

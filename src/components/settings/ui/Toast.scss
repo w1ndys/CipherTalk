@@ -1,0 +1,38 @@
+.settings-page {
+  .message-toast {
+    position: fixed;
+    top: 60px;
+    left: 50%;
+    transform: translateX(-50%);
+    padding: 10px 24px;
+    border-radius: 9999px;
+    font-size: 14px;
+    z-index: 10000;
+    animation: settings-toast-slide-down 0.3s ease;
+    color: white;
+    backdrop-filter: blur(24px) saturate(180%);
+    -webkit-backdrop-filter: blur(24px) saturate(180%);
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.12);
+
+    &.success {
+      background: rgba(var(--primary-rgb), 0.75);
+    }
+
+    &.error {
+      background: rgba(239, 68, 68, 0.75);
+    }
+  }
+}
+
+@keyframes settings-toast-slide-down {
+  from {
+    opacity: 0;
+    transform: translateX(-50%) translateY(-10px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0);
+  }
+}

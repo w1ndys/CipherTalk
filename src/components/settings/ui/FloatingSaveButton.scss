@@ -1,0 +1,89 @@
+.settings-page {
+  .floating-save-btn {
+    position: fixed;
+    bottom: 24px;
+    right: 24px;
+    width: 56px;
+    height: 56px;
+    border-radius: 50%;
+    background: linear-gradient(135deg, rgba(var(--primary-rgb), 0.6) 0%, rgba(var(--primary-rgb), 0.2) 100%);
+    backdrop-filter: blur(16px);
+    -webkit-backdrop-filter: blur(16px);
+    border: 1px solid rgba(255, 255, 255, 0.28);
+    color: white;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.18);
+    transition: all 0.3s cubic-bezier(0.25, 1.5, 0.5, 1);
+    z-index: 1000;
+
+    [data-mode="light"] & {
+      color: rgba(0, 0, 0, 0.7);
+      border: 1px solid rgba(255, 255, 255, 0.72);
+      box-shadow: 0 4px 14px rgba(0, 0, 0, 0.14);
+    }
+
+    &:hover:not(:disabled) {
+      transform: translateY(-4px) scale(1.05);
+      background: linear-gradient(135deg, rgba(var(--primary-rgb), 0.7) 0%, rgba(var(--primary-rgb), 0.3) 100%);
+      box-shadow: 0 6px 18px rgba(0, 0, 0, 0.2);
+
+      [data-mode="light"] & {
+        box-shadow: 0 6px 18px rgba(0, 0, 0, 0.16);
+      }
+    }
+
+    &:active:not(:disabled) {
+      transform: translateY(2px) scale(0.95);
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.16);
+
+      [data-mode="light"] & {
+        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12);
+      }
+    }
+
+    &:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+      background: var(--bg-tertiary);
+      border-color: var(--border-color);
+      box-shadow: none;
+      color: var(--text-tertiary);
+    }
+
+    &.has-changes {
+      background: #ef4444;
+      border-color: rgba(255, 255, 255, 0.72);
+      color: white;
+      box-shadow: 0 4px 14px rgba(0, 0, 0, 0.18);
+
+      [data-mode="light"] & {
+        background: #ef4444;
+        border-color: rgba(255, 255, 255, 0.72);
+        color: white;
+        box-shadow: 0 4px 14px rgba(0, 0, 0, 0.14);
+      }
+
+      &:hover:not(:disabled) {
+        background: #dc2626;
+        box-shadow: 0 6px 18px rgba(0, 0, 0, 0.2);
+
+        [data-mode="light"] & {
+          background: #dc2626;
+          box-shadow: 0 6px 18px rgba(0, 0, 0, 0.16);
+        }
+      }
+
+      &:active:not(:disabled) {
+        transform: translateY(2px) scale(0.95);
+        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.16);
+
+        [data-mode="light"] & {
+          box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12);
+        }
+      }
+    }
+  }
+}

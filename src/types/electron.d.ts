@@ -1024,6 +1024,11 @@ export interface ElectronAPI {
       tokensPath?: string
       error?: string
     }>
+    cancelDownloadModel: () => Promise<{
+      success: boolean
+      cancelled: boolean
+      error?: string
+    }>
     transcribe: (wavBase64: string, sessionId: string, createTime: number, force?: boolean) => Promise<{
       success: boolean
       transcript?: string
@@ -1075,6 +1080,11 @@ export interface ElectronAPI {
       success: boolean
       error?: string
     }>
+    cancelDownloadModel: (modelType: string) => Promise<{
+      success: boolean
+      cancelled: boolean
+      error?: string
+    }>
     clearModel: (modelType: string) => Promise<{
       success: boolean
       error?: string
@@ -1091,6 +1101,11 @@ export interface ElectronAPI {
     }) => void) => () => void
     downloadGPUComponents: () => Promise<{
       success: boolean
+      error?: string
+    }>
+    cancelDownloadGPUComponents: () => Promise<{
+      success: boolean
+      cancelled: boolean
       error?: string
     }>
     checkGPUComponents: () => Promise<{
@@ -1337,6 +1352,11 @@ export interface ElectronAPI {
     downloadEmbeddingModel: (profileId?: string) => Promise<{
       success: boolean
       result?: EmbeddingModelStatus
+      error?: string
+    }>
+    cancelEmbeddingModelDownload: (profileId?: string) => Promise<{
+      success: boolean
+      cancelled: boolean
       error?: string
     }>
     clearEmbeddingModel: (profileId?: string) => Promise<{

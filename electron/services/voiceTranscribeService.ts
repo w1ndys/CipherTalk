@@ -4,7 +4,7 @@
  * 支持转写结果缓存
  */
 import { app } from 'electron'
-import { existsSync, mkdirSync, statSync, unlinkSync, createWriteStream } from 'fs'
+import { existsSync, mkdirSync, statSync, unlinkSync, createWriteStream, renameSync, type WriteStream } from 'fs'
 import { join } from 'path'
 import * as https from 'https'
 import * as http from 'http'
@@ -32,6 +32,14 @@ interface DownloadProgress {
 
 // 模型类型
 type ModelType = 'int8' | 'float32'
+
+type DownloadCancelState = {
+    cancelled: boolean
+    request?: http.ClientRequest
+    writer?: WriteStream
+}
+
+const DOWNLOAD_CANCELLED_MESSAGE = '下载已暂停'
 
 // SenseVoice 模型配置（按类型）
 const SENSEVOICE_MODELS: Record<ModelType, ModelInfo> = {
@@ -69,7 +77,8 @@ const MODEL_DOWNLOAD_URLS: Record<ModelType, { model: string; tokens: string }> 
 
 export class VoiceTranscribeService {
     private configService = new ConfigService()
-    private downloadTasks = new Map<string, Promise<{ success: boolean; path?: string; error?: string }>>()
+    private downloadTasks = new Map<string, Promise<{ success: boolean; modelPath?: string; tokensPath?: string; error?: string }>>()
+    private downloadCancels = new Map<string, DownloadCancelState>()
     private cacheDb: Database.Database | null = null
 
     constructor() {
@@ -296,6 +305,8 @@ export class VoiceTranscribeService {
         const cacheKey = 'sensevoice'
         const pending = this.downloadTasks.get(cacheKey)
         if (pending) return pending
+        const cancelState: DownloadCancelState = { cancelled: false }
+        this.downloadCancels.set(cacheKey, cancelState)
 
         const task = (async () => {
             try {
@@ -322,7 +333,8 @@ export class VoiceTranscribeService {
                             totalBytes: currentModel.sizeBytes,
                             percent
                         })
-                    }
+                    },
+                    cancelState
                 )
 
                 // 下载 tokens 文件 (40%)
@@ -339,11 +351,16 @@ export class VoiceTranscribeService {
                             totalBytes: currentModel.sizeBytes,
                             percent
                         })
-                    }
+                    },
+                    cancelState
                 )
 
                 return { success: true, modelPath, tokensPath }
             } catch (error) {
+                if (cancelState.cancelled) {
+                    return { success: false, error: DOWNLOAD_CANCELLED_MESSAGE }
+                }
+
                 // 下载失败时清理已下载的文件
                 const currentModel = this.getCurrentModel()
                 const modelPath = this.resolveModelPath(currentModel.files.model)
@@ -355,11 +372,24 @@ export class VoiceTranscribeService {
                 return { success: false, error: String(error) }
             } finally {
                 this.downloadTasks.delete(cacheKey)
+                this.downloadCancels.delete(cacheKey)
             }
         })()
 
         this.downloadTasks.set(cacheKey, task)
         return task
+    }
+
+    cancelDownloadModel(): { success: boolean; cancelled: boolean; error?: string } {
+        const cancelState = this.downloadCancels.get('sensevoice')
+        if (!cancelState) {
+            return { success: true, cancelled: false, error: '没有正在下载的语音识别模型' }
+        }
+
+        cancelState.cancelled = true
+        try { cancelState.request?.destroy(new Error(DOWNLOAD_CANCELLED_MESSAGE)) } catch { }
+        try { cancelState.writer?.destroy(new Error(DOWNLOAD_CANCELLED_MESSAGE)) } catch { }
+        return { success: true, cancelled: true }
     }
 
     /**
@@ -455,19 +485,41 @@ export class VoiceTranscribeService {
         targetPath: string,
         fileName: string,
         onProgress?: (downloaded: number, total?: number) => void,
+        cancelState?: DownloadCancelState,
         remainingRedirects = 5
     ): Promise<void> {
         return new Promise((resolve, reject) => {
+            if (cancelState?.cancelled) {
+                reject(new Error(DOWNLOAD_CANCELLED_MESSAGE))
+                return
+            }
+
+            if (existsSync(targetPath)) {
+                const downloaded = statSync(targetPath).size
+                onProgress?.(downloaded, downloaded)
+                resolve()
+                return
+            }
+
             const protocol = url.startsWith('https') ? https : http
+            const tempPath = `${targetPath}.tmp`
+            let downloadedBytes = existsSync(tempPath) ? statSync(tempPath).size : 0
 
 
             const options = {
                 headers: {
-                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                    ...(downloadedBytes > 0 ? { Range: `bytes=${downloadedBytes}-` } : {})
                 }
             }
 
             const request = protocol.get(url, options, (response) => {
+                if (cancelState?.cancelled) {
+                    response.destroy(new Error(DOWNLOAD_CANCELLED_MESSAGE))
+                    reject(new Error(DOWNLOAD_CANCELLED_MESSAGE))
+                    return
+                }
+
                 // 处理重定向
                 if ([301, 302, 303, 307, 308].includes(response.statusCode || 0) && response.headers.location) {
                     if (remainingRedirects <= 0) {
@@ -475,23 +527,41 @@ export class VoiceTranscribeService {
                         return
                     }
 
-                    this.downloadToFile(response.headers.location, targetPath, fileName, onProgress, remainingRedirects - 1)
+                    this.downloadToFile(response.headers.location, targetPath, fileName, onProgress, cancelState, remainingRedirects - 1)
                         .then(resolve)
                         .catch(reject)
                     return
                 }
 
-                if (response.statusCode !== 200) {
+                const isResumeResponse = response.statusCode === 206
+                if (downloadedBytes > 0 && response.statusCode === 200) {
+                    try { unlinkSync(tempPath) } catch { }
+                    downloadedBytes = 0
+                }
+
+                if (response.statusCode !== 200 && response.statusCode !== 206) {
                     reject(new Error(`下载失败: HTTP ${response.statusCode}`))
                     return
                 }
 
-                const totalBytes = Number(response.headers['content-length'] || 0) || undefined
-                let downloadedBytes = 0
+                const contentLength = Number(response.headers['content-length'] || 0) || 0
+                const rangeTotal = isResumeResponse
+                    ? Number(String(response.headers['content-range'] || '').match(/\/(\d+)$/)?.[1] || 0)
+                    : 0
+                const totalBytes = rangeTotal || (contentLength ? downloadedBytes + contentLength : undefined)
 
-                const writer = createWriteStream(targetPath)
+                const writer = createWriteStream(tempPath, { flags: downloadedBytes > 0 ? 'a' : 'w' })
+                if (cancelState) {
+                    cancelState.request = request
+                    cancelState.writer = writer
+                }
 
                 response.on('data', (chunk) => {
+                    if (cancelState?.cancelled) {
+                        response.destroy(new Error(DOWNLOAD_CANCELLED_MESSAGE))
+                        writer.destroy(new Error(DOWNLOAD_CANCELLED_MESSAGE))
+                        return
+                    }
                     downloadedBytes += chunk.length
                     onProgress?.(downloadedBytes, totalBytes)
                 })
@@ -508,6 +578,11 @@ export class VoiceTranscribeService {
 
                 writer.on('finish', () => {
                     writer.close()
+                    if (cancelState?.cancelled) {
+                        reject(new Error(DOWNLOAD_CANCELLED_MESSAGE))
+                        return
+                    }
+                    renameSync(tempPath, targetPath)
 
                     resolve()
                 })
@@ -516,9 +591,14 @@ export class VoiceTranscribeService {
             })
 
             request.on('error', (error) => {
+                if (cancelState?.cancelled) {
+                    reject(new Error(DOWNLOAD_CANCELLED_MESSAGE))
+                    return
+                }
                 console.error(`[VoiceTranscribe] ${fileName} 下载错误:`, error)
                 reject(error)
             })
+            if (cancelState) cancelState.request = request
         })
     }
 

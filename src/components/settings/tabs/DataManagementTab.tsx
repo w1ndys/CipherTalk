@@ -4,6 +4,7 @@ import { dialog } from '../../../services/ipc'
 import * as configService from '../../../services/config'
 import { formatFileSize } from '../utils'
 import { useSettingsStore } from '../settingsStore'
+import { ConfirmDialog } from '../ui'
 
 interface DataManagementTabProps {
   showMessage: (text: string, success: boolean) => void
@@ -427,16 +428,16 @@ function DataManagementTab({ showMessage, reloadConfig, onClearCurrentAccountCon
   return (
     <>
       {showClearDialog && (
-        <div className="clear-dialog-overlay">
-          <div className="clear-dialog">
-            <h3>{showClearDialog.title}</h3>
-            <p>{showClearDialog.message}</p>
-            <div className="dialog-actions">
+        <ConfirmDialog
+          title={showClearDialog.title}
+          message={showClearDialog.message}
+          actions={(
+            <>
               <button className="btn btn-danger" onClick={confirmClear}>确定</button>
               <button className="btn btn-secondary dialog-cancel" onClick={() => setShowClearDialog(null)}>取消</button>
-            </div>
-          </div>
-        </div>
+            </>
+          )}
+        />
       )}
       {renderDataManagementTab()}
     </>

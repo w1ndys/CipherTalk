@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { Lock, Fingerprint, Check, ShieldCheck, Save, AlertCircle } from 'lucide-react'
 import { useAuthStore } from '../../../stores/authStore'
+import { ConfirmDialog } from '../ui'
 
 interface SecurityTabProps {
   isMac: boolean
@@ -191,14 +192,12 @@ function SecurityTab({ isMac, showMessage }: SecurityTabProps) {
 
       {/* Confirmation Modal */}
       {securityConfirm.show && (
-        <div className="clear-dialog-overlay">
-          <div className="clear-dialog">
-            <h3 style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-              <AlertCircle className="text-warning" size={20} color="#f59e0b" />
-              {securityConfirm.title}
-            </h3>
-            <p>{securityConfirm.message}</p>
-            <div className="dialog-actions">
+        <ConfirmDialog
+          title={securityConfirm.title}
+          titleIcon={<AlertCircle className="text-warning" size={20} color="#f59e0b" />}
+          message={securityConfirm.message}
+          actions={(
+            <>
               <button
                 className="btn btn-secondary"
                 onClick={() => setSecurityConfirm(prev => ({ ...prev, show: false }))}
@@ -211,9 +210,9 @@ function SecurityTab({ isMac, showMessage }: SecurityTabProps) {
               >
                 确定
               </button>
-            </div>
-          </div>
-        </div>
+            </>
+          )}
+        />
       )}
     </div>
   )

@@ -2,6 +2,7 @@ import { Download, RefreshCw, Github } from 'lucide-react'
 import type { UpdateDownloadProgressPayload } from '../../../types/electron'
 import type { UpdateInfo } from '../types'
 import { formatFileSize, formatSpeed } from '../utils'
+import { ProgressBar } from '../ui'
 
 interface AboutTabProps {
   appVersion: string
@@ -56,21 +57,19 @@ function AboutTab({
                 </div>
               )}
               {isDownloading ? (
-                <div className="download-progress">
-                  <div className="progress-main">
-                    <div className="progress-bar">
-                      <div className="progress-fill" style={{ width: `${downloadProgress}%` }} />
-                    </div>
-                    <span>{downloadProgress.toFixed(0)}%</span>
-                  </div>
-                  <div className="progress-meta">
+                <ProgressBar
+                  value={downloadProgress}
+                  label={`${downloadProgress.toFixed(0)}%`}
+                  meta={(
+                    <>
                     <span>
                       {formatFileSize(downloadProgressDetail?.transferred ?? updateInfo.diagnostics?.downloadedBytes ?? 0)} / {formatFileSize(downloadProgressDetail?.total ?? updateInfo.diagnostics?.totalBytes ?? 0)}
                     </span>
                     <span>速度 {formatSpeed(downloadProgressDetail?.bytesPerSecond ?? 0)}</span>
                     {updateInfo.diagnostics?.fallbackToFull ? <span>已回退全量下载</span> : null}
-                  </div>
-                </div>
+                    </>
+                  )}
+                />
               ) : (
                 <button className="btn btn-primary" onClick={onUpdateNow} disabled={isDownloading}>
                   <Download size={16} /> 立即更新
@@ -87,18 +86,16 @@ function AboutTab({
       </div>
 
       <div className="about-footer">
-        <div className="github-capsules" style={{ display: 'flex', gap: '12px', justifyContent: 'center', marginBottom: '16px' }}>
+        <div className="github-capsules">
           <button
-            className="btn btn-secondary"
-            style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '8px 16px', borderRadius: '20px' }}
+            className="btn btn-secondary github-link-btn"
             onClick={() => window.electronAPI.shell.openExternal('https://github.com/ILoveBingLu/miyu')}
           >
             <Github size={16} />
             <span>密语 CipherTalk</span>
           </button>
           <button
-            className="btn btn-secondary"
-            style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '8px 16px', borderRadius: '20px' }}
+            className="btn btn-secondary github-link-btn"
             onClick={() => window.electronAPI.shell.openExternal('https://github.com/hicccc77/WeFlow')}
           >
             <Github size={16} />
@@ -106,7 +103,7 @@ function AboutTab({
           </button>
         </div>
 
-        <p className="about-warning" style={{ color: '#ff4d4f', fontWeight: 500, marginBottom: '20px' }}>
+        <p className="about-warning">
           软件为免费，如果有人找你收钱，请骂死他，太贱了，拿别人东西卖钱！
         </p>
 

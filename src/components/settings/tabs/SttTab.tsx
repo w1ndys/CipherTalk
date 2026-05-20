@@ -1,8 +1,9 @@
 ﻿import { type SetStateAction, useEffect, useRef, useState } from 'react'
-import { AlertCircle, Check, CheckCircle, ChevronDown, Download, Layers, Minus, Plug, Plus, RefreshCw, Trash2, Zap } from 'lucide-react'
+import { AlertCircle, Check, CheckCircle, ChevronDown, Download, Layers, Minus, Pause, Plug, Plus, RefreshCw, Trash2, Zap } from 'lucide-react'
 import * as configService from '../../../services/config'
 import { formatFileSize } from '../utils'
 import { useSettingsStore } from '../settingsStore'
+import { ProgressBar } from '../ui'
 
 const sttLanguageOptions = [
   { value: 'zh', label: '中文', enLabel: 'Chinese' },
@@ -46,6 +47,8 @@ const STT_ONLINE_DEFAULTS = {
     model: ''
   }
 } as const
+
+const DOWNLOAD_PAUSED_MESSAGE = '下载已暂停'
 
 interface SttTabProps {
   active: boolean
@@ -176,6 +179,8 @@ function SttTab({ active, showMessage }: SttTabProps) {
       if (result.success) {
         showMessage('语音识别模型下载完成！', true)
         await loadSttModelStatus()
+      } else if (result.error === DOWNLOAD_PAUSED_MESSAGE) {
+        showMessage('语音识别模型下载已暂停，可再次点击下载继续', true)
       } else {
         showMessage(result.error || '模型下载失败', false)
       }
@@ -183,6 +188,13 @@ function SttTab({ active, showMessage }: SttTabProps) {
       showMessage(`模型下载失败: ${e}`, false)
     } finally {
       setIsDownloadingSttModel(false)
+    }
+  }
+
+  const handlePauseSttModelDownload = async () => {
+    const result = await window.electronAPI.stt.cancelDownloadModel()
+    if (!result.success || !result.cancelled) {
+      showMessage(result.error || '暂停下载失败', false)
     }
   }
 
@@ -264,6 +276,8 @@ function SttTab({ active, showMessage }: SttTabProps) {
       if (result.success) {
         showMessage('Whisper 模型下载完成！', true)
         await loadWhisperStatus()
+      } else if (result.error === DOWNLOAD_PAUSED_MESSAGE) {
+        showMessage('Whisper 模型下载已暂停，可再次点击下载继续', true)
       } else {
         showMessage(result.error || 'Whisper 模型下载失败', false)
       }
@@ -272,6 +286,13 @@ function SttTab({ active, showMessage }: SttTabProps) {
     } finally {
       unsubscribe()
       setIsDownloadingWhisperModel(false)
+    }
+  }
+
+  const handlePauseWhisperModelDownload = async () => {
+    const result = await window.electronAPI.sttWhisper.cancelDownloadModel(whisperModelType)
+    if (!result.success || !result.cancelled) {
+      showMessage(result.error || '暂停下载失败', false)
     }
   }
 
@@ -322,6 +343,8 @@ function SttTab({ active, showMessage }: SttTabProps) {
         showMessage('GPU 组件下载完成！', true)
         await checkGpuComponents()
         await loadWhisperStatus()
+      } else if (result.error === DOWNLOAD_PAUSED_MESSAGE) {
+        showMessage('GPU 组件下载已暂停，可再次点击下载继续', true)
       } else {
         showMessage(result.error || 'GPU 组件下载失败', false)
       }
@@ -330,6 +353,13 @@ function SttTab({ active, showMessage }: SttTabProps) {
     } finally {
       unsubscribe()
       setIsDownloadingGpuComponents(false)
+    }
+  }
+
+  const handlePauseGpuComponentsDownload = async () => {
+    const result = await window.electronAPI.sttWhisper.cancelDownloadGPUComponents()
+    if (!result.success || !result.cancelled) {
+      showMessage(result.error || '暂停下载失败', false)
     }
   }
 
@@ -430,12 +460,15 @@ function SttTab({ active, showMessage }: SttTabProps) {
           </div>
 
           {isDownloadingSttModel && (
-            <div className="download-progress">
-              <div className="progress-bar">
-                <div className="progress-fill" style={{ width: `${sttDownloadProgress}%` }} />
-              </div>
-              <span className="progress-text">{sttDownloadProgress.toFixed(1)}%</span>
-            </div>
+            <ProgressBar
+              value={sttDownloadProgress}
+              label={`${sttDownloadProgress.toFixed(1)}%`}
+              action={(
+                <button type="button" className="progress-action-button" onClick={handlePauseSttModelDownload}>
+                  <Pause size={14} /> 暂停
+                </button>
+              )}
+            />
           )}
 
           <h3 className="section-title" style={{ marginTop: '2rem' }}>支持语言</h3>
@@ -649,41 +682,15 @@ function SttTab({ active, showMessage }: SttTabProps) {
                       }} />
                       {gpuDownloadProgress.currentFile}
                     </div>
-                    <div style={{
-                      background: 'var(--bg-tertiary)',
-                      borderRadius: '8px',
-                      overflow: 'hidden',
-                      height: '8px',
-                      position: 'relative'
-                    }}>
-                      <div style={{
-                        width: `${gpuDownloadProgress.overallProgress}%`,
-                        height: '100%',
-                        background: 'linear-gradient(90deg, #667eea 0%, #764ba2 100%)',
-                        transition: 'width 0.3s ease',
-                        position: 'relative',
-                        overflow: 'hidden'
-                      }}>
-                        <div style={{
-                          position: 'absolute',
-                          top: 0,
-                          left: 0,
-                          right: 0,
-                          bottom: 0,
-                          background: 'linear-gradient(90deg, transparent, rgba(255,255,255,0.3), transparent)',
-                          animation: 'shimmer 1.5s infinite'
-                        }} />
-                      </div>
-                    </div>
-                    <div style={{
-                      marginTop: '0.75rem',
-                      fontSize: '13px',
-                      textAlign: 'center',
-                      color: 'var(--text-secondary)',
-                      fontWeight: 500
-                    }}>
-                      {gpuDownloadProgress.overallProgress.toFixed(1)}%
-                    </div>
+                    <ProgressBar
+                      value={gpuDownloadProgress.overallProgress}
+                      label={`${gpuDownloadProgress.overallProgress.toFixed(1)}%`}
+                      action={(
+                        <button type="button" className="progress-action-button" onClick={handlePauseGpuComponentsDownload}>
+                          <Pause size={14} /> 暂停
+                        </button>
+                      )}
+                    />
                   </div>
                 ) : (
                   <button
@@ -779,12 +786,15 @@ function SttTab({ active, showMessage }: SttTabProps) {
 
           {/* 下载进度 */}
           {isDownloadingWhisperModel && (
-            <div className="download-progress">
-              <div className="progress-bar">
-                <div className="progress-fill" style={{ width: `${whisperDownloadProgress}%` }} />
-              </div>
-              <span className="progress-text">{whisperDownloadProgress.toFixed(1)}%</span>
-            </div>
+            <ProgressBar
+              value={whisperDownloadProgress}
+              label={`${whisperDownloadProgress.toFixed(1)}%`}
+              action={(
+                <button type="button" className="progress-action-button" onClick={handlePauseWhisperModelDownload}>
+                  <Pause size={14} /> 暂停
+                </button>
+              )}
+            />
           )}
 
           {/* 操作按钮 */}

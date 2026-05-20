@@ -643,6 +643,16 @@ export function registerAiHandlers(ctx: MainProcessContext): void {
     }
   })
 
+  ipcMain.handle('ai:cancelEmbeddingModelDownload', async (_, profileId?: string) => {
+    try {
+      const { localEmbeddingModelService } = await import('../../services/search/embeddingModelService')
+      return localEmbeddingModelService.cancelDownloadModel(profileId)
+    } catch (e) {
+      console.error('[AI] 暂停语义模型下载失败:', e)
+      return { success: false, cancelled: false, error: String(e) }
+    }
+  })
+
   ipcMain.handle('ai:clearEmbeddingModel', async (_, profileId?: string) => {
     try {
       const { localEmbeddingModelService } = await import('../../services/search/embeddingModelService')

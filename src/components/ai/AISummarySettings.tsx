@@ -1,11 +1,14 @@
 import { useState, useEffect, useRef } from 'react'
-import { Eye, EyeOff, Sparkles, Check, ChevronDown, ChevronUp, Zap, Star, FileText, HelpCircle, X, Plus, Settings2, Download, Trash2, Database, CheckCircle, AlertCircle, RefreshCw, Layers, Cpu, Cloud, Save } from 'lucide-react'
+import { Eye, EyeOff, Sparkles, Check, ChevronDown, ChevronUp, Zap, Star, FileText, HelpCircle, X, Plus, Settings2, Download, Trash2, Database, CheckCircle, AlertCircle, RefreshCw, Layers, Cpu, Cloud, Save, Pause } from 'lucide-react'
 import { getAIProviders, type AIProviderInfo, type EmbeddingDevice, type EmbeddingDeviceStatus, type EmbeddingMode, type EmbeddingModelDownloadProgress, type EmbeddingModelProfile, type EmbeddingModelStatus, type OnlineEmbeddingConfig, type OnlineEmbeddingProviderInfo } from '../../types/ai'
 import { marked } from 'marked'
 import DOMPurify from 'dompurify'
 import AIProviderLogo from './AIProviderLogo'
 import { useSettingsStore } from '../settings/settingsStore'
+import { ProgressBar } from '../settings/ui'
 import './AISummarySettings.scss'
+
+const DOWNLOAD_PAUSED_MESSAGE = '下载已暂停'
 
 interface CustomSelectProps {
   value: string | number
@@ -456,6 +459,10 @@ function AISummarySettings({ showMessage }: AISummarySettingsProps) {
     try {
       const result = await window.electronAPI.ai.downloadEmbeddingModel(embeddingProfileId)
       if (!result.success || !result.result) {
+        if (result.error === DOWNLOAD_PAUSED_MESSAGE) {
+          showMessage('语义模型下载已暂停，可再次点击下载继续', true)
+          return
+        }
         throw new Error(result.error || '语义模型下载失败')
       }
       setEmbeddingStatus(result.result)
@@ -465,6 +472,14 @@ function AISummarySettings({ showMessage }: AISummarySettingsProps) {
       showMessage(String(e), false)
     } finally {
       setIsDownloadingEmbedding(false)
+    }
+  }
+
+  const handlePauseEmbeddingModelDownload = async () => {
+    if (!embeddingProfileId) return
+    const result = await window.electronAPI.ai.cancelEmbeddingModelDownload(embeddingProfileId)
+    if (!result.success || !result.cancelled) {
+      showMessage(result.error || '暂停下载失败', false)
     }
   }
 
@@ -1416,16 +1431,19 @@ function AISummarySettings({ showMessage }: AISummarySettingsProps) {
       )}
 
       {embeddingMode === 'local' && isDownloadingEmbedding && (
-        <div className="download-progress semantic-download-progress">
-          <div className="progress-bar">
-            <div className="progress-fill" style={{ width: `${Math.max(3, Math.min(100, embeddingProgressPercent))}%` }} />
-          </div>
-          <span className="progress-text">
-            {embeddingProgress?.percent !== undefined
-              ? `${embeddingProgress.percent.toFixed(1)}%`
-              : (embeddingProgress?.remoteHost ? `连接 ${embeddingProgress.remoteHost}` : '准备中')}
-          </span>
-        </div>
+        <ProgressBar
+          className="semantic-download-progress"
+          value={embeddingProgressPercent || 0}
+          minVisibleValue={3}
+          label={embeddingProgress?.percent !== undefined
+            ? `${embeddingProgress.percent.toFixed(1)}%`
+            : (embeddingProgress?.remoteHost ? `连接 ${embeddingProgress.remoteHost}` : '准备中')}
+          action={(
+            <button type="button" className="progress-action-button" onClick={handlePauseEmbeddingModelDownload}>
+              <Pause size={14} /> 暂停
+            </button>
+          )}
+        />
       )}
 
       <div className="btn-row semantic-vector-actions">

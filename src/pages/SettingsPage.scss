@@ -711,43 +711,6 @@
   gap: 10px;
 }
 
-.message-toast {
-  position: fixed;
-  top: 60px;
-  left: 50%;
-  transform: translateX(-50%);
-  padding: 10px 24px;
-  border-radius: 9999px;
-  font-size: 14px;
-  z-index: 10000;
-  animation: slideDown 0.3s ease;
-  color: white;
-  backdrop-filter: blur(24px) saturate(180%);
-  -webkit-backdrop-filter: blur(24px) saturate(180%);
-  border: 1px solid rgba(255, 255, 255, 0.2);
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.12);
-
-  &.success {
-    background: rgba(var(--primary-rgb), 0.75);
-  }
-
-  &.error {
-    background: rgba(239, 68, 68, 0.75);
-  }
-}
-
-@keyframes slideDown {
-  from {
-    opacity: 0;
-    transform: translateX(-50%) translateY(-10px);
-  }
-
-  to {
-    opacity: 1;
-    transform: translateX(-50%) translateY(0);
-  }
-}
-
 // 下载进度动画
 @keyframes spin {
   from {
@@ -758,22 +721,6 @@
     transform: rotate(360deg);
   }
 }
-
-@keyframes shimmer {
-  0% {
-    transform: translateX(-100%);
-  }
-
-  100% {
-    transform: translateX(100%);
-  }
-}
-
-to {
-  opacity: 1;
-  transform: translateX(-50%) translateY(0);
-}
-
 
 @keyframes pulse {
 
@@ -1006,55 +953,6 @@ to {
       color: var(--primary);
     }
 
-    .download-progress {
-      display: flex;
-      flex-direction: column;
-      gap: 10px;
-      width: min(320px, 100%);
-
-      .progress-main {
-        display: flex;
-        align-items: center;
-        gap: 12px;
-        width: 100%;
-
-        .progress-bar {
-          flex: 1;
-          height: 8px;
-          background: var(--bg-tertiary);
-          border-radius: 999px;
-          overflow: hidden;
-
-          .progress-fill {
-            height: 100%;
-            background: var(--primary);
-            border-radius: 999px;
-            transition: width 0.2s ease;
-          }
-        }
-
-        > span {
-          font-size: 12px;
-          color: var(--text-secondary);
-          min-width: 35px;
-        }
-      }
-
-      .progress-meta {
-        display: flex;
-        flex-wrap: wrap;
-        justify-content: center;
-        gap: 8px;
-
-        span {
-          font-size: 12px;
-          color: var(--text-secondary);
-          padding: 4px 8px;
-          border-radius: 999px;
-          background: var(--bg-tertiary);
-        }
-      }
-    }
   }
 }
 
@@ -1185,49 +1083,6 @@ to {
     }
   }
 }
-
-// 清除确认对话框
-.clear-dialog-overlay {
-  position: fixed;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  background: rgba(0, 0, 0, 0.5);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  z-index: 1000;
-}
-
-.clear-dialog {
-  width: 400px;
-  background: var(--bg-primary);
-  border-radius: 12px;
-  padding: 24px;
-  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.2);
-
-  h3 {
-    margin: 0 0 12px;
-    font-size: 18px;
-    font-weight: 600;
-    color: var(--text-primary);
-  }
-
-  p {
-    margin: 0 0 20px;
-    font-size: 14px;
-    color: var(--text-secondary);
-    line-height: 1.6;
-  }
-
-  .dialog-actions {
-    display: flex;
-    gap: 12px;
-    justify-content: flex-end;
-  }
-}
-
 
 // 协议弹窗
 .agreement-overlay {
@@ -1685,36 +1540,6 @@ to {
     font-size: 13px;
     color: var(--text-secondary);
     margin: 0;
-  }
-}
-
-.download-progress {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  margin-bottom: 16px;
-
-  .progress-bar {
-    flex: 1;
-    height: 8px;
-    background: var(--bg-tertiary);
-    border-radius: 4px;
-    overflow: hidden;
-
-    .progress-fill {
-      height: 100%;
-      background: linear-gradient(90deg, var(--primary) 0%, var(--primary-hover) 100%);
-      border-radius: 4px;
-      transition: width 0.3s ease;
-    }
-  }
-
-  .progress-text {
-    font-size: 13px;
-    font-weight: 500;
-    color: var(--text-secondary);
-    min-width: 50px;
-    text-align: right;
   }
 }
 
@@ -3388,179 +3213,270 @@ to {
   }
 }
 
-// 悬浮保存按钮（液态玻璃效果）
-.floating-save-btn {
-  position: fixed;
-  bottom: 24px;
-  right: 24px;
-  width: 56px;
-  height: 56px;
-  border-radius: 50%;
+// 统一设置页组件系统：让不同 tab 的选项卡、表单、按钮和状态块共享同一套视觉语言。
+.settings-page {
+  --settings-radius: 14px;
+  --settings-card-radius: 18px;
+  --settings-control-radius: 12px;
+  --settings-control-height: 40px;
+  --settings-gap: 12px;
+  --settings-card-bg: color-mix(in srgb, var(--bg-secondary) 88%, transparent);
+  --settings-card-border: color-mix(in srgb, var(--border-color) 84%, transparent);
+  --settings-card-hover: color-mix(in srgb, var(--primary) 8%, var(--bg-secondary));
+  --settings-card-active: color-mix(in srgb, var(--primary) 12%, var(--bg-secondary));
+  --settings-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+  --settings-shadow-hover: 0 8px 20px rgba(0, 0, 0, 0.08);
 
-  // 核心玻璃效果：半透明渐变 + 高斯模糊
-  background: linear-gradient(135deg, rgba(var(--primary-rgb), 0.6) 0%, rgba(var(--primary-rgb), 0.2) 100%);
-  backdrop-filter: blur(16px);
-  -webkit-backdrop-filter: blur(16px);
-
-  // 用极淡的底框包裹整体，去除左上角的硬高光边框
-  border: 1px solid rgba(255, 255, 255, 0.15);
-
-  // 根据主题模式调整图标颜色
-  color: white;
-  
-  [data-mode="light"] & {
-    color: rgba(0, 0, 0, 0.7);
-    border: 1px solid rgba(0, 0, 0, 0.1);
-  }
-  
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  cursor: pointer;
-
-  // 柔和反光精华：通过模糊的范围大一点的 inset 内发光，模拟出漫反射液滴的光泽
-  box-shadow:
-    0 8px 32px rgba(var(--primary-rgb), 0.3),
-    inset 0 4px 10px -2px rgba(255, 255, 255, 0.4),
-    inset 0 -2px 10px rgba(0, 0, 0, 0.05);
-
-  [data-mode="light"] & {
-    box-shadow:
-      0 8px 32px rgba(var(--primary-rgb), 0.25),
-      inset 0 4px 10px -2px rgba(255, 255, 255, 0.6),
-      inset 0 -2px 10px rgba(0, 0, 0, 0.08);
+  .tab-content {
+    max-width: 1040px;
+    margin: 0 auto;
   }
 
-  transition: all 0.3s cubic-bezier(0.25, 1.5, 0.5, 1);
-  z-index: 1000;
+  .settings-section {
+    margin-bottom: 28px;
+  }
 
-  &:hover:not(:disabled) {
-    transform: translateY(-4px) scale(1.05);
-    background: linear-gradient(135deg, rgba(var(--primary-rgb), 0.7) 0%, rgba(var(--primary-rgb), 0.3) 100%);
-    box-shadow:
-      0 12px 40px rgba(var(--primary-rgb), 0.4),
-      inset 0 6px 14px -3px rgba(255, 255, 255, 0.5),
-      inset 0 -2px 10px rgba(0, 0, 0, 0.05);
-    
-    [data-mode="light"] & {
-      box-shadow:
-        0 12px 40px rgba(var(--primary-rgb), 0.35),
-        inset 0 6px 14px -3px rgba(255, 255, 255, 0.7),
-        inset 0 -2px 10px rgba(0, 0, 0, 0.1);
+  .section-title,
+  .subsection-title {
+    color: var(--text-primary);
+    letter-spacing: 0;
+  }
+
+  .section-title {
+    margin: 0 0 14px;
+    font-size: 16px;
+    font-weight: 600;
+  }
+
+  .subsection-title {
+    font-size: 14px;
+    font-weight: 600;
+  }
+
+  .form-group {
+    margin-bottom: 18px;
+
+    label,
+    .field-label,
+    .param-item > label {
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--text-primary);
+      margin-bottom: 6px;
+    }
+
+    .form-hint,
+    .section-desc {
+      color: var(--text-tertiary);
+      line-height: 1.5;
+    }
+
+    input,
+    .field-input,
+    select,
+    textarea,
+    .param-select,
+    .custom-select-trigger {
+      min-height: var(--settings-control-height);
+      border-radius: var(--settings-control-radius);
+      border: 1px solid var(--settings-card-border);
+      background: var(--bg-primary);
+      box-shadow: none;
+      transition: border-color 0.16s ease, box-shadow 0.16s ease, background 0.16s ease;
+
+      &:focus,
+      &:focus-visible {
+        outline: none;
+        border-color: var(--primary);
+        box-shadow: 0 0 0 3px rgba(var(--primary-rgb), 0.12);
+      }
+    }
+
+    .input-with-toggle .toggle-visibility {
+      border-radius: var(--settings-control-radius);
     }
   }
 
-  &:active:not(:disabled) {
-    transform: translateY(2px) scale(0.95);
-    box-shadow:
-      0 4px 16px rgba(var(--primary-rgb), 0.2),
-      inset 0 1px 2px rgba(255, 255, 255, 0.2);
-    
-    [data-mode="light"] & {
-      box-shadow:
-        0 4px 16px rgba(var(--primary-rgb), 0.15),
-        inset 0 1px 2px rgba(0, 0, 0, 0.1);
-    }
-  }
-
-  &:disabled {
-    opacity: 0.5;
-    cursor: not-allowed;
-    background: var(--bg-tertiary);
-    border-color: var(--border-color);
+  .btn {
+    min-height: 36px;
+    border-radius: var(--settings-control-radius);
+    border: 1px solid transparent;
     box-shadow: none;
-    color: var(--text-tertiary);
+    transition: background 0.16s ease, border-color 0.16s ease, color 0.16s ease, transform 0.16s ease;
+
+    &:hover:not(:disabled) {
+      transform: translateY(-1px);
+    }
+
+    &:focus-visible {
+      outline: none;
+      box-shadow: 0 0 0 3px rgba(var(--primary-rgb), 0.14);
+    }
   }
-}
 
-// 保存按钮有未保存更改时的样式
-.floating-save-btn.has-changes {
-  // 深色模式：红色渐变
-  background: linear-gradient(135deg, rgba(239, 68, 68, 0.7) 0%, rgba(220, 38, 38, 0.4) 100%);
-  border-color: rgba(255, 255, 255, 0.25);
-  animation: pulse-save 2s ease-in-out infinite;
-  color: white;
-  
-  box-shadow:
-    0 8px 32px rgba(239, 68, 68, 0.4),
-    inset 0 4px 10px -2px rgba(255, 255, 255, 0.5),
-    inset 0 -2px 10px rgba(0, 0, 0, 0.1);
+  .btn-secondary {
+    background: var(--bg-secondary);
+    border-color: var(--settings-card-border);
+    color: var(--text-primary);
 
-  // 浅色模式：更鲜艳的红色，深色图标
-  [data-mode="light"] & {
-    background: linear-gradient(135deg, rgba(239, 68, 68, 0.85) 0%, rgba(220, 38, 38, 0.6) 100%);
-    border-color: rgba(0, 0, 0, 0.15);
+    &:hover:not(:disabled) {
+      background: var(--settings-card-hover);
+      border-color: rgba(var(--primary-rgb), 0.24);
+    }
+  }
+
+  .btn-primary {
+    border-color: rgba(var(--primary-rgb), 0.2);
+  }
+
+  .btn-danger {
+    border-color: rgba(239, 68, 68, 0.2);
+  }
+
+  .settings-tabs,
+  .tab-btn {
+    border-radius: 9999px;
+  }
+
+  .toggle-switch .toggle-slider,
+  .form-group .checkbox-label input[type="checkbox"] {
+    border-radius: var(--settings-control-radius);
+  }
+
+  .theme-grid,
+  .model-type-grid,
+  .date-range-options,
+  .cache-management .cache-cards,
+  .security-grid {
+    gap: var(--settings-gap);
+  }
+
+  .theme-card,
+  .quote-style-options .radio-label,
+  .model-card,
+  .date-range-card,
+  .export-option-card,
+  .cache-management .cache-card,
+  .security-card,
+  .stt-model-status,
+  .stt-instructions,
+  .stt-online-settings,
+  .log-file-item,
+  .about-card,
+  .activation-status-card,
+  .device-info-card {
+    border-radius: var(--settings-card-radius);
+    border: 1px solid var(--settings-card-border);
+    background: var(--settings-card-bg);
+    box-shadow: var(--settings-shadow);
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+    transition: border-color 0.16s ease, background 0.16s ease, box-shadow 0.16s ease, transform 0.16s ease;
+  }
+
+  .settings-section,
+  .toggle-setting,
+  .account-card,
+  .account-actions,
+  .account-manager,
+  .wxid-dropdown,
+  .custom-select-container .select-trigger,
+  .custom-select-container .select-options,
+  .stt-online-card,
+  .gpu-status-card,
+  .gpu-components-card,
+  .ollama-help-content {
+    border-radius: var(--settings-card-radius);
+  }
+
+  .theme-card:hover,
+  .quote-style-options .radio-label:hover,
+  .model-card:hover:not(.disabled),
+  .date-range-card:hover,
+  .export-option-card:hover,
+  .cache-management .cache-card:hover,
+  .security-card:hover,
+  .log-file-item:hover {
+    border-color: rgba(var(--primary-rgb), 0.28);
+    background: var(--settings-card-hover);
+    box-shadow: var(--settings-shadow-hover);
+    transform: translateY(-1px);
+  }
+
+  .theme-card.active,
+  .quote-style-options .radio-label.active,
+  .model-card.active,
+  .date-range-card.active,
+  .export-option-card.active,
+  .security-card.active,
+  .log-file-item.selected,
+  .activation-status-card.activated {
+    border-color: rgba(var(--primary-rgb), 0.52);
+    background: var(--settings-card-active);
+    box-shadow: 0 0 0 1px rgba(var(--primary-rgb), 0.12);
+  }
+
+  .theme-preview,
+  .preview-lock-screen,
+  .style-preview,
+  .preview-bubble,
+  .preview-quote-bubble {
+    border-radius: var(--settings-control-radius);
+  }
+
+  .theme-check,
+  .date-range-check,
+  .option-check {
+    border-radius: 50%;
+    background: var(--primary);
     color: white;
-    animation: pulse-save-light 2s ease-in-out infinite;
-    
-    box-shadow:
-      0 8px 32px rgba(239, 68, 68, 0.35),
-      inset 0 4px 10px -2px rgba(255, 255, 255, 0.7),
-      inset 0 -2px 10px rgba(0, 0, 0, 0.15);
   }
 
-  &:hover:not(:disabled) {
-    background: linear-gradient(135deg, rgba(239, 68, 68, 0.85) 0%, rgba(220, 38, 38, 0.5) 100%);
-    animation: none;
-    box-shadow:
-      0 12px 40px rgba(239, 68, 68, 0.5),
-      inset 0 6px 14px -3px rgba(255, 255, 255, 0.6),
-      inset 0 -2px 10px rgba(0, 0, 0, 0.1);
-    
-    [data-mode="light"] & {
-      background: linear-gradient(135deg, rgba(239, 68, 68, 0.95) 0%, rgba(220, 38, 38, 0.7) 100%);
-      box-shadow:
-        0 12px 40px rgba(239, 68, 68, 0.45),
-        inset 0 6px 14px -3px rgba(255, 255, 255, 0.8),
-        inset 0 -2px 10px rgba(0, 0, 0, 0.2);
+  .cache-management .cache-card {
+    padding: 16px;
+
+    .cache-card-label,
+    .cache-card-desc {
+      color: var(--text-secondary);
+    }
+
+    .cache-card-size {
+      font-size: 18px;
     }
   }
 
-  &:active:not(:disabled) {
-    transform: translateY(2px) scale(0.95);
-    box-shadow:
-      0 4px 16px rgba(239, 68, 68, 0.3),
-      inset 0 1px 2px rgba(255, 255, 255, 0.3);
-    
-    [data-mode="light"] & {
-      box-shadow:
-        0 4px 16px rgba(239, 68, 68, 0.25),
-        inset 0 1px 2px rgba(0, 0, 0, 0.15);
+  .log-level-btn {
+    border-radius: var(--settings-control-radius);
+  }
+
+  .github-capsules {
+    display: flex;
+    gap: var(--settings-gap);
+    justify-content: center;
+    margin-bottom: 16px;
+  }
+
+  .github-link-btn {
+    align-items: center;
+    gap: 8px;
+    padding: 8px 16px;
+  }
+
+  .about-warning {
+    color: var(--danger);
+    font-weight: 600;
+    margin-bottom: 20px;
+  }
+
+  @media (max-width: 768px) {
+    .quote-style-options,
+    .github-capsules {
+      flex-direction: column;
     }
-  }
-}
 
-// 保存按钮闪烁动画 - 深色模式
-@keyframes pulse-save {
-  0%, 100% {
-    box-shadow:
-      0 8px 32px rgba(239, 68, 68, 0.4),
-      inset 0 4px 10px -2px rgba(255, 255, 255, 0.5),
-      inset 0 -2px 10px rgba(0, 0, 0, 0.1);
-  }
-  50% {
-    box-shadow:
-      0 8px 40px rgba(239, 68, 68, 0.6),
-      0 0 20px rgba(239, 68, 68, 0.4),
-      inset 0 4px 10px -2px rgba(255, 255, 255, 0.6),
-      inset 0 -2px 10px rgba(0, 0, 0, 0.1);
-  }
-}
-
-// 保存按钮闪烁动画 - 浅色模式
-@keyframes pulse-save-light {
-  0%, 100% {
-    box-shadow:
-      0 8px 32px rgba(239, 68, 68, 0.35),
-      inset 0 4px 10px -2px rgba(255, 255, 255, 0.7),
-      inset 0 -2px 10px rgba(0, 0, 0, 0.15);
-  }
-  50% {
-    box-shadow:
-      0 8px 40px rgba(239, 68, 68, 0.5),
-      0 0 20px rgba(239, 68, 68, 0.35),
-      inset 0 4px 10px -2px rgba(255, 255, 255, 0.8),
-      inset 0 -2px 10px rgba(0, 0, 0, 0.15);
+    .btn-row {
+      flex-wrap: wrap;
+    }
   }
 }
 

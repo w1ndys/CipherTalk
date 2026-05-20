@@ -71,6 +71,13 @@ export type EmbeddingModelProfile = {
   enabled: boolean
 }
 
+type EmbeddingDownloadCancelState = {
+  cancelled: boolean
+  controller: AbortController
+}
+
+const DOWNLOAD_CANCELLED_MESSAGE = '下载已暂停'
+
 const MODELSCOPE_HOST = 'https://www.modelscope.cn/'
 const MODELSCOPE_PATH_TEMPLATE = 'models/{model}/resolve/master/'
 const MODELSCOPE_REVISION = 'main'
@@ -419,6 +426,7 @@ export type EmbeddingInputType = 'query' | 'document'
 export class LocalEmbeddingModelService {
   private pipelines = new Map<string, Promise<{ tokenizer: any; model: any }>>()
   private downloadTasks = new Map<string, Promise<EmbeddingModelStatus>>()
+  private downloadCancels = new Map<string, EmbeddingDownloadCancelState>()
   private dmlFailureReason: string | null = null
 
   listProfiles(): EmbeddingModelProfile[] {
@@ -595,10 +603,15 @@ export class LocalEmbeddingModelService {
     const profile = this.getProfile(profileId)
     const existing = this.downloadTasks.get(profile.id)
     if (existing) return existing
+    const cancelState: EmbeddingDownloadCancelState = {
+      cancelled: false,
+      controller: new AbortController()
+    }
+    this.downloadCancels.set(profile.id, cancelState)
 
     const task = (async () => {
       mkdirSync(this.getProfileDir(profile.id), { recursive: true })
-      await this.downloadPipelineWithFallback(profile, onProgress)
+      await this.downloadPipelineWithFallback(profile, onProgress, cancelState)
       return this.getModelStatus(profile.id)
     })()
 
@@ -607,7 +620,21 @@ export class LocalEmbeddingModelService {
       return await task
     } finally {
       this.downloadTasks.delete(profile.id)
+      this.downloadCancels.delete(profile.id)
     }
+  }
+
+  cancelDownloadModel(profileId?: string): { success: boolean; cancelled: boolean; error?: string } {
+    const profile = this.getProfile(profileId)
+    const cancelState = this.downloadCancels.get(profile.id)
+    if (!cancelState) {
+      return { success: true, cancelled: false, error: '没有正在下载的语义模型' }
+    }
+
+    cancelState.cancelled = true
+    cancelState.controller.abort()
+    this.clearPipelines(profile.id)
+    return { success: true, cancelled: true }
   }
 
   async clearModel(profileId?: string): Promise<EmbeddingModelStatus> {
@@ -684,7 +711,8 @@ export class LocalEmbeddingModelService {
     localOnly: boolean,
     device: EmbeddingDevice = 'cpu',
     remoteHost?: string,
-    progressCallback?: (event: any) => void
+    progressCallback?: (event: any) => void,
+    cancelState?: EmbeddingDownloadCancelState
   ): Promise<{ tokenizer: any; model: any }> {
     const key = `${profile.id}:${device}:${localOnly ? 'local' : remoteHost || 'remote'}`
     const existing = this.pipelines.get(key)
@@ -692,6 +720,21 @@ export class LocalEmbeddingModelService {
 
     const promise = (async () => {
       const transformers = await import('@huggingface/transformers')
+      const transformersEnv = transformers.env as any
+      const originalFetch = transformersEnv.fetch || (globalThis as any).fetch
+      const wrappedFetch = cancelState
+        ? (input: any, init: any = {}) => {
+          if (cancelState.cancelled) {
+            return Promise.reject(new Error(DOWNLOAD_CANCELLED_MESSAGE))
+          }
+          return originalFetch(input, { ...init, signal: cancelState.controller.signal })
+        }
+        : null
+
+      if (wrappedFetch) {
+        transformersEnv.fetch = wrappedFetch
+      }
+
       transformers.env.allowLocalModels = true
       transformers.env.allowRemoteModels = !localOnly
       transformers.env.cacheDir = this.getProfileDir(profile.id)
@@ -711,21 +754,36 @@ export class LocalEmbeddingModelService {
         local_files_only: localOnly,
         revision: profile.revision,
         progress_callback: progressCallback
-      }
-      const tokenizer = await transformers.AutoTokenizer.from_pretrained(profile.modelId, commonOptions as any)
-      const model = await transformers.AutoModel.from_pretrained(profile.modelId, {
-        ...commonOptions,
-        device,
-        dtype: profile.dtype,
-        session_options: device === 'cpu'
-          ? {
-            executionMode: 'sequential',
-            interOpNumThreads: 1,
-            intraOpNumThreads: CPU_EMBEDDING_THREADS
+          ? (event: any) => {
+            if (cancelState?.cancelled) {
+              throw new Error(DOWNLOAD_CANCELLED_MESSAGE)
+            }
+            progressCallback(event)
           }
           : undefined
-      } as any)
-      return { tokenizer, model }
+      }
+      try {
+        const tokenizer = await transformers.AutoTokenizer.from_pretrained(profile.modelId, commonOptions as any)
+        if (cancelState?.cancelled) throw new Error(DOWNLOAD_CANCELLED_MESSAGE)
+        const model = await transformers.AutoModel.from_pretrained(profile.modelId, {
+          ...commonOptions,
+          device,
+          dtype: profile.dtype,
+          session_options: device === 'cpu'
+            ? {
+              executionMode: 'sequential',
+              interOpNumThreads: 1,
+              intraOpNumThreads: CPU_EMBEDDING_THREADS
+            }
+            : undefined
+        } as any)
+        if (cancelState?.cancelled) throw new Error(DOWNLOAD_CANCELLED_MESSAGE)
+        return { tokenizer, model }
+      } finally {
+        if (wrappedFetch && transformersEnv.fetch === wrappedFetch) {
+          transformersEnv.fetch = originalFetch
+        }
+      }
     })()
 
     this.pipelines.set(key, promise)
@@ -749,11 +807,16 @@ export class LocalEmbeddingModelService {
 
   private async downloadPipelineWithFallback(
     profile: EmbeddingModelProfile,
-    onProgress?: (progress: EmbeddingDownloadProgress) => void
+    onProgress?: (progress: EmbeddingDownloadProgress) => void,
+    cancelState?: EmbeddingDownloadCancelState
   ): Promise<void> {
     const errors: string[] = []
 
     for (const remoteHost of profile.remoteHosts) {
+      if (cancelState?.cancelled) {
+        throw new Error(DOWNLOAD_CANCELLED_MESSAGE)
+      }
+
       try {
         onProgress?.({
           profileId: profile.id,
@@ -763,6 +826,9 @@ export class LocalEmbeddingModelService {
         })
 
         await this.getPipeline(profile, false, 'cpu', remoteHost, (event) => {
+          if (cancelState?.cancelled) {
+            throw new Error(DOWNLOAD_CANCELLED_MESSAGE)
+          }
           const loaded = Number(event?.loaded || 0)
           const total = Number(event?.total || 0)
           onProgress?.({
@@ -775,9 +841,12 @@ export class LocalEmbeddingModelService {
             percent: total > 0 ? Math.min(100, Math.round((loaded / total) * 100)) : undefined,
             status: String(event?.status || '')
           })
-        })
+        }, cancelState)
         return
       } catch (error) {
+        if (cancelState?.cancelled) {
+          throw new Error(DOWNLOAD_CANCELLED_MESSAGE)
+        }
         errors.push(`${remoteHost}: ${String(error)}`)
       }
     }

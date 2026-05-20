@@ -6,6 +6,15 @@ import { voiceTranscribeServiceOnline } from '../../services/voiceTranscribeServ
 import { voiceTranscribeServiceWhisper } from '../../services/voiceTranscribeServiceWhisper'
 import type { MainProcessContext } from '../context'
 
+type GpuDownloadCancelState = {
+  cancelled: boolean
+  request?: any
+  fileStream?: any
+}
+
+const GPU_DOWNLOAD_CANCELLED_MESSAGE = '下载已暂停'
+let gpuComponentsDownloadCancelState: GpuDownloadCancelState | null = null
+
 /**
  * 语音转文字 IPC。
  * 下载、转写、GPU 组件安装进度事件都绑定原 channel，避免前端进度条失联。
@@ -28,6 +37,14 @@ export function registerSttHandlers(ctx: MainProcessContext): void {
       })
     } catch (e) {
       return { success: false, error: String(e) }
+    }
+  })
+
+  ipcMain.handle('stt:cancelDownloadModel', async () => {
+    try {
+      return voiceTranscribeService.cancelDownloadModel()
+    } catch (e) {
+      return { success: false, cancelled: false, error: String(e) }
     }
   })
 
@@ -173,6 +190,14 @@ export function registerSttHandlers(ctx: MainProcessContext): void {
     }
   })
 
+  ipcMain.handle('stt-whisper:cancel-download-model', async (_, modelType: string) => {
+    try {
+      return voiceTranscribeServiceWhisper.cancelDownloadModel(modelType as any)
+    } catch (e) {
+      return { success: false, cancelled: false, error: String(e) }
+    }
+  })
+
   // 清除模型
   ipcMain.handle('stt-whisper:clear-model', async (_, modelType: string) => {
     try {
@@ -201,6 +226,13 @@ export function registerSttHandlers(ctx: MainProcessContext): void {
   // 下载 GPU 组件
   ipcMain.handle('stt-whisper:download-gpu-components', async (event) => {
     try {
+      if (gpuComponentsDownloadCancelState) {
+        return { success: false, error: 'GPU 组件正在下载' }
+      }
+
+      const cancelState: GpuDownloadCancelState = { cancelled: false }
+      gpuComponentsDownloadCancelState = cancelState
+
       if (!ctx.getConfigService()) {
         return { success: false, error: '配置服务未初始化' }
       }
@@ -253,10 +285,12 @@ export function registerSttHandlers(ctx: MainProcessContext): void {
 
       // 分块下载函数（更可靠）
       const downloadInChunks = async (): Promise<void> => {
+        if (cancelState.cancelled) throw new Error(GPU_DOWNLOAD_CANCELLED_MESSAGE)
+
         // 先获取文件总大小
         const getFileSize = (): Promise<number> => {
           return new Promise((resolve, reject) => {
-            https.get(zipUrl, { method: 'HEAD' }, (res: any) => {
+            const request = https.get(zipUrl, { method: 'HEAD' }, (res: any) => {
               if (res.statusCode === 200) {
                 const size = parseInt(res.headers['content-length'] || '0')
                 resolve(size)
@@ -264,6 +298,7 @@ export function registerSttHandlers(ctx: MainProcessContext): void {
                 reject(new Error(`获取文件大小失败: ${res.statusCode}`))
               }
             }).on('error', reject)
+            cancelState.request = request
           })
         }
 
@@ -285,11 +320,14 @@ export function registerSttHandlers(ctx: MainProcessContext): void {
 
         // 打开文件流（追加模式）
         const fileStream = fs.createWriteStream(tempPath, { flags: 'a' })
+        cancelState.fileStream = fileStream
 
         let lastProgressTime = Date.now()
         let lastCurrentBytes = currentBytes
 
         while (currentBytes < totalBytes) {
+          if (cancelState.cancelled) throw new Error(GPU_DOWNLOAD_CANCELLED_MESSAGE)
+
           const start = currentBytes
           const end = Math.min(currentBytes + chunkSize - 1, totalBytes - 1)
 
@@ -298,6 +336,8 @@ export function registerSttHandlers(ctx: MainProcessContext): void {
           // 下载单个块（带重试）
           const downloadChunk = async (retries = 5): Promise<void> => {
             for (let attempt = 1; attempt <= retries; attempt++) {
+              if (cancelState.cancelled) throw new Error(GPU_DOWNLOAD_CANCELLED_MESSAGE)
+
               try {
                 await new Promise<void>((resolve, reject) => {
                   const options = {
@@ -307,6 +347,12 @@ export function registerSttHandlers(ctx: MainProcessContext): void {
                   }
 
                   const request = https.get(zipUrl, options, (res: any) => {
+                    if (cancelState.cancelled) {
+                      res.destroy(new Error(GPU_DOWNLOAD_CANCELLED_MESSAGE))
+                      reject(new Error(GPU_DOWNLOAD_CANCELLED_MESSAGE))
+                      return
+                    }
+
                     if (res.statusCode !== 206 && res.statusCode !== 200) {
                       reject(new Error(`HTTP ${res.statusCode}`))
                       return
@@ -315,6 +361,12 @@ export function registerSttHandlers(ctx: MainProcessContext): void {
                     let chunkBytes = 0
 
                     res.on('data', (chunk: Buffer) => {
+                      if (cancelState.cancelled) {
+                        res.destroy(new Error(GPU_DOWNLOAD_CANCELLED_MESSAGE))
+                        reject(new Error(GPU_DOWNLOAD_CANCELLED_MESSAGE))
+                        return
+                      }
+
                       fileStream.write(chunk)
                       chunkBytes += chunk.length
                       currentBytes += chunk.length
@@ -343,10 +395,15 @@ export function registerSttHandlers(ctx: MainProcessContext): void {
                       resolve()
                     })
 
-                    res.on('error', reject)
+                    res.on('error', (error: Error) => {
+                      reject(cancelState.cancelled ? new Error(GPU_DOWNLOAD_CANCELLED_MESSAGE) : error)
+                    })
                   })
 
-                  request.on('error', reject)
+                  cancelState.request = request
+                  request.on('error', (error: Error) => {
+                    reject(cancelState.cancelled ? new Error(GPU_DOWNLOAD_CANCELLED_MESSAGE) : error)
+                  })
                   request.setTimeout(30000, () => {
                     request.destroy()
                     reject(new Error('请求超时'))
@@ -356,6 +413,11 @@ export function registerSttHandlers(ctx: MainProcessContext): void {
                 // 下载成功，跳出重试循环
                 break
               } catch (error) {
+                if (cancelState.cancelled) {
+                  fileStream.close()
+                  throw new Error(GPU_DOWNLOAD_CANCELLED_MESSAGE)
+                }
+
                 console.error(`[Whisper GPU] 块下载失败 (尝试 ${attempt}/${retries}):`, error)
 
                 // 回退到块开始位置
@@ -435,9 +497,26 @@ export function registerSttHandlers(ctx: MainProcessContext): void {
       console.log('[Whisper GPU] GPU 组件安装完成')
       return { success: true }
     } catch (e) {
+      if (gpuComponentsDownloadCancelState?.cancelled) {
+        return { success: false, error: GPU_DOWNLOAD_CANCELLED_MESSAGE }
+      }
       console.error('[Whisper GPU] 下载失败:', e)
       return { success: false, error: String(e) }
+    } finally {
+      gpuComponentsDownloadCancelState = null
     }
+  })
+
+  ipcMain.handle('stt-whisper:cancel-download-gpu-components', async () => {
+    const cancelState = gpuComponentsDownloadCancelState
+    if (!cancelState) {
+      return { success: true, cancelled: false, error: '没有正在下载的 GPU 组件' }
+    }
+
+    cancelState.cancelled = true
+    try { cancelState.request?.destroy(new Error(GPU_DOWNLOAD_CANCELLED_MESSAGE)) } catch { }
+    try { cancelState.fileStream?.close() } catch { }
+    return { success: true, cancelled: true }
   })
 
   // 检查 GPU 组件状态

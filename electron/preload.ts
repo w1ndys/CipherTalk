@@ -566,6 +566,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   stt: {
     getModelStatus: () => ipcRenderer.invoke('stt:getModelStatus'),
     downloadModel: () => ipcRenderer.invoke('stt:downloadModel'),
+    cancelDownloadModel: () => ipcRenderer.invoke('stt:cancelDownloadModel'),
     transcribe: (wavBase64: string, sessionId: string, createTime: number, force?: boolean) => ipcRenderer.invoke('stt:transcribe', wavBase64, sessionId, createTime, force),
     testOnlineConfig: (overrides?: { provider?: 'openai-compatible' | 'aliyun-qwen-asr' | 'custom'; apiKey?: string; baseURL?: string; model?: string; language?: string; timeoutMs?: number }) =>
       ipcRenderer.invoke('stt-online:test-config', overrides),
@@ -587,6 +588,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     detectGPU: () => ipcRenderer.invoke('stt-whisper:detect-gpu'),
     checkModel: (modelType: string) => ipcRenderer.invoke('stt-whisper:check-model', modelType),
     downloadModel: (modelType: string) => ipcRenderer.invoke('stt-whisper:download-model', modelType),
+    cancelDownloadModel: (modelType: string) => ipcRenderer.invoke('stt-whisper:cancel-download-model', modelType),
     clearModel: (modelType: string) => ipcRenderer.invoke('stt-whisper:clear-model', modelType),
     transcribe: (wavData: Buffer, options: { modelType?: string; language?: string }) =>
       ipcRenderer.invoke('stt-whisper:transcribe', wavData, options),
@@ -595,6 +597,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
       return () => ipcRenderer.removeAllListeners('stt-whisper:download-progress')
     },
     downloadGPUComponents: () => ipcRenderer.invoke('stt-whisper:download-gpu-components'),
+    cancelDownloadGPUComponents: () => ipcRenderer.invoke('stt-whisper:cancel-download-gpu-components'),
     checkGPUComponents: () => ipcRenderer.invoke('stt-whisper:check-gpu-components'),
     onGPUDownloadProgress: (callback: (progress: { currentFile: string; fileProgress: number; overallProgress: number; completedFiles: number; totalFiles: number }) => void) => {
       ipcRenderer.on('stt-whisper:gpu-download-progress', (_, progress) => callback(progress))
@@ -686,6 +689,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     setEmbeddingDevice: (device: 'cpu' | 'dml') => ipcRenderer.invoke('ai:setEmbeddingDevice', device),
     getEmbeddingModelStatus: (profileId?: string) => ipcRenderer.invoke('ai:getEmbeddingModelStatus', profileId),
     downloadEmbeddingModel: (profileId?: string) => ipcRenderer.invoke('ai:downloadEmbeddingModel', profileId),
+    cancelEmbeddingModelDownload: (profileId?: string) => ipcRenderer.invoke('ai:cancelEmbeddingModelDownload', profileId),
     clearEmbeddingModel: (profileId?: string) => ipcRenderer.invoke('ai:clearEmbeddingModel', profileId),
     getOnlineEmbeddingProviders: () => ipcRenderer.invoke('ai:getOnlineEmbeddingProviders'),
     listOnlineEmbeddingConfigs: () => ipcRenderer.invoke('ai:listOnlineEmbeddingConfigs'),
