@@ -1,12 +1,12 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { useLocation } from 'react-router-dom'
-import { Search, Download, FolderOpen, RefreshCw, Check, FileJson, FileText, Table, Loader2, X, FileSpreadsheet, Database, FileCode, CheckCircle, XCircle, ExternalLink, MessageSquare, Users, User, Filter, Image, Video, CircleUserRound, Smile, Mic } from 'lucide-react'
+import { Search, Download, FolderOpen, RefreshCw, Check, FileJson, FileText, Table, Loader2, X, FileSpreadsheet, Database, FileCode, CheckCircle, XCircle, ExternalLink, MessageSquare, Users, User, Filter, Image, Video, CircleUserRound, Smile, Mic, Camera, Heart } from 'lucide-react'
 import DateRangePicker from '../components/DateRangePicker'
 import { useTitleBarStore } from '../stores/titleBarStore'
 import * as configService from '../services/config'
 import './ExportPage.scss'
 
-type ExportTab = 'chat' | 'contacts'
+type ExportTab = 'chat' | 'contacts' | 'moments'
 
 interface ChatSession {
   username: string
@@ -45,6 +45,24 @@ interface ContactExportOptions {
     officials: boolean
   }
   selectedUsernames?: string[]
+}
+
+interface MomentsExportOptions {
+  format: 'json' | 'html' | 'excel'
+  startDate: string
+  endDate: string
+}
+
+interface MomentPost {
+  id: string
+  username: string
+  nickname: string
+  avatarUrl?: string
+  createTime: number
+  contentDesc: string
+  media?: { url: string }[]
+  likes?: string[]
+  comments?: unknown[]
 }
 
 interface ExportResult {
@@ -106,6 +124,15 @@ function ExportPage() {
       groups: false,
       officials: false
     }
+  })
+
+  // 朋友圈导出状态
+  const [moments, setMoments] = useState<MomentPost[]>([])
+  const [isLoadingMoments, setIsLoadingMoments] = useState(false)
+  const [momentsOptions, setMomentsOptions] = useState<MomentsExportOptions>({
+    format: 'html',
+    startDate: '',
+    endDate: ''
   })
 
   // 加载默认导出配置
@@ -234,6 +261,27 @@ function ExportPage() {
     }
   }, [])
 
+  // 加载朋友圈预览
+  const loadMoments = useCallback(async () => {
+    setIsLoadingMoments(true)
+    try {
+      const result = await window.electronAPI.chat.connect()
+      if (!result.success) {
+        console.error('连接失败:', result.error)
+        setIsLoadingMoments(false)
+        return
+      }
+      const res = await window.electronAPI.sns.getTimeline(100, 0)
+      if (res.success && res.timeline) {
+        setMoments(res.timeline as MomentPost[])
+      }
+    } catch (e) {
+      console.error('加载朋友圈失败:', e)
+    } finally {
+      setIsLoadingMoments(false)
+    }
+  }, [])
+
   const loadExportPath = useCallback(async () => {
     try {
       const savedPath = await configService.getExportPath()
@@ -261,6 +309,13 @@ function ExportPage() {
     }
   }, [activeTab, contacts.length, loadContacts])
 
+  // 切换到朋友圈时加载
+  useEffect(() => {
+    if (activeTab === 'moments' && moments.length === 0) {
+      loadMoments()
+    }
+  }, [activeTab, moments.length, loadMoments])
+
   // 设置标题栏右侧内容
   useEffect(() => {
     setTitleBarContent(
@@ -278,6 +333,13 @@ function ExportPage() {
         >
           <Users size={14} />
           <span>通讯录</span>
+        </button>
+        <button
+          className={`export-tab ${activeTab === 'moments' ? 'active' : ''}`}
+          onClick={() => setActiveTab('moments')}
+        >
+          <Camera size={14} />
+          <span>朋友圈</span>
         </button>
       </div>
     )
@@ -481,6 +543,40 @@ function ExportPage() {
       setIsExporting(false)
     }
   }
+
+  // 导出朋友圈
+  const startMomentsExport = async () => {
+    if (!exportFolder) return
+
+    setIsExporting(true)
+    setExportProgress({ current: 0, total: 0, currentName: '朋友圈', phase: '准备导出', detail: '' })
+    setExportResult(null)
+
+    try {
+      const result = await window.electronAPI.export.exportMoments(
+        exportFolder,
+        {
+          format: momentsOptions.format,
+          dateRange: (momentsOptions.startDate && momentsOptions.endDate) ? {
+            start: Math.floor(new Date(momentsOptions.startDate + 'T00:00:00').getTime() / 1000),
+            end: Math.floor(new Date(momentsOptions.endDate + 'T23:59:59').getTime() / 1000)
+          } : null
+        }
+      )
+      setExportResult(result)
+    } catch (e) {
+      console.error('导出朋友圈失败:', e)
+      setExportResult({ success: false, error: String(e) })
+    } finally {
+      setIsExporting(false)
+    }
+  }
+
+  const momentsFormatOptions = [
+    { value: 'html', label: 'HTML', icon: FileText, desc: '网页格式，仿朋友圈样式可直接浏览' },
+    { value: 'json', label: 'JSON', icon: FileJson, desc: '结构化数据，便于程序处理' },
+    { value: 'excel', label: 'Excel', icon: FileSpreadsheet, desc: '电子表格，适合统计分析' }
+  ]
 
   const chatFormatOptions = [
     { value: 'chatlab', label: 'ChatLab', icon: FileCode, desc: '标准格式，支持其他软件导入' },
@@ -947,6 +1043,136 @@ function ExportPage() {
         </>
       )}
 
+      {/* 朋友圈导出 */}
+      {activeTab === 'moments' && (
+        <>
+          <div className="session-panel">
+            <div className="panel-header">
+              <h2>朋友圈预览</h2>
+              <button className="icon-btn" onClick={loadMoments} disabled={isLoadingMoments}>
+                <RefreshCw size={18} className={isLoadingMoments ? 'spin' : ''} />
+              </button>
+            </div>
+
+            {isLoadingMoments ? (
+              <div className="loading-state">
+                <Loader2 size={24} className="spin" />
+                <span>加载中...</span>
+              </div>
+            ) : moments.length === 0 ? (
+              <div className="empty-state">
+                <span>暂无朋友圈数据</span>
+              </div>
+            ) : (
+              <>
+                <div className="select-actions">
+                  <span className="selected-count">预览最近 {moments.length} 条 · 导出按时间范围筛选</span>
+                </div>
+                <div className="export-session-list">
+                  {moments.map(m => (
+                    <div
+                      key={m.id || `${m.username}_${m.createTime}`}
+                      className="export-session-item moment-preview-item"
+                    >
+                      <div className="export-avatar">
+                        {m.avatarUrl ? (
+                          <img src={m.avatarUrl} alt="" />
+                        ) : (
+                          <span>{getAvatarLetter(m.nickname || m.username)}</span>
+                        )}
+                      </div>
+                      <div className="export-session-info">
+                        <div className="export-session-name">
+                          {m.nickname || m.username}
+                          <span className="moment-time">
+                            {m.createTime ? new Date(m.createTime * 1000).toLocaleString('zh-CN') : ''}
+                          </span>
+                        </div>
+                        <div className="export-session-summary">
+                          {m.contentDesc || (m.media && m.media.length > 0 ? '[图片/视频]' : '[无文字内容]')}
+                        </div>
+                        <div className="moment-meta">
+                          {m.media && m.media.length > 0 && <span><Image size={11} /> {m.media.length}</span>}
+                          {m.likes && m.likes.length > 0 && <span><Heart size={11} /> {m.likes.length}</span>}
+                          {m.comments && m.comments.length > 0 && <span><MessageSquare size={11} /> {m.comments.length}</span>}
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </>
+            )}
+          </div>
+
+          <div className="settings-panel">
+            <div className="panel-header">
+              <h2>导出设置</h2>
+            </div>
+
+            <div className="settings-content">
+              <div className="setting-section">
+                <h3>导出格式</h3>
+                <div className="format-options">
+                  {momentsFormatOptions.map(fmt => (
+                    <div
+                      key={fmt.value}
+                      className={`format-card ${momentsOptions.format === fmt.value ? 'active' : ''}`}
+                      onClick={() => setMomentsOptions(prev => ({ ...prev, format: fmt.value as any }))}
+                    >
+                      <fmt.icon size={24} />
+                      <span className="format-label">{fmt.label}</span>
+                      <span className="format-desc">{fmt.desc}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <div className="setting-section">
+                <h3>时间范围</h3>
+                <div className="time-options">
+                  <DateRangePicker
+                    startDate={momentsOptions.startDate}
+                    endDate={momentsOptions.endDate}
+                    onStartDateChange={(date) => setMomentsOptions(prev => ({ ...prev, startDate: date }))}
+                    onEndDateChange={(date) => setMomentsOptions(prev => ({ ...prev, endDate: date }))}
+                  />
+                  <p className="time-hint">不选择时间范围则导出全部朋友圈</p>
+                </div>
+              </div>
+
+              <div className="setting-section">
+                <h3>导出位置</h3>
+                <div className="export-path-select" onClick={selectExportFolder}>
+                  <FolderOpen size={16} />
+                  <span className="path-text">{exportFolder || '点击选择导出位置'}</span>
+                  <span className="change-text">更改</span>
+                </div>
+              </div>
+            </div>
+
+            <div className="export-action">
+              <button
+                className="export-btn"
+                onClick={startMomentsExport}
+                disabled={!exportFolder || isExporting || moments.length === 0}
+              >
+                {isExporting ? (
+                  <>
+                    <Loader2 size={18} className="spin" />
+                    <span>导出中...</span>
+                  </>
+                ) : (
+                  <>
+                    <Download size={18} />
+                    <span>导出朋友圈</span>
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        </>
+      )}
+
       {/* 导出进度弹窗 */}
       {isExporting && (
         <div className="export-overlay">
@@ -997,7 +1223,7 @@ function ExportPage() {
             {exportResult.success ? (
               <p className="result-text">
                 {exportResult.successCount !== undefined
-                  ? `成功导出 ${exportResult.successCount} 个${activeTab === 'chat' ? '会话' : '联系人'}`
+                  ? `成功导出 ${exportResult.successCount} ${activeTab === 'chat' ? '个会话' : activeTab === 'contacts' ? '个联系人' : '条朋友圈'}`
                   : '导出成功'}
                 {exportResult.failCount ? `，${exportResult.failCount} 个失败` : ''}
               </p>

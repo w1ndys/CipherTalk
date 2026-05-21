@@ -527,6 +527,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('export:exportSession', sessionId, outputPath, options),
     exportContacts: (outputDir: string, options: any) =>
       ipcRenderer.invoke('export:exportContacts', outputDir, options),
+    exportMoments: (outputDir: string, options: any) =>
+      ipcRenderer.invoke('export:exportMoments', outputDir, options),
     onProgress: (callback: (data: any) => void) => {
       ipcRenderer.on('export:progress', (_, data) => callback(data))
       return () => ipcRenderer.removeAllListeners('export:progress')

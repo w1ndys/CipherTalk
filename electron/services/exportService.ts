@@ -10,6 +10,7 @@ import { imageDecryptService } from './imageDecryptService'
 import { videoService } from './videoService'
 import { dbAdapter } from './dbAdapter'
 import { findMessageDbPaths, findDbByName, getDbStoragePath } from './dbStoragePaths'
+import { snsService, isVideoUrl, type SnsPost, type SnsShareInfo } from './snsService'
 
 // ChatLab 0.0.2 格式类型定义
 export interface ChatLabHeader {
@@ -104,6 +105,28 @@ export interface ContactExportOptions {
     officials: boolean
   }
   selectedUsernames?: string[]
+}
+
+export interface MomentsExportOptions {
+  format: 'json' | 'html' | 'excel'
+  dateRange?: { start: number; end: number } | null
+  usernames?: string[]
+}
+
+export interface MomentExportItem {
+  id: string
+  username: string
+  nickname: string
+  createTime: number
+  formattedTime: string
+  content: string
+  media: { type: 'image' | 'video'; url: string; thumb: string }[]
+  mediaCount: number
+  shareInfo?: SnsShareInfo
+  likes: string[]
+  likeCount: number
+  comments: { nickname: string; content: string; replyTo?: string }[]
+  commentCount: number
 }
 
 export interface ExportProgress {
@@ -2441,6 +2464,233 @@ class ExportService {
     } catch (e) {
       return { success: false, successCount, failCount, error: String(e) }
     }
+  }
+
+  /**
+   * 导出朋友圈
+   */
+  async exportMoments(
+    outputDir: string,
+    options: MomentsExportOptions,
+    onProgress?: (progress: ExportProgress) => void
+  ): Promise<{ success: boolean; successCount: number; failCount: number; error?: string }> {
+    try {
+      if (!fs.existsSync(outputDir)) {
+        fs.mkdirSync(outputDir, { recursive: true })
+      }
+
+      onProgress?.({ current: 0, total: 100, currentSession: '朋友圈', phase: 'preparing', detail: '正在读取朋友圈数据...' })
+
+      const startTime = options.dateRange?.start
+      const endTime = options.dateRange?.end
+      const usernames = options.usernames && options.usernames.length > 0 ? options.usernames : undefined
+
+      // 分页拉取全部朋友圈
+      const allPosts: SnsPost[] = []
+      const seenIds = new Set<string>()
+      const BATCH = 200
+      let offset = 0
+      while (true) {
+        const res = await snsService.getTimeline(BATCH, offset, usernames, undefined, startTime, endTime)
+        if (!res.success || !res.timeline || res.timeline.length === 0) break
+        for (const post of res.timeline) {
+          const key = post.id || `${post.username}_${post.createTime}`
+          if (seenIds.has(key)) continue
+          seenIds.add(key)
+          allPosts.push(post)
+        }
+        onProgress?.({ current: 50, total: 100, currentSession: '朋友圈', phase: 'exporting', detail: `已读取 ${allPosts.length} 条朋友圈...` })
+        if (res.timeline.length < BATCH) break
+        offset += BATCH
+        await new Promise(resolve => setImmediate(resolve))
+      }
+
+      if (allPosts.length === 0) {
+        return { success: false, successCount: 0, failCount: 0, error: '未找到符合条件的朋友圈数据' }
+      }
+
+      // 按时间倒序
+      allPosts.sort((a, b) => b.createTime - a.createTime)
+
+      onProgress?.({ current: 95, total: 100, currentSession: '朋友圈', phase: 'writing', detail: '正在写入文件...' })
+
+      const timestamp = this.formatTimestamp(Math.floor(Date.now() / 1000)).replace(/[: ]/g, '-')
+      let ext = '.json'
+      if (options.format === 'html') ext = '.html'
+      else if (options.format === 'excel') ext = '.xlsx'
+      const outputPath = path.join(outputDir, `朋友圈导出_${timestamp}${ext}`)
+
+      // 统一处理：所有格式都消费同一份处理过的数据
+      const items = allPosts.map(p => this.buildMomentExportItem(p))
+
+      if (options.format === 'json') {
+        const data = {
+          generator: 'CipherTalk',
+          exportedAt: Math.floor(Date.now() / 1000),
+          total: items.length,
+          moments: items
+        }
+        fs.writeFileSync(outputPath, JSON.stringify(data, null, 2), 'utf-8')
+      } else if (options.format === 'html') {
+        fs.writeFileSync(outputPath, this.buildMomentsHtml(items), 'utf-8')
+      } else {
+        await this.writeMomentsExcel(items, outputPath)
+      }
+
+      onProgress?.({ current: 100, total: 100, currentSession: '朋友圈', phase: 'complete', detail: '导出完成' })
+      return { success: true, successCount: allPosts.length, failCount: 0 }
+    } catch (e) {
+      console.error('ExportService: 朋友圈导出失败:', e)
+      return { success: false, successCount: 0, failCount: 0, error: String(e) }
+    }
+  }
+
+  private buildMomentExportItem(p: SnsPost): MomentExportItem {
+    return {
+      id: p.id,
+      username: p.username,
+      nickname: this.decodeHtmlEntities(p.nickname || p.username),
+      createTime: p.createTime,
+      formattedTime: this.formatTimestamp(p.createTime),
+      content: this.decodeHtmlEntities(p.contentDesc || ''),
+      media: (p.media || []).map(m => ({
+        type: isVideoUrl(m.url) ? 'video' as const : 'image' as const,
+        url: m.url,
+        thumb: m.thumb
+      })),
+      mediaCount: p.media?.length || 0,
+      shareInfo: p.shareInfo,
+      likes: (p.likes || []).map(l => this.decodeHtmlEntities(l)),
+      likeCount: p.likes?.length || 0,
+      comments: (p.comments || []).map(c => ({
+        nickname: this.decodeHtmlEntities(c.nickname || ''),
+        content: this.decodeHtmlEntities(c.content || ''),
+        replyTo: c.refNickname ? this.decodeHtmlEntities(c.refNickname) : undefined
+      })),
+      commentCount: p.comments?.length || 0
+    }
+  }
+
+  private escapeHtmlText(text: string): string {
+    if (!text) return ''
+    return text
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+  }
+
+  private buildMomentsHtml(items: MomentExportItem[]): string {
+    const cards = items.map(p => {
+      const time = this.escapeHtmlText(p.formattedTime)
+      const nickname = this.escapeHtmlText(p.nickname)
+      const content = this.escapeHtmlText(p.content).replace(/\n/g, '<br>')
+
+      const mediaHtml = p.media.map(m => {
+        if (m.type === 'video') {
+          return `<video class="m-media" controls src="${this.escapeHtmlText(m.url)}"></video>`
+        }
+        return `<img class="m-media" loading="lazy" src="${this.escapeHtmlText(m.url || m.thumb)}" alt="">`
+      }).join('')
+
+      let shareHtml = ''
+      if (p.shareInfo && (p.shareInfo.title || p.shareInfo.description)) {
+        shareHtml = `<div class="m-share"><div class="m-share-title">${this.escapeHtmlText(p.shareInfo.title || '')}</div><div class="m-share-desc">${this.escapeHtmlText(p.shareInfo.description || '')}</div></div>`
+      }
+
+      const likesHtml = p.likes.length > 0
+        ? `<div class="m-likes">❤ ${this.escapeHtmlText(p.likes.join('、'))}</div>`
+        : ''
+
+      const commentsHtml = p.comments.length > 0
+        ? `<div class="m-comments">${p.comments.map(c => {
+            const who = this.escapeHtmlText(c.nickname)
+            const ref = c.replyTo ? ` 回复 ${this.escapeHtmlText(c.replyTo)}` : ''
+            return `<div class="m-comment"><b>${who}</b>${ref}：${this.escapeHtmlText(c.content)}</div>`
+          }).join('')}</div>`
+        : ''
+
+      return `<div class="m-card">
+  <div class="m-head"><span class="m-name">${nickname}</span><span class="m-time">${time}</span></div>
+  ${content ? `<div class="m-content">${content}</div>` : ''}
+  ${mediaHtml ? `<div class="m-medias">${mediaHtml}</div>` : ''}
+  ${shareHtml}
+  ${likesHtml}
+  ${commentsHtml}
+</div>`
+    }).join('\n')
+
+    return `<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>朋友圈导出 - CipherTalk</title>
+<style>
+  body { margin:0; background:#f0f2f5; font-family:-apple-system,"Microsoft YaHei",sans-serif; color:#1a1a1a; }
+  .m-wrap { max-width:600px; margin:0 auto; padding:24px 16px; }
+  .m-title { text-align:center; font-size:18px; font-weight:600; margin-bottom:4px; }
+  .m-sub { text-align:center; color:#888; font-size:13px; margin-bottom:20px; }
+  .m-card { background:#fff; border-radius:12px; padding:16px; margin-bottom:14px; box-shadow:0 1px 4px rgba(0,0,0,.06); }
+  .m-head { display:flex; justify-content:space-between; align-items:baseline; margin-bottom:8px; }
+  .m-name { font-weight:600; color:#576b95; }
+  .m-time { font-size:12px; color:#999; }
+  .m-content { font-size:15px; line-height:1.6; white-space:pre-wrap; margin-bottom:10px; }
+  .m-medias { display:flex; flex-wrap:wrap; gap:6px; }
+  .m-media { width:calc(33.33% - 4px); border-radius:6px; object-fit:cover; aspect-ratio:1; }
+  .m-share { background:#f7f7f7; border-radius:8px; padding:10px; margin-top:8px; }
+  .m-share-title { font-weight:600; font-size:14px; }
+  .m-share-desc { color:#888; font-size:13px; margin-top:4px; }
+  .m-likes { margin-top:10px; padding-top:8px; border-top:1px solid #eee; color:#576b95; font-size:13px; }
+  .m-comments { margin-top:8px; background:#f7f7f7; border-radius:8px; padding:8px 10px; }
+  .m-comment { font-size:13px; line-height:1.7; }
+  .m-comment b { color:#576b95; }
+</style>
+</head>
+<body>
+<div class="m-wrap">
+  <div class="m-title">朋友圈导出</div>
+  <div class="m-sub">CipherTalk · 共 ${items.length} 条 · ${this.escapeHtmlText(this.formatTimestamp(Math.floor(Date.now() / 1000)))}</div>
+  ${cards}
+</div>
+</body>
+</html>`
+  }
+
+  private async writeMomentsExcel(items: MomentExportItem[], outputPath: string): Promise<void> {
+    const workbook = new ExcelJS.Workbook()
+    const sheet = workbook.addWorksheet('朋友圈')
+    sheet.columns = [
+      { header: '时间', key: 'time', width: 20 },
+      { header: '昵称', key: 'nickname', width: 18 },
+      { header: 'wxid', key: 'username', width: 24 },
+      { header: '内容', key: 'content', width: 50 },
+      { header: '媒体数', key: 'mediaCount', width: 8 },
+      { header: '媒体链接', key: 'media', width: 40 },
+      { header: '点赞数', key: 'likeCount', width: 8 },
+      { header: '点赞人', key: 'likes', width: 30 },
+      { header: '评论数', key: 'commentCount', width: 8 },
+      { header: '评论详情', key: 'comments', width: 50 }
+    ]
+
+    for (const p of items) {
+      sheet.addRow({
+        time: p.formattedTime,
+        nickname: p.nickname,
+        username: p.username,
+        content: p.content,
+        mediaCount: p.mediaCount,
+        media: p.media.map(m => m.url).join('\n'),
+        likeCount: p.likeCount,
+        likes: p.likes.join('、'),
+        commentCount: p.commentCount,
+        comments: p.comments.map(c => `${c.nickname}${c.replyTo ? '回复' + c.replyTo : ''}：${c.content}`).join('\n')
+      })
+    }
+
+    sheet.eachRow(row => { row.alignment = { vertical: 'top', wrapText: true } })
+    sheet.getRow(1).font = { bold: true }
+
+    await workbook.xlsx.writeFile(outputPath)
   }
 
   /**

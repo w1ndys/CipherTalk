@@ -943,6 +943,12 @@ export interface ElectronAPI {
       successCount?: number
       error?: string
     }>
+    exportMoments: (outputDir: string, options: MomentsExportOptions) => Promise<{
+      success: boolean
+      successCount?: number
+      failCount?: number
+      error?: string
+    }>
     onProgress: (callback: (data: {
       current?: number
       total?: number
@@ -1501,6 +1507,12 @@ export interface ContactExportOptions {
     officials: boolean
   }
   selectedUsernames?: string[]
+}
+
+export interface MomentsExportOptions {
+  format: 'json' | 'html' | 'excel'
+  dateRange?: { start: number; end: number } | null
+  usernames?: string[]
 }
 
 export interface DatabaseFileInfo {
