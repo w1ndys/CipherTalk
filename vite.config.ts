@@ -6,6 +6,7 @@ import { resolve } from 'path'
 import { builtinModules } from 'module'
 
 const pkg = require('./package.json')
+const devServerPort = Number(process.env.VITE_PORT || process.env.PORT || 5321)
 const external = [
   ...builtinModules,
   ...builtinModules.map(m => `node:${m}`),
@@ -18,8 +19,8 @@ export default defineConfig({
     entries: ['index.html']
   },
   server: {
-    port: 5173,
-    strictPort: false  // 如果5173被占用，自动尝试下一个
+    port: devServerPort,
+    strictPort: false  // 如果默认端口被占用，自动尝试下一个
   },
   plugins: [
     react(),

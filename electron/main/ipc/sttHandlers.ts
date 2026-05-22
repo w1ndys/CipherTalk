@@ -68,6 +68,30 @@ export function registerSttHandlers(ctx: MainProcessContext): void {
     }
   })
 
+  ipcMain.handle('stt:transcribeAudioFile', async (_, filePath: string) => {
+    try {
+      const validation = sttRuntimeService.validateAudioFilePath(String(filePath || ''))
+      if (!validation.valid) {
+        return {
+          success: false,
+          sttMode: sttRuntimeService.getCurrentSttMode(),
+          error: validation.error || '无效的音频文件路径',
+          errorCode: 'BAD_REQUEST'
+        }
+      }
+
+      return await sttRuntimeService.transcribeAudioFile(filePath)
+    } catch (e) {
+      console.error('[Main] stt:transcribeAudioFile 异常:', e)
+      return {
+        success: false,
+        sttMode: sttRuntimeService.getCurrentSttMode(),
+        error: String(e),
+        errorCode: 'INTERNAL_ERROR'
+      }
+    }
+  })
+
   // 获取缓存的转写结果
   ipcMain.handle('stt:getCachedTranscript', async (_, sessionId: string, createTime: number) => {
     try {

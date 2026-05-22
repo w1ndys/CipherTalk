@@ -10,7 +10,7 @@ import ListItemButton from '@mui/material/ListItemButton'
 import ListItemIcon from '@mui/material/ListItemIcon'
 import Tooltip from '@mui/material/Tooltip'
 import Typography from '@mui/material/Typography'
-import { Home, MessageSquare, BarChart3, Users, FileText, Database, Settings, SquareChevronLeft, SquareChevronRight, Download, Aperture, Network, Bot } from 'lucide-react'
+import { Home, MessageSquare, BarChart3, Users, FileText, Database, Settings, SquareChevronLeft, SquareChevronRight, Download, Aperture, Network, Bot, FileAudio } from 'lucide-react'
 import { MCP } from '@lobehub/icons'
 import { useAppStore } from '../stores/appStore'
 
@@ -80,6 +80,7 @@ function Sidebar() {
     { key: 'analytics', label: '私聊分析', icon: <BarChart3 size={20} />, type: 'route', path: '/analytics' },
     { key: 'group-analytics', label: '群聊分析', icon: <Users size={20} />, type: 'action', onClick: openGroupAnalyticsWindow },
     { key: 'annual-report', label: '年度报告', icon: <FileText size={20} />, type: 'route', path: '/annual-report' },
+    { key: 'transcription-assistant', label: '转文字助手', icon: <FileAudio size={20} />, type: 'route', path: '/transcription-assistant' },
     { key: 'export', label: '导出数据', icon: <Download size={20} />, type: 'route', path: '/export' },
     { key: 'data-management', label: '数据管理', icon: <Database size={20} />, type: 'route', path: '/data-management' },
     { key: 'open-api', label: '开放接口', icon: <Network size={20} />, type: 'route', path: '/open-api' },

@@ -1039,6 +1039,15 @@ export interface ElectronAPI {
       success: boolean
       transcript?: string
       cached?: boolean
+      sttMode?: 'cpu' | 'gpu' | 'online'
+      errorCode?: 'BAD_REQUEST' | 'STT_NOT_READY' | 'INTERNAL_ERROR'
+      error?: string
+    }>
+    transcribeAudioFile: (filePath: string) => Promise<{
+      success: boolean
+      transcript?: string
+      sttMode?: 'cpu' | 'gpu' | 'online'
+      errorCode?: 'BAD_REQUEST' | 'STT_NOT_READY' | 'INTERNAL_ERROR'
       error?: string
     }>
     testOnlineConfig: (overrides?: {

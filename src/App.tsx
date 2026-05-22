@@ -18,6 +18,7 @@ import SettingsPage from './pages/SettingsPage'
 import OpenApiPage from './pages/OpenApiPage'
 import McpPage from './pages/McpPage'
 import ExportPage from './pages/ExportPage'
+import TranscriptionAssistantPage from './pages/TranscriptionAssistantPage'
 import ActivationPage from './pages/ActivationPage'
 import ImageWindow from './pages/ImageWindow'
 import VideoWindow from './pages/VideoWindow'
@@ -712,6 +713,7 @@ function App() {
               <Route path="/open-api" element={<OpenApiPage />} />
               <Route path="/mcp" element={<McpPage />} />
               <Route path="/export" element={<ExportPage />} />
+              <Route path="/transcription-assistant" element={<TranscriptionAssistantPage />} />
               <Route path="/agent" element={<AgentPage />} />
               <Route path="/chat-history/:sessionId/:messageId" element={<ChatHistoryPage />} />
             </Routes>
