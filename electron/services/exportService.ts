@@ -367,8 +367,8 @@ class ExportService {
    */
   private convertMessageType(localType: number, content: string): number {
     // 检查 XML 中的 type 标签（支持大 localType 的情况）
-    const xmlTypeMatch = /<type>(\d+)<\/type>/i.exec(content)
-    const xmlType = xmlTypeMatch ? parseInt(xmlTypeMatch[1]) : null
+    const xmlTypeText = this.extractXmlValue(content, 'type')
+    const xmlType = xmlTypeText ? parseInt(xmlTypeText, 10) : null
 
     // 特殊处理 type 49 或 XML type
     if (localType === 49 || xmlType) {
@@ -380,6 +380,7 @@ class ExportService {
         case 36: return 24 // 小程序 -> SHARE
         case 57: return 25 // 引用回复 -> REPLY
         case 2000: return 99 // 转账 -> OTHER (ChatLab 没有转账类型)
+        case 2001: return 99 // 红包 -> OTHER (ChatLab 没有红包类型)
         case 5:
         case 49: return 7  // 链接 -> LINK
         default:
@@ -511,8 +512,12 @@ class ExportService {
     if (!content) return null
 
     // 检查 XML 中的 type 标签（支持大 localType 的情况）
-    const xmlTypeMatch = /<type>(\d+)<\/type>/i.exec(content)
-    const xmlType = xmlTypeMatch ? xmlTypeMatch[1] : null
+    const xmlType = this.extractXmlValue(content, 'type') || null
+    const isAppMsgXml = /<appmsg[\s\S]*?>/i.test(content)
+
+    if (xmlType && isAppMsgXml) {
+      return this.parseType49(content)
+    }
 
     switch (localType) {
       case 1: // 文本
@@ -1423,8 +1428,7 @@ class ExportService {
   private getMessageTypeName(localType: number, content?: string): string {
     // 检查 XML 中的 type 标签（支持大 localType 的情况）
     if (content) {
-      const xmlTypeMatch = /<type>(\d+)<\/type>/i.exec(content)
-      const xmlType = xmlTypeMatch ? xmlTypeMatch[1] : null
+      const xmlType = this.extractXmlValue(content, 'type') || null
 
       if (xmlType) {
         switch (xmlType) {

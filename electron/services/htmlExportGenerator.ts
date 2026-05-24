@@ -4,6 +4,9 @@
  * 支持图片/视频内联显示、搜索、主题切换、日期跳转
  */
 
+import * as fs from 'fs'
+import * as path from 'path'
+
 export interface HtmlExportMessage {
   timestamp: number
   sender: string
@@ -48,6 +51,8 @@ export interface HtmlExportData {
   messages: HtmlExportMessage[]
 }
 
+const WECHAT_EMOJI_DIRS = ['face', 'gesture', 'animal', 'blessing', 'other']
+
 export class HtmlExportGenerator {
   /**
    * 生成完整的单文件 HTML（内联 CSS + JS + 数据）
@@ -57,6 +62,7 @@ export class HtmlExportGenerator {
     const dateRangeText = exportData.meta.dateRange
       ? `${new Date(exportData.meta.dateRange.start * 1000).toLocaleDateString('zh-CN')} - ${new Date(exportData.meta.dateRange.end * 1000).toLocaleDateString('zh-CN')}`
       : ''
+    const wechatEmojiMap = this.buildWechatEmojiDataMap(exportData)
 
     // 头像 HTML：优先使用真实头像图片，回退到首字符
     const avatarHtml = exportData.meta.sessionAvatar
@@ -118,6 +124,7 @@ export class HtmlExportGenerator {
   </div>
 
   <script>window.CHAT_DATA = ${JSON.stringify(exportData)};</script>
+  <script>window.WECHAT_EMOJIS = ${JSON.stringify(wechatEmojiMap)};</script>
   <script>${this.generateJs()}</script>
 </body>
 </html>`
@@ -493,6 +500,15 @@ body {
   line-height: 1.4;
 }
 
+.wechat-emoji {
+  width: 20px;
+  height: 20px;
+  display: inline-block;
+  vertical-align: text-bottom;
+  margin: 0 2px;
+  object-fit: contain;
+}
+
 .msg-time {
   font-size: 11px;
   color: var(--text-time);
@@ -554,6 +570,52 @@ body {
 .msg-voice .voice-text {
   font-size: 12px;
   color: var(--secondary-text);
+  opacity: 0.8;
+}
+
+/* 红包卡片 */
+.hongbao-message {
+  width: 240px;
+  max-width: 100%;
+  background: linear-gradient(135deg, #e25b4a 0%, #c94535 100%);
+  border-radius: 12px;
+  padding: 14px 16px;
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  color: #fff;
+  white-space: normal;
+}
+
+.hongbao-icon {
+  flex-shrink: 0;
+  width: 32px;
+  height: 32px;
+}
+
+.hongbao-icon svg {
+  display: block;
+  width: 32px;
+  height: 32px;
+  filter: drop-shadow(0 1px 2px rgba(0,0,0,0.1));
+}
+
+.hongbao-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.hongbao-greeting {
+  font-size: 15px;
+  font-weight: 500;
+  line-height: 1.35;
+  margin-bottom: 6px;
+  text-shadow: 0 1px 2px rgba(0,0,0,0.1);
+  word-break: break-word;
+}
+
+.hongbao-label {
+  font-size: 12px;
   opacity: 0.8;
 }
 
@@ -682,6 +744,7 @@ body {
   const messages = data.messages;
   const members = {};
   data.members.forEach(m => { members[m.id] = m; });
+  const wechatEmojis = window.WECHAT_EMOJIS || {};
 
   const chatBody = document.getElementById('chatBody');
   const container = document.getElementById('messagesContainer');
@@ -894,6 +957,62 @@ body {
     return d.innerHTML;
   }
 
+  function renderRichText(content) {
+    const text = String(content || '');
+    const re = /\\[([^\\]]+)\\]/g;
+    let html = '';
+    let lastIndex = 0;
+    let match;
+
+    while ((match = re.exec(text)) !== null) {
+      const emojiName = match[1];
+      const emojiSrc = wechatEmojis[emojiName];
+      if (!emojiSrc) continue;
+
+      if (match.index > lastIndex) {
+        html += esc(text.slice(lastIndex, match.index)).replace(/\\n/g, '<br>');
+      }
+      html += '<img class="wechat-emoji" src="' + emojiSrc + '" alt="[' + esc(emojiName) + ']" title="' + esc(emojiName) + '">';
+      lastIndex = match.index + match[0].length;
+    }
+
+    if (lastIndex < text.length) {
+      html += esc(text.slice(lastIndex)).replace(/\\n/g, '<br>');
+    }
+
+    return html || esc(text).replace(/\\n/g, '<br>');
+  }
+
+  function xmlValue(xml, tagName) {
+    if (!xml) return '';
+    const re = new RegExp('<' + tagName + '>([\\\\s\\\\S]*?)<\\\\/' + tagName + '>', 'i');
+    const match = re.exec(String(xml));
+    if (!match) return '';
+    return decodeEntities(match[1].replace(/<!\\[CDATA\\[/g, '').replace(/\\]\\]>/g, '').trim());
+  }
+
+  function appMsgType(msg) {
+    return xmlValue(msg.rawContent, 'type') || xmlValue(msg.content, 'type');
+  }
+
+  function renderHongbao(greeting) {
+    const displayGreeting = greeting || '恭喜发财，大吉大利';
+    return '<div class="hongbao-message">' +
+      '<div class="hongbao-icon">' +
+        '<svg viewBox="0 0 40 40" fill="none" aria-hidden="true">' +
+          '<rect x="4" y="6" width="32" height="28" rx="4" fill="white" fill-opacity="0.3"></rect>' +
+          '<rect x="4" y="6" width="32" height="14" rx="4" fill="white" fill-opacity="0.2"></rect>' +
+          '<circle cx="20" cy="20" r="6" fill="white" fill-opacity="0.4"></circle>' +
+          '<text x="20" y="24" text-anchor="middle" fill="white" font-size="12" font-weight="bold">¥</text>' +
+        '</svg>' +
+      '</div>' +
+      '<div class="hongbao-info">' +
+        '<div class="hongbao-greeting">' + renderRichText(displayGreeting) + '</div>' +
+        '<div class="hongbao-label">微信红包</div>' +
+      '</div>' +
+    '</div>';
+  }
+
   // 格式化时间
   function fmtTime(ts) {
     const d = new Date(ts * 1000);
@@ -910,7 +1029,18 @@ body {
 
   // 渲染消息内容（处理图片/视频路径）
   function renderContent(msg) {
-    const content = msg.content;
+    const content = msg.content || '';
+
+    if (appMsgType(msg) === '2001' || /^\\[红包\\](?:\\s|$)/.test(content)) {
+      const parsedGreeting = /^\\[红包\\](?:\\s+([\\s\\S]*))?$/.exec(content)?.[1]?.trim() || '';
+      const greeting = xmlValue(msg.rawContent, 'receivertitle') ||
+        xmlValue(msg.rawContent, 'sendertitle') ||
+        xmlValue(content, 'receivertitle') ||
+        xmlValue(content, 'sendertitle') ||
+        parsedGreeting;
+      return renderHongbao(greeting);
+    }
+
     if (!content) return '<em style="opacity:0.5">无内容</em>';
 
     // 图片消息：[图片] images/xxx.jpg
@@ -951,7 +1081,7 @@ body {
     }
     if (content === '[语音消息]') return '<div class="msg-image broken">🎙️ 语音</div>';
 
-    return '<span class="msg-text">' + esc(content) + '</span>';
+    return '<span class="msg-text">' + renderRichText(content) + '</span>';
   }
 
   // 渲染聊天记录引用
@@ -962,7 +1092,7 @@ body {
       html += '<div class="cr-item">';
       html += '<span class="cr-sender">' + esc(r.senderDisplayName) + '</span>';
       if (r.formattedTime) html += '<span class="cr-time">' + esc(r.formattedTime) + '</span>';
-      html += '<div class="cr-content">' + esc(r.content) + '</div></div>';
+      html += '<div class="cr-content">' + renderRichText(r.content) + '</div></div>';
     }
     return html + '</div>';
   }
@@ -1068,6 +1198,80 @@ body {
    */
   static generateDataJson(exportData: HtmlExportData): string {
     return JSON.stringify(exportData, null, 2)
+  }
+
+  private static buildWechatEmojiDataMap(exportData: HtmlExportData): Record<string, string> {
+    const names = this.collectWechatEmojiNames(exportData)
+    if (names.size === 0) return {}
+
+    const assetMap = this.loadWechatEmojiAssetMap()
+    const result: Record<string, string> = {}
+    for (const name of names) {
+      const filePath = assetMap.get(name)
+      if (!filePath) continue
+      try {
+        const buffer = fs.readFileSync(filePath)
+        result[name] = `data:image/png;base64,${buffer.toString('base64')}`
+      } catch { }
+    }
+    return result
+  }
+
+  private static collectWechatEmojiNames(exportData: HtmlExportData): Set<string> {
+    const names = new Set<string>()
+    const collect = (text?: string | null) => {
+      if (!text) return
+      const re = /\[([^\]]+)\]/g
+      let match: RegExpExecArray | null
+      while ((match = re.exec(text)) !== null) {
+        const name = match[1]?.trim()
+        if (name) names.add(name)
+      }
+    }
+
+    for (const msg of exportData.messages || []) {
+      collect(msg.content)
+      for (const record of msg.chatRecords || []) {
+        collect(record.content)
+      }
+    }
+    return names
+  }
+
+  private static loadWechatEmojiAssetMap(): Map<string, string> {
+    const result = new Map<string, string>()
+    for (const root of this.getWechatEmojiRoots()) {
+      if (!fs.existsSync(root)) continue
+      for (const dir of WECHAT_EMOJI_DIRS) {
+        const fullDir = path.join(root, dir)
+        if (!fs.existsSync(fullDir)) continue
+        try {
+          const files = fs.readdirSync(fullDir)
+          for (const file of files) {
+            if (!file.toLowerCase().endsWith('.png')) continue
+            const name = path.basename(file, path.extname(file))
+            if (!result.has(name)) {
+              result.set(name, path.join(fullDir, file))
+            }
+          }
+        } catch { }
+      }
+    }
+    return result
+  }
+
+  private static getWechatEmojiRoots(): string[] {
+    return [
+      path.join(process.cwd(), 'public', 'wechat-emojis'),
+      path.join(process.cwd(), 'dist', 'wechat-emojis'),
+      path.join(__dirname, '..', 'public', 'wechat-emojis'),
+      path.join(__dirname, '..', 'dist', 'wechat-emojis'),
+      path.join(__dirname, '..', '..', 'public', 'wechat-emojis'),
+      path.join(__dirname, '..', '..', 'dist', 'wechat-emojis'),
+      path.join(process.resourcesPath || '', 'wechat-emojis'),
+      path.join(process.resourcesPath || '', 'app.asar', 'dist', 'wechat-emojis'),
+      path.join(process.resourcesPath || '', 'app.asar.unpacked', 'dist', 'wechat-emojis')
+    ].filter(Boolean)
   }
 
   /**
