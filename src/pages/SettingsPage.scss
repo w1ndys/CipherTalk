@@ -2246,6 +2246,7 @@
   --settings-card-active: color-mix(in srgb, var(--primary) 12%, var(--bg-secondary));
   --settings-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
   --settings-shadow-hover: 0 8px 20px rgba(0, 0, 0, 0.08);
+  --settings-native-select-option-bg: color-mix(in srgb, var(--bg-primary) 92%, #ffffff 8%);
 
   .tab-content {
     max-width: 1040px;
@@ -2417,3 +2418,11 @@
   }
 }
 
+[data-mode="dark"] .settings-page {
+  --settings-native-select-option-bg: color-mix(in srgb, var(--bg-primary) 92%, #000000 8%);
+
+  select,
+  .param-select {
+    color-scheme: dark;
+  }
+}

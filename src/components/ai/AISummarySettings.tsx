@@ -1,12 +1,12 @@
 import { useState, useEffect } from 'react'
-import { Eye, EyeOff, Sparkles, Check, Zap, Star, FileText, HelpCircle, X, Plus, Settings2, Download, Trash2, Database, CheckCircle, AlertCircle, RefreshCw, Layers, Cpu, Cloud, Save, Pause } from 'lucide-react'
+import { Eye, EyeOff, Sparkles, Zap, Star, FileText, HelpCircle, X, Plus, Settings2, Download, Trash2, Database, CheckCircle, AlertCircle, RefreshCw, Cpu, Cloud, Save, Pause } from 'lucide-react'
 import { getAIProviders, type AIProviderInfo, type EmbeddingDevice, type EmbeddingDeviceStatus, type EmbeddingMode, type EmbeddingModelDownloadProgress, type EmbeddingModelProfile, type EmbeddingModelStatus, type OnlineEmbeddingConfig, type OnlineEmbeddingProviderInfo } from '../../types/ai'
 import { marked } from 'marked'
 import DOMPurify from 'dompurify'
 import AIProviderLogo from './AIProviderLogo'
 import Select from '../Select'
 import { useSettingsStore } from '../settings/settingsStore'
-import { ProgressBar } from '../settings/ui'
+import { ProgressBar, SegmentedControl } from '../settings/ui'
 import './AISummarySettings.scss'
 
 const DOWNLOAD_PAUSED_MESSAGE = '下载已暂停'
@@ -328,6 +328,14 @@ function AISummarySettings({ showMessage }: AISummarySettingsProps) {
       await loadEmbeddingDeviceStatus()
     }
     showMessage(device === 'dml' ? '已启用 DirectML GPU 实验模式' : '已切换到 CPU 计算模式', true)
+  }
+
+  const handleEmbeddingComputeModeChange = async (mode: EmbeddingDevice | 'online') => {
+    if (mode === 'online') {
+      await handleEmbeddingModeChange('online')
+      return
+    }
+    await handleEmbeddingDeviceChange(mode)
   }
 
   const handleEmbeddingProfileChange = async (profileId: string | number) => {
@@ -784,6 +792,7 @@ function AISummarySettings({ showMessage }: AISummarySettingsProps) {
   const embeddingDeviceLabel = embeddingDeviceStatus
     ? `${embeddingDeviceStatus.provider}${embeddingDeviceStatus.effectiveDevice !== embeddingDeviceStatus.currentDevice ? ' 回退' : ''}`
     : (embeddingDevice === 'dml' ? 'DirectML' : 'CPU')
+  const embeddingComputeMode: EmbeddingDevice | 'online' = embeddingMode === 'online' ? 'online' : embeddingDevice
   const embeddingVolumeLabel = embeddingStatus?.exists
     ? formatBytes(embeddingStatus.sizeBytes)
     : (embeddingProfile?.sizeLabel || embeddingStatus?.sizeLabel || '未知')
@@ -796,6 +805,14 @@ function AISummarySettings({ showMessage }: AISummarySettingsProps) {
     ? onlineEmbeddingModelInfo.supportedDims
     : ONLINE_EMBEDDING_FALLBACK_DIMS
   ).map((dim) => ({ value: dim, label: `${dim} 维` }))
+  const embeddingProfileOptions = embeddingProfiles.map(profile => ({
+    value: profile.id,
+    label: profile.displayName,
+    description: profile.enabled
+      ? `${profile.sizeLabel} · ${profile.dim} 维 · ${profile.dtype.toUpperCase()} · ${profile.performanceLabel}`
+      : `即将支持 · ${profile.dim} 维 · ${profile.dtype.toUpperCase()} · ${profile.performanceLabel}`,
+    disabled: isDownloadingEmbedding || !profile.enabled
+  }))
   const onlineEmbeddingStatusText = currentOnlineEmbeddingConfigId
     ? `当前配置：${onlineEmbeddingConfigs.find(item => item.id === currentOnlineEmbeddingConfigId)?.name || onlineEmbeddingName || '未命名'}`
     : '尚未保存在线向量配置'
@@ -1054,67 +1071,32 @@ function AISummarySettings({ showMessage }: AISummarySettingsProps) {
       </p>
 
       <h4 className="subsection-title semantic-vector-subtitle">向量计算模式</h4>
-      <div className="model-type-grid semantic-device-grid">
-        <label className={`model-card ${embeddingMode === 'local' && embeddingDevice === 'cpu' ? 'active' : ''} ${isDownloadingEmbedding ? 'disabled' : ''}`}>
-          <input
-            type="radio"
-            name="aiEmbeddingDevice"
-            value="cpu"
-            checked={embeddingMode === 'local' && embeddingDevice === 'cpu'}
-            onChange={() => handleEmbeddingDeviceChange('cpu')}
-            disabled={isDownloadingEmbedding}
-          />
-          <div className="model-icon"><Cpu size={24} /></div>
-          <div className="model-info">
-            <div className="model-header">
-              <span className="model-name">CPU</span>
-              <span className="model-size">稳定</span>
-            </div>
-            <span className="model-desc">默认模式，兼容性最好，适合后台稳定索引。</span>
-          </div>
-          {embeddingMode === 'local' && embeddingDevice === 'cpu' && <div className="model-check"><Check size={14} /></div>}
-        </label>
-
-        <label className={`model-card ${embeddingMode === 'local' && embeddingDevice === 'dml' ? 'active' : ''} ${isDownloadingEmbedding ? 'disabled' : ''}`}>
-          <input
-            type="radio"
-            name="aiEmbeddingDevice"
-            value="dml"
-            checked={embeddingMode === 'local' && embeddingDevice === 'dml'}
-            onChange={() => handleEmbeddingDeviceChange('dml')}
-            disabled={isDownloadingEmbedding}
-          />
-          <div className="model-icon"><Zap size={24} /></div>
-          <div className="model-info">
-            <div className="model-header">
-              <span className="model-name">GPU DirectML</span>
-              <span className="model-size">实验</span>
-            </div>
-            <span className="model-desc">Windows GPU 加速，失败时自动回退 CPU。</span>
-          </div>
-          {embeddingMode === 'local' && embeddingDevice === 'dml' && <div className="model-check"><Check size={14} /></div>}
-        </label>
-
-        <label className={`model-card ${embeddingMode === 'online' ? 'active' : ''} ${isDownloadingEmbedding ? 'disabled' : ''}`}>
-          <input
-            type="radio"
-            name="aiEmbeddingDevice"
-            value="online"
-            checked={embeddingMode === 'online'}
-            onChange={() => handleEmbeddingModeChange('online')}
-            disabled={isDownloadingEmbedding}
-          />
-          <div className="model-icon"><Cloud size={24} /></div>
-          <div className="model-info">
-            <div className="model-header">
-              <span className="model-name">在线</span>
-              <span className="model-size">多厂商</span>
-            </div>
-            <span className="model-desc">使用阿里云百炼、硅基流动或火山引擎在线向量服务。</span>
-          </div>
-          {embeddingMode === 'online' && <div className="model-check"><Check size={14} /></div>}
-        </label>
-      </div>
+      <SegmentedControl<EmbeddingDevice | 'online'>
+        value={embeddingComputeMode}
+        onChange={handleEmbeddingComputeModeChange}
+        className="semantic-device-tabs"
+        style={{ marginBottom: '12px' }}
+        options={[
+          {
+            value: 'cpu',
+            label: <><Cpu size={16} /> CPU 模式</>,
+            disabled: isDownloadingEmbedding,
+            title: '默认模式，兼容性最好，适合后台稳定索引。'
+          },
+          {
+            value: 'dml',
+            label: <><Zap size={16} /> GPU DirectML</>,
+            disabled: isDownloadingEmbedding,
+            title: 'Windows GPU 加速，失败时自动回退 CPU。'
+          },
+          {
+            value: 'online',
+            label: <><Cloud size={16} /> 在线模式</>,
+            disabled: isDownloadingEmbedding,
+            title: '使用阿里云百炼、硅基流动或火山引擎在线向量服务。'
+          }
+        ]}
+      />
 
       {embeddingMode === 'local' && embeddingDeviceStatus && (
         <div className="semantic-device-status">
@@ -1129,38 +1111,17 @@ function AISummarySettings({ showMessage }: AISummarySettingsProps) {
       {embeddingMode === 'local' && (
         <>
           <h4 className="subsection-title semantic-vector-subtitle">语义模型版本</h4>
-          <div className="model-type-grid semantic-model-grid">
-            {embeddingProfiles.map(profile => (
-              <label
-                key={profile.id}
-                className={`model-card ${embeddingProfileId === profile.id ? 'active' : ''} ${isDownloadingEmbedding || !profile.enabled ? 'disabled' : ''}`}
-              >
-                <input
-                  type="radio"
-                  name="aiEmbeddingModelProfile"
-                  value={profile.id}
-                  checked={embeddingProfileId === profile.id}
-                  onChange={() => handleEmbeddingProfileChange(profile.id)}
-                  disabled={isDownloadingEmbedding || !profile.enabled}
-                />
-                <div className="model-icon">
-                  {profile.dtype === 'q8' ? <Zap size={24} /> : <Layers size={24} />}
-                </div>
-                <div className="model-info">
-                  <div className="model-header">
-                    <span className="model-name">{profile.displayName}</span>
-                    <span className="model-size">{profile.sizeLabel}</span>
-                  </div>
-                  <div className="semantic-model-meta">
-                    <span>{profile.dim} 维</span>
-                    <span>{profile.dtype.toUpperCase()}</span>
-                    <span>{profile.performanceLabel}</span>
-                  </div>
-                  <span className="model-desc">{profile.enabled ? profile.description : '即将支持'}</span>
-                </div>
-                {embeddingProfileId === profile.id && <div className="model-check"><Check size={14} /></div>}
-              </label>
-            ))}
+          <div className="form-group semantic-vector-model-group">
+            <label>模型版本</label>
+            <Select
+              value={embeddingProfileId}
+              onChange={handleEmbeddingProfileChange}
+              options={embeddingProfileOptions}
+              className="semantic-vector-model-select"
+            />
+            <div className="form-hint">
+              选择本地语义模型版本。列表会显示模型体积、维度、量化方式和性能档位，已禁用的模型暂不可选。
+            </div>
           </div>
 
           {embeddingProfile && embeddingDimOptions.length > 1 && (

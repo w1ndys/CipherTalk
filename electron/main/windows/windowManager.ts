@@ -16,6 +16,7 @@ import { LogService } from '../../services/logService'
 import { appUpdateService } from '../../services/appUpdateService'
 import { mcpProxyService } from '../../services/mcp/proxyService'
 import { voiceTranscribeServiceWhisper } from '../../services/voiceTranscribeServiceWhisper'
+import { attachWindowStartupDiagnostics, markStartupMilestone } from '../startupDiagnostics'
 import type { ImageViewerOpenOptions, MainProcessContext, WindowManager } from '../context'
 
 type ReleaseAnnouncementPayload = {
@@ -297,7 +298,9 @@ export function createWindowManager(ctx: MainProcessContext): WindowManager {
         show: false
       })
 
+      attachWindowStartupDiagnostics(win, 'main')
       ctx.setMainWindow(win)
+      markStartupMilestone('window:main-services-init-start')
       const configService = new ConfigService()
       ctx.setConfigService(configService)
       ctx.setDbService(new DatabaseService())
@@ -325,6 +328,7 @@ export function createWindowManager(ctx: MainProcessContext): WindowManager {
         }
       }
       logService.info('App', '应用启动', { version: app.getVersion() })
+      markStartupMilestone('window:main-services-init-done')
 
       const cachePath = configService.get('cachePath')
       if (cachePath) {
@@ -389,6 +393,7 @@ export function createWindowManager(ctx: MainProcessContext): WindowManager {
         backgroundColor: '#00000000'
       })
 
+      attachWindowStartupDiagnostics(splash, 'splash')
       ctx.setSplashWindow(splash)
       splash.center()
 
@@ -729,9 +734,9 @@ export function createWindowManager(ctx: MainProcessContext): WindowManager {
         minWidth: 900,
         minHeight: 640,
         frame: false,
-        transparent: true,
-        backgroundColor: '#00000000',
-        hasShadow: false,
+        transparent: false,
+        backgroundColor: nativeTheme.shouldUseDarkColors ? '#1A1A1A' : '#FFFFFF',
+        hasShadow: true,
         ...getWindowIconOptions(ctx),
         webPreferences: {
           preload: join(__dirname, 'preload.js'),
@@ -743,6 +748,7 @@ export function createWindowManager(ctx: MainProcessContext): WindowManager {
         show: false
       })
 
+      attachWindowStartupDiagnostics(welcomeWindow, 'welcome')
       welcomeWindow.once('ready-to-show', () => welcomeWindow?.show())
 
       const welcomeHash = mode === 'add-account' ? '/welcome-window?mode=add-account' : '/welcome-window'

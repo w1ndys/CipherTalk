@@ -2,7 +2,25 @@
   position: relative;
   width: 100%;
   min-height: 42px;
+  z-index: 0;
   user-select: none;
+  --glass-select-bg: color-mix(in srgb, var(--bg-primary) 88%, #ffffff 12%);
+  --glass-select-border: color-mix(in srgb, var(--border-color) 88%, rgba(0, 0, 0, 0.12));
+  --glass-select-shadow: 0 14px 32px rgba(31, 28, 24, 0.12);
+  --glass-select-hover-bg: color-mix(in srgb, var(--primary) 10%, var(--bg-primary));
+  --glass-select-selected-bg: color-mix(in srgb, var(--primary) 14%, var(--bg-primary));
+  --glass-select-selected-hover-bg: color-mix(in srgb, var(--primary) 22%, var(--bg-primary));
+  --glass-select-scrollbar-thumb: color-mix(in srgb, var(--text-tertiary) 46%, transparent);
+
+  [data-mode="dark"] & {
+    --glass-select-bg: color-mix(in srgb, var(--bg-primary) 88%, #000000 12%);
+    --glass-select-border: color-mix(in srgb, var(--border-color) 88%, rgba(255, 255, 255, 0.12));
+    --glass-select-shadow: 0 18px 42px rgba(0, 0, 0, 0.42);
+    --glass-select-hover-bg: color-mix(in srgb, var(--primary) 20%, transparent);
+    --glass-select-selected-bg: color-mix(in srgb, var(--primary) 14%, transparent);
+    --glass-select-selected-hover-bg: color-mix(in srgb, var(--primary) 30%, transparent);
+    --glass-select-scrollbar-thumb: color-mix(in srgb, var(--text-tertiary) 52%, transparent);
+  }
 
   // 形变盒子：一个连续容器，高度从「触发器一行」生长到「整个列表」
   .glass-select-box {
@@ -14,8 +32,9 @@
     overflow: hidden;
     border-radius: 20px;
     // 悬浮下拉必须基本不透明，否则会透出下方表单内容、看着像两层叠在一起
-    background: rgba(26, 25, 23, 0.97);
-    border: 1px solid var(--border-color);
+    background: var(--glass-select-bg);
+    border: 1px solid var(--glass-select-border);
+    box-shadow: var(--glass-select-shadow);
     // 毛玻璃模糊：弱化边缘透出的内容
     backdrop-filter: blur(16px);
     transition:
@@ -98,8 +117,10 @@
 
   &:focus-within,
   &.open {
+    z-index: var(--glass-select-open-z-index, 1000);
+
     .glass-select-box {
-      border-color: color-mix(in srgb, var(--primary) 40%, var(--border-color));
+      border-color: color-mix(in srgb, var(--primary) 42%, var(--glass-select-border));
     }
   }
 
@@ -128,7 +149,7 @@
 
     &::-webkit-scrollbar-thumb {
       border-radius: 999px;
-      background: color-mix(in srgb, var(--text-tertiary) 45%, transparent);
+      background: var(--glass-select-scrollbar-thumb);
     }
   }
 
@@ -147,7 +168,7 @@
     transition: background 0.15s ease;
 
     &:hover:not(:disabled) {
-      background: color-mix(in srgb, var(--primary) 22%, transparent);
+      background: var(--glass-select-hover-bg);
     }
 
     &:disabled {
@@ -156,11 +177,11 @@
     }
 
     &.is-selected {
-      background: color-mix(in srgb, var(--primary) 14%, transparent);
+      background: var(--glass-select-selected-bg);
     }
 
     &.is-selected:hover:not(:disabled) {
-      background: color-mix(in srgb, var(--primary) 30%, transparent);
+      background: var(--glass-select-selected-hover-bg);
     }
   }
 
