@@ -226,10 +226,10 @@ export function registerChatHandlers(ctx: MainProcessContext): void {
     return result
   })
 
-  ipcMain.handle('chat:getVoiceData', async (_, sessionId: string, msgId: string, createTime?: number) => {
-    const result = await chatService.getVoiceData(sessionId, msgId, createTime)
+  ipcMain.handle('chat:getVoiceData', async (_, sessionId: string, msgId: string, createTime?: number, serverId?: number) => {
+    const result = await chatService.getVoiceData(sessionId, msgId, createTime, serverId)
     if (!result.success) {
-      ctx.getLogService()?.warn('Chat', '获取语音数据失败', { sessionId, msgId, createTime, error: result.error })
+      ctx.getLogService()?.warn('Chat', '获取语音数据失败', { sessionId, msgId, createTime, serverId, error: result.error })
     }
     return result
   })

@@ -615,7 +615,7 @@ export interface ElectronAPI {
       }
       error?: string
     }>
-    getVoiceData: (sessionId: string, msgId: string, createTime?: number) => Promise<{
+    getVoiceData: (sessionId: string, msgId: string, createTime?: number, serverId?: number) => Promise<{
       success: boolean
       data?: string  // base64 encoded WAV
       error?: string

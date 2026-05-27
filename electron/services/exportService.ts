@@ -94,6 +94,8 @@ export interface ExportOptions {
   exportEmojis?: boolean
   exportVoices?: boolean
   mediaPathMap?: Map<number, string>
+  // 语音独立映射表：同一秒可能存在多条语音，必须按 localId 索引
+  voicePathMap?: Map<number, string>
 }
 
 export interface ContactExportOptions {
@@ -508,7 +510,7 @@ class ExportService {
   /**
    * 解析消息内容为可读文本
    */
-  private parseMessageContent(content: string, localType: number, sessionId?: string, createTime?: number, mediaPathMap?: Map<number, string>): string | null {
+  private parseMessageContent(content: string, localType: number, sessionId?: string, createTime?: number, mediaPathMap?: Map<number, string>, localId?: number, voicePathMap?: Map<number, string>): string | null {
     if (!content) return null
 
     // 检查 XML 中的 type 标签（支持大 localType 的情况）
@@ -530,8 +532,11 @@ class ExportService {
         return '[图片]'
       }
       case 34: {
-        // 语音消息
+        // 语音消息：优先用 localId 在 voicePathMap 查找（避免同时间戳冲突）
         const transcript = (sessionId && createTime) ? voiceTranscribeService.getCachedTranscript(sessionId, createTime) : null
+        if (voicePathMap && localId && voicePathMap.has(localId)) {
+          return `[语音消息] ${voicePathMap.get(localId)}${transcript ? ' ' + transcript : ''}`
+        }
         if (mediaPathMap && createTime && mediaPathMap.has(createTime)) {
           return `[语音消息] ${mediaPathMap.get(createTime)}${transcript ? ' ' + transcript : ''}`
         }
@@ -906,7 +911,7 @@ class ExportService {
 
       for (const msg of allMessages) {
         const memberInfo = memberSet.get(msg.senderUsername) || { platformId: msg.senderUsername, accountName: msg.senderUsername }
-        let parsedContent = this.parseMessageContent(msg.content, msg.localType, sessionId, msg.createTime, options.mediaPathMap)
+        let parsedContent = this.parseMessageContent(msg.content, msg.localType, sessionId, msg.createTime, options.mediaPathMap, msg.localId, options.voicePathMap)
 
         // 转账消息：追加 "谁转账给谁" 信息
         if (parsedContent && parsedContent.startsWith('[转账]') && msg.content) {
@@ -1610,7 +1615,7 @@ class ExportService {
               type: this.getMessageTypeName(localType, content),
               localType,
               chatLabType: this.convertMessageType(localType, content),
-              content: this.parseMessageContent(content, localType, sessionId, createTime, options.mediaPathMap),
+              content: this.parseMessageContent(content, localType, sessionId, createTime, options.mediaPathMap, row.local_id || 0, options.voicePathMap),
               rawContent: content, // 保留原始内容（用于转账描述解析）
               isSend: isSend ? 1 : 0,
               senderUsername: actualSender,
@@ -1832,7 +1837,7 @@ class ExportService {
         const time = new Date(msg.createTime * 1000)
 
         // 获取消息内容（使用统一的解析方法）
-        let messageContent = this.parseMessageContent(msg.content, msg.type, sessionId, msg.createTime, options.mediaPathMap)
+        let messageContent = this.parseMessageContent(msg.content, msg.type, sessionId, msg.createTime, options.mediaPathMap, msg.localId, options.voicePathMap)
 
         // 转账消息：追加 "谁转账给谁" 信息
         if (messageContent && messageContent.startsWith('[转账]') && msg.content) {
@@ -2036,7 +2041,7 @@ class ExportService {
               chatRecordList = this.parseChatHistory(content)
             }
 
-            let parsedContent = this.parseMessageContent(content, localType, sessionId, createTime, options.mediaPathMap)
+            let parsedContent = this.parseMessageContent(content, localType, sessionId, createTime, options.mediaPathMap, row.local_id || 0, options.voicePathMap)
 
             // 转账消息：追加 "谁转账给谁" 信息
             if (parsedContent && parsedContent.startsWith('[转账]')) {
@@ -2266,7 +2271,7 @@ class ExportService {
             }
 
             // 解析消息内容
-            const parsedContent = this.parseMessageContent(content, localType, sessionId, createTime, options.mediaPathMap)
+            const parsedContent = this.parseMessageContent(content, localType, sessionId, createTime, options.mediaPathMap, row.local_id || 0, options.voicePathMap)
             const contentText = parsedContent !== null ? parsedContent : ''
 
             allMessages.push({
@@ -2507,9 +2512,10 @@ class ExportService {
 
         // 先导出媒体文件，收集路径映射表
         let mediaPathMap: Map<number, string> | undefined
+        let voicePathMap: Map<number, string> | undefined
         if (hasMedia) {
           try {
-            mediaPathMap = await this.exportMediaFiles(sessionId, safeName, sessionOutputDir, options, (detail) => {
+            const mediaResult = await this.exportMediaFiles(sessionId, safeName, sessionOutputDir, options, (detail) => {
               onProgress?.({
                 current: i + 1,
                 total: sessionIds.length,
@@ -2518,13 +2524,17 @@ class ExportService {
                 detail
               })
             })
+            mediaPathMap = mediaResult.mediaPathMap
+            voicePathMap = mediaResult.voicePathMap
           } catch (e) {
             console.error(`导出 ${sessionId} 媒体文件失败:`, e)
           }
         }
 
         // 将媒体路径映射表附加到 options 上
-        const exportOpts = mediaPathMap ? { ...options, mediaPathMap } : options
+        const exportOpts = (mediaPathMap || voicePathMap)
+          ? { ...options, ...(mediaPathMap ? { mediaPathMap } : {}), ...(voicePathMap ? { voicePathMap } : {}) }
+          : options
 
         let result: { success: boolean; error?: string }
 
@@ -2804,12 +2814,14 @@ class ExportService {
     outputDir: string,
     options: ExportOptions,
     onDetail?: (detail: string) => void
-  ): Promise<Map<number, string>> {
-    // 返回 createTime → 相对路径 的映射表
+  ): Promise<{ mediaPathMap: Map<number, string>; voicePathMap: Map<number, string> }> {
+    // mediaPathMap：图片/视频/表情用 createTime → 相对路径
+    // voicePathMap：语音用 localId → 相对路径（避免同时间戳冲突）
     const mediaPathMap = new Map<number, string>()
+    const voicePathMap = new Map<number, string>()
 
     const dbTablePairs = await this.findSessionTables(sessionId)
-    if (dbTablePairs.length === 0) return mediaPathMap
+    if (dbTablePairs.length === 0) return { mediaPathMap, voicePathMap }
 
     // 创建媒体输出目录（直接在会话文件夹下创建子目录）
     const imageOutDir = options.exportImages ? path.join(outputDir, 'images') : ''
@@ -3021,8 +3033,13 @@ class ExportService {
 
       onDetail?.('正在导出语音消息...')
 
-      // 1. 收集所有语音消息的 createTime（按 local_type 在 JS 里过滤，兼容列名/类型差异）
-      const voiceCreateTimes: number[] = []
+      // 1. 收集所有语音消息（createTime + localId + serverId，按 localId 升序以稳定同时间戳顺序）
+      interface VoiceMsgRef {
+        createTime: number
+        localId: number
+        serverId: number
+      }
+      const voiceMessages: VoiceMsgRef[] = []
       for (const { tableName, dbPath } of dbTablePairs) {
         try {
           const rows = await dbAdapter.all<any>(
@@ -3037,12 +3054,26 @@ class ExportService {
             if (options.dateRange && (createTime < options.dateRange.start || createTime > options.dateRange.end)) {
               continue
             }
-            voiceCreateTimes.push(createTime)
+            const localId = Number(row.local_id || row.localId || 0)
+            const serverId = Number(
+              row.server_id || row.serverId || row.msg_svr_id || row.msgSvrId || row.MsgSvrID || 0
+            )
+            voiceMessages.push({ createTime, localId, serverId })
           }
         } catch { }
       }
+      // 稳定排序：createTime 升序，相同时间内按 localId 升序（与 VoiceInfo.rowid 顺序对齐）
+      voiceMessages.sort((a, b) => a.createTime - b.createTime || a.localId - b.localId)
 
-      if (voiceCreateTimes.length > 0) {
+      // 每个 createTime 下当前消息所处索引，便于策略 B 按 rowid 顺序映射
+      const sameTimeIndexMap = new Map<number, Map<number, number>>()
+      for (const m of voiceMessages) {
+        let g = sameTimeIndexMap.get(m.createTime)
+        if (!g) { g = new Map(); sameTimeIndexMap.set(m.createTime, g) }
+        if (!g.has(m.localId)) g.set(m.localId, g.size)
+      }
+
+      if (voiceMessages.length > 0) {
         // 2. 查找 MediaDb
         const mediaDbs = this.findMediaDbs()
 
@@ -3056,13 +3087,14 @@ class ExportService {
           }
 
           if (silkWasm) {
-            // 4. 枚举所有 MediaDb，预先记录 VoiceInfo 表结构（通过 dbAdapter 查询）
+            // 4. 枚举所有 MediaDb，预先记录 VoiceInfo 表结构
             interface VoiceDbInfo {
               dbPath: string
               voiceTable: string
               dataColumn: string
               timeColumn: string
               chatNameIdColumn: string | null
+              svrIdColumn: string | null
               name2IdTable: string | null
             }
             const voiceDbs: VoiceDbInfo[] = []
@@ -3089,6 +3121,9 @@ class ExportService {
                 if (!dataColumn || !timeColumn) continue
 
                 const chatNameIdColumn = colNames.find((c: string) => ['chat_name_id', 'chatnameid', 'chat_nameid'].includes(c)) || null
+                const svrIdColumn = colNames.find((c: string) =>
+                  ['msg_svr_id', 'msgsvrid', 'svr_id', 'svrid', 'server_id', 'serverid'].includes(c)
+                ) || null
                 const n2iTables = await dbAdapter.all<any>(
                   'message',
                   dbPath,
@@ -3096,7 +3131,7 @@ class ExportService {
                 )
                 const name2IdTable = n2iTables.length > 0 ? n2iTables[0].name : null
 
-                voiceDbs.push({ dbPath, voiceTable, dataColumn, timeColumn, chatNameIdColumn, name2IdTable })
+                voiceDbs.push({ dbPath, voiceTable, dataColumn, timeColumn, chatNameIdColumn, svrIdColumn, name2IdTable })
               } catch { }
             }
 
@@ -3105,10 +3140,10 @@ class ExportService {
             const candidates = [sessionId]
             if (myWxid && myWxid !== sessionId) candidates.push(myWxid)
 
-            const total = voiceCreateTimes.length
+            const total = voiceMessages.length
             for (let idx = 0; idx < total; idx++) {
-              const createTime = voiceCreateTimes[idx]
-              const fileName = `${createTime}.wav`
+              const { createTime, localId, serverId } = voiceMessages[idx]
+              const fileName = localId > 0 ? `${createTime}_${localId}.wav` : `${createTime}.wav`
               const df = this.dateFolder(createTime)
               const dayDir = path.join(voiceOutDir, df)
               if (!fs.existsSync(dayDir)) fs.mkdirSync(dayDir, { recursive: true })
@@ -3116,47 +3151,83 @@ class ExportService {
 
               // 已存在则跳过
               if (fs.existsSync(destPath)) {
-                mediaPathMap.set(createTime, `voices/${df}/${fileName}`)
+                voicePathMap.set(localId, `voices/${df}/${fileName}`)
+                if (!mediaPathMap.has(createTime)) {
+                  mediaPathMap.set(createTime, `voices/${df}/${fileName}`)
+                }
                 continue
               }
 
               // 在 MediaDb 中查找 SILK 数据
               let silkData: Buffer | null = null
+              const targetIdx = sameTimeIndexMap.get(createTime)?.get(localId) ?? 0
               for (const vdb of voiceDbs) {
                 try {
-                  // 策略1: chatNameId + createTime
-                  if (vdb.chatNameIdColumn && vdb.name2IdTable) {
-                    for (const cand of candidates) {
-                      const n2i = await dbAdapter.get<any>(
-                        'message',
-                        vdb.dbPath,
-                        `SELECT rowid FROM ${vdb.name2IdTable} WHERE user_name = ?`,
-                        [cand]
-                      )
-                      if (n2i?.rowid) {
-                        const row = await dbAdapter.get<any>(
-                          'message',
-                          vdb.dbPath,
-                          `SELECT ${vdb.dataColumn} AS data FROM ${vdb.voiceTable} WHERE ${vdb.chatNameIdColumn} = ? AND ${vdb.timeColumn} = ? LIMIT 1`,
-                          [n2i.rowid, createTime]
+                  // 策略 A: svr_id 精确匹配
+                  if (vdb.svrIdColumn && serverId > 0) {
+                    if (vdb.chatNameIdColumn && vdb.name2IdTable) {
+                      for (const cand of candidates) {
+                        const n2i = await dbAdapter.get<any>(
+                          'message', vdb.dbPath,
+                          `SELECT rowid FROM ${vdb.name2IdTable} WHERE user_name = ?`,
+                          [cand]
                         )
-                        if (row?.data) {
-                          silkData = this.decodeVoiceBlob(row.data)
-                          if (silkData) break
+                        if (n2i?.rowid) {
+                          const row = await dbAdapter.get<any>(
+                            'message', vdb.dbPath,
+                            `SELECT ${vdb.dataColumn} AS data FROM ${vdb.voiceTable} WHERE ${vdb.chatNameIdColumn} = ? AND ${vdb.svrIdColumn} = ? LIMIT 1`,
+                            [n2i.rowid, serverId]
+                          )
+                          if (row?.data) {
+                            silkData = this.decodeVoiceBlob(row.data)
+                            if (silkData) break
+                          }
                         }
                       }
                     }
+                    if (!silkData) {
+                      const row = await dbAdapter.get<any>(
+                        'message', vdb.dbPath,
+                        `SELECT ${vdb.dataColumn} AS data FROM ${vdb.voiceTable} WHERE ${vdb.svrIdColumn} = ? LIMIT 1`,
+                        [serverId]
+                      )
+                      if (row?.data) silkData = this.decodeVoiceBlob(row.data)
+                    }
                   }
-                  // 策略2: 仅 createTime
+
+                  // 策略 B: chatNameId + createTime 按 rowid 顺序选第 N 条
+                  if (!silkData && vdb.chatNameIdColumn && vdb.name2IdTable) {
+                    for (const cand of candidates) {
+                      const n2i = await dbAdapter.get<any>(
+                        'message', vdb.dbPath,
+                        `SELECT rowid FROM ${vdb.name2IdTable} WHERE user_name = ?`,
+                        [cand]
+                      )
+                      if (!n2i?.rowid) continue
+                      const rows = await dbAdapter.all<any>(
+                        'message', vdb.dbPath,
+                        `SELECT ${vdb.dataColumn} AS data FROM ${vdb.voiceTable} WHERE ${vdb.chatNameIdColumn} = ? AND ${vdb.timeColumn} = ? ORDER BY rowid ASC`,
+                        [n2i.rowid, createTime]
+                      )
+                      if (rows.length === 0) continue
+                      const pick = rows[Math.min(targetIdx, rows.length - 1)]
+                      if (pick?.data) {
+                        silkData = this.decodeVoiceBlob(pick.data)
+                        if (silkData) break
+                      }
+                    }
+                  }
+
+                  // 策略 C: 仅 createTime 兜底
                   if (!silkData) {
-                    const row = await dbAdapter.get<any>(
-                      'message',
-                      vdb.dbPath,
-                      `SELECT ${vdb.dataColumn} AS data FROM ${vdb.voiceTable} WHERE ${vdb.timeColumn} = ? LIMIT 1`,
+                    const rows = await dbAdapter.all<any>(
+                      'message', vdb.dbPath,
+                      `SELECT ${vdb.dataColumn} AS data FROM ${vdb.voiceTable} WHERE ${vdb.timeColumn} = ? ORDER BY rowid ASC`,
                       [createTime]
                     )
-                    if (row?.data) {
-                      silkData = this.decodeVoiceBlob(row.data)
+                    if (rows.length > 0) {
+                      const pick = rows[Math.min(targetIdx, rows.length - 1)]
+                      if (pick?.data) silkData = this.decodeVoiceBlob(pick.data)
                     }
                   }
                   if (silkData) break
@@ -3174,7 +3245,10 @@ class ExportService {
                 const wavData = this.createWavBuffer(pcmData, 24000)
                 fs.writeFileSync(destPath, wavData)
                 voiceCount++
-                mediaPathMap.set(createTime, `voices/${df}/${fileName}`)
+                voicePathMap.set(localId, `voices/${df}/${fileName}`)
+                if (!mediaPathMap.has(createTime)) {
+                  mediaPathMap.set(createTime, `voices/${df}/${fileName}`)
+                }
               } catch { }
 
               // 进度日志
@@ -3197,7 +3271,7 @@ class ExportService {
     const summary = parts.length > 0 ? `媒体导出完成: ${parts.join(', ')}` : '无媒体文件'
     onDetail?.(summary)
     console.log(`[Export] ${sessionId} ${summary}`)
-    return mediaPathMap
+    return { mediaPathMap, voicePathMap }
   }
 
   private dateFolder(ts: number): string {

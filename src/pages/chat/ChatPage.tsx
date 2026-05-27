@@ -647,7 +647,8 @@ function ChatPage(_props: ChatPageProps) {
       const voiceResult = await window.electronAPI.chat.getVoiceData(
         session.username,
         String(message.localId),
-        message.createTime
+        message.createTime,
+        message.serverId
       )
 
       if (!voiceResult.success || !voiceResult.data) {
@@ -1564,7 +1565,8 @@ function ChatPage(_props: ChatPageProps) {
         const result = await window.electronAPI.chat.getVoiceData(
           session.username,
           String(msg.localId),
-          msg.createTime
+          msg.createTime,
+          msg.serverId
         )
 
         if (!result.success || !result.data) {

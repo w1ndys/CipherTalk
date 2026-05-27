@@ -5300,21 +5300,28 @@ class ChatService extends EventEmitter {
 
   /**
    * 获取语音数据（解码为 WAV base64）
-   * 参数改为接收 createTime，因为 localId 在不同数据库中可能不一致
+   * 同一秒内可能有多条语音消息，需用 serverId 精确匹配，缺失时按 rowid 顺序映射兜底
    */
-  async getVoiceData(sessionId: string, msgId: string, createTime?: number): Promise<{ success: boolean; data?: string; error?: string }> {
+  async getVoiceData(
+    sessionId: string,
+    msgId: string,
+    createTime?: number,
+    serverId?: number
+  ): Promise<{ success: boolean; data?: string; error?: string }> {
     try {
       const localId = parseInt(msgId, 10)
       if (isNaN(localId)) {
         return { success: false, error: '无效的消息ID' }
       }
 
-      // 如果没有传入 createTime，尝试从数据库获取
+      // 如果未传入 createTime 或 serverId，从数据库读取
       let msgCreateTime = createTime
-      if (!msgCreateTime) {
+      let msgServerId = serverId
+      if (!msgCreateTime || !msgServerId) {
         const result = await this.getMessageByLocalId(sessionId, localId)
         if (result.success && result.message) {
-          msgCreateTime = result.message.createTime
+          if (!msgCreateTime) msgCreateTime = result.message.createTime
+          if (!msgServerId) msgServerId = result.message.serverId
         }
       }
 
@@ -5335,6 +5342,36 @@ class ChatService extends EventEmitter {
       const myWxid = this.configService.get('myWxid')
       if (myWxid && !candidates.includes(myWxid)) {
         candidates.push(myWxid)
+      }
+
+      // 同时间戳冲突时使用的相对索引：在 MSG_x 中同 createTime 的所有语音消息按 local_id 升序后，当前消息所在位置
+      let sameTimeIndex: number | null = null
+      const getSameTimeIndex = async (): Promise<number> => {
+        if (sameTimeIndex !== null) return sameTimeIndex
+        try {
+          const dbTablePairs = await this.findSessionTables(sessionId)
+          const allLocalIds: number[] = []
+          for (const { tableName, dbPath } of dbTablePairs) {
+            try {
+              const rows = await dbAdapter.all<any>(
+                'message', dbPath,
+                `SELECT * FROM ${tableName} WHERE create_time = ?`,
+                [msgCreateTime]
+              )
+              for (const r of rows) {
+                if (this.resolveMessageLocalType(r, 1) !== 34) continue
+                const lid = this.coerceRowNumber(this.getRowField(r, ['local_id', 'localId', 'id', 'ID']), 0)
+                if (lid > 0) allLocalIds.push(lid)
+              }
+            } catch { }
+          }
+          const uniqueSorted = Array.from(new Set(allLocalIds)).sort((a, b) => a - b)
+          const idx = uniqueSorted.indexOf(localId)
+          sameTimeIndex = idx >= 0 ? idx : 0
+        } catch {
+          sameTimeIndex = 0
+        }
+        return sameTimeIndex
       }
 
       // 在 media 数据库中查找语音数据
@@ -5377,19 +5414,50 @@ class ChatService extends EventEmitter {
             c === 'create_time' || c === 'createtime' || c === 'time'
           )
 
+          // 找到 svr_id 列（用于精确匹配，避免同时间戳冲突）
+          const svrIdColumn = columnNames.find((c: string) =>
+            c === 'msg_svr_id' || c === 'msgsvrid' || c === 'svr_id' || c === 'svrid' ||
+            c === 'server_id' || c === 'serverid'
+          )
+
           // 查找 Name2Id 表
           const name2IdTables = await dbAdapter.all<any>(
             'message',
             dbPath,
             "SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'Name2Id%'"
           )
+          const name2IdTable = name2IdTables.length > 0 ? name2IdTables[0].name : null
 
-          // 策略1: 通过 chat_name_id + create_time 查找（最准确）
-          if (chatNameIdColumn && timeColumn && name2IdTables.length > 0) {
-            const name2IdTable = name2IdTables[0].name
+          // 策略 A: 用 svr_id 精确匹配（同时间戳消息也能区分）
+          if (svrIdColumn && msgServerId && msgServerId > 0) {
+            if (chatNameIdColumn && name2IdTable) {
+              for (const candidate of candidates) {
+                const n2i = await dbAdapter.get<any>(
+                  'message', dbPath,
+                  `SELECT rowid FROM ${name2IdTable} WHERE user_name = ?`,
+                  [candidate]
+                )
+                if (!n2i?.rowid) continue
+                const sql = `SELECT ${dataColumn} AS data FROM ${voiceTable} WHERE ${chatNameIdColumn} = ? AND ${svrIdColumn} = ? LIMIT 1`
+                const row = await dbAdapter.get<any>('message', dbPath, sql, [n2i.rowid, msgServerId])
+                if (row?.data) {
+                  silkData = this.decodeVoiceBlob(row.data)
+                  if (silkData) break
+                }
+              }
+            }
+            if (!silkData) {
+              const sql = `SELECT ${dataColumn} AS data FROM ${voiceTable} WHERE ${svrIdColumn} = ? LIMIT 1`
+              const row = await dbAdapter.get<any>('message', dbPath, sql, [msgServerId])
+              if (row?.data) {
+                silkData = this.decodeVoiceBlob(row.data)
+              }
+            }
+          }
 
+          // 策略 B: chat_name_id + create_time 按 rowid 顺序映射（兼容无 svr_id 列的旧表）
+          if (!silkData && chatNameIdColumn && timeColumn && name2IdTable) {
             for (const candidate of candidates) {
-              // 获取 chat_name_id
               const name2IdRow = await dbAdapter.get<any>(
                 'message',
                 dbPath,
@@ -5403,27 +5471,40 @@ class ChatService extends EventEmitter {
 
               const chatNameId = name2IdRow.rowid
 
-              // 用 chat_name_id + create_time 查找
-              const sql = `SELECT ${dataColumn} AS data FROM ${voiceTable} WHERE ${chatNameIdColumn} = ? AND ${timeColumn} = ? LIMIT 1`
+              const rows = await dbAdapter.all<any>(
+                'message', dbPath,
+                `SELECT ${dataColumn} AS data FROM ${voiceTable} WHERE ${chatNameIdColumn} = ? AND ${timeColumn} = ? ORDER BY rowid ASC`,
+                [chatNameId, msgCreateTime]
+              )
 
-              const row = await dbAdapter.get<any>('message', dbPath, sql, [chatNameId, msgCreateTime])
-
-              if (row?.data) {
-                silkData = this.decodeVoiceBlob(row.data)
-                if (silkData) {
-                  break
-                }
+              if (rows.length === 0) continue
+              if (rows.length === 1) {
+                silkData = this.decodeVoiceBlob(rows[0].data)
+                if (silkData) break
+                continue
+              }
+              const idx = await getSameTimeIndex()
+              const pick = rows[Math.min(idx, rows.length - 1)]
+              if (pick?.data) {
+                silkData = this.decodeVoiceBlob(pick.data)
+                if (silkData) break
               }
             }
           }
 
-          // 策略2: 只通过 create_time 查找（兜底）
+          // 策略 C: 仅 create_time 兜底，同样按 rowid 顺序处理多条
           if (!silkData && timeColumn) {
-            const sql = `SELECT ${dataColumn} AS data FROM ${voiceTable} WHERE ${timeColumn} = ? LIMIT 1`
-            const row = await dbAdapter.get<any>('message', dbPath, sql, [msgCreateTime])
-
-            if (row?.data) {
-              silkData = this.decodeVoiceBlob(row.data)
+            const rows = await dbAdapter.all<any>(
+              'message', dbPath,
+              `SELECT ${dataColumn} AS data FROM ${voiceTable} WHERE ${timeColumn} = ? ORDER BY rowid ASC`,
+              [msgCreateTime]
+            )
+            if (rows.length === 1) {
+              silkData = this.decodeVoiceBlob(rows[0].data)
+            } else if (rows.length > 1) {
+              const idx = await getSameTimeIndex()
+              const pick = rows[Math.min(idx, rows.length - 1)]
+              if (pick?.data) silkData = this.decodeVoiceBlob(pick.data)
             }
           }
 

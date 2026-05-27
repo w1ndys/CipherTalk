@@ -180,7 +180,7 @@ export function RandomMomentBubble({ sessionId, message }: Props) {
     setVoiceLoading(true)
     setVoiceError('')
     try {
-      const r = await window.electronAPI.chat.getVoiceData(sessionId, String(message.localId), message.createTime)
+      const r = await window.electronAPI.chat.getVoiceData(sessionId, String(message.localId), message.createTime, message.serverId)
       if (r.success && r.data) {
         voicePlayPendingRef.current = true
         setVoiceSrc(`data:audio/wav;base64,${r.data}`)

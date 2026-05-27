@@ -471,7 +471,7 @@ function MessageBubble({ message, session, showTime, myAvatarUrl, isGroupChat, h
     setVoiceLoading(true)
     setVoiceError(null)
     try {
-      const result = await window.electronAPI.chat.getVoiceData(session.username, String(message.localId), message.createTime)
+      const result = await window.electronAPI.chat.getVoiceData(session.username, String(message.localId), message.createTime, message.serverId)
       if (result.success && result.data) {
         const dataUrl = `data:audio/wav;base64,${result.data}`
         setVoiceDataUrl(dataUrl)
@@ -633,7 +633,8 @@ function MessageBubble({ message, session, showTime, myAvatarUrl, isGroupChat, h
         const result = await window.electronAPI.chat.getVoiceData(
           session.username,
           String(message.localId),
-          message.createTime
+          message.createTime,
+          message.serverId
         )
         console.log('[STT] 语音数据:', { success: result.success, dataLength: result.data?.length })
         if (!result.success || !result.data) {

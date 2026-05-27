@@ -459,7 +459,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     refreshCache: () => ipcRenderer.invoke('chat:refreshCache'),
     setCurrentSession: (sessionId: string | null) => ipcRenderer.invoke('chat:setCurrentSession', sessionId),
     getSessionDetail: (sessionId: string) => ipcRenderer.invoke('chat:getSessionDetail', sessionId),
-    getVoiceData: (sessionId: string, msgId: string, createTime?: number) => ipcRenderer.invoke('chat:getVoiceData', sessionId, msgId, createTime),
+    getVoiceData: (sessionId: string, msgId: string, createTime?: number, serverId?: number) => ipcRenderer.invoke('chat:getVoiceData', sessionId, msgId, createTime, serverId),
     getMessagesByDate: (sessionId: string, targetTimestamp: number, limit?: number) =>
       ipcRenderer.invoke('chat:getMessagesByDate', sessionId, targetTimestamp, limit),
     getMessage: (sessionId: string, localId: number) => ipcRenderer.invoke('chat:getMessage', sessionId, localId),
