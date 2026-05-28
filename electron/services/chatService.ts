@@ -14,189 +14,72 @@ import { imageDecryptService } from './imageDecryptService'
 import { clearMessageDbScannerCache, getMessageTableColumns } from './messageDbScanner'
 import { buildMessageStatsWhere, quoteIdent, recordStatsError } from './statsSqlHelpers'
 import type { StatsPartialError } from './statsConstants'
+import {
+  compareMessageCursorAsc,
+  compareMessageCursorDesc,
+  messageIdentityKey,
+  type ChatSession,
+  type ContactInfo,
+  type Message,
+  type ChatLabSourceMessage,
+  type ChatRecordItem,
+  type Contact,
+} from './chat/types'
+import {
+  detectContactInfoType,
+  emojiCache,
+  emojiDownloading,
+  SESSION_TABLE_CACHE_DURATION,
+} from './chat/constants'
+import {
+  cleanAccountDirName,
+  findAccountDir,
+  shouldKeepSession,
+} from './chat/accountUtils'
+import {
+  cleanString,
+  cleanSystemMessage,
+  coerceRowNumber,
+  coerceRowString,
+  decodeBinaryContent,
+  decodeHtmlEntities,
+  decodeMaybeCompressed,
+  decodeMessageContent,
+  decodePackedInfo,
+  extractXmlAttribute,
+  extractXmlValue,
+  getRowField,
+  looksLikeBase64,
+  looksLikeHex,
+  looksLikeWxid,
+  stripSenderPrefix,
+} from './chat/rowDecoders'
+import {
+  getMessageTypeLabel,
+  parseChatHistory,
+  parseEmojiInfo,
+  parseFileInfo,
+  parseImageDatNameFromRow,
+  parseImageInfo,
+  parseMessageContent,
+  parseQuoteMessage,
+  parseType49,
+  parseVideoDuration,
+  parseVideoMd5,
+  parseVoiceDuration,
+  parseVoipMessage,
+  processSummary,
+  sanitizeQuotedContent,
+} from './chat/contentParsers'
 
-export interface ChatSession {
-  username: string
-  type: number
-  unreadCount: number
-  summary: string
-  sortTimestamp: number  // 用于排序
-  lastTimestamp: number  // 用于显示时间
-  lastMsgType: number
-  displayName?: string
-  avatarUrl?: string
-  isWeCom?: boolean
-  weComCorp?: string
-  isPinned?: boolean      // 置顶: contact.flag 第 11 位 (0x800)
-  isCollapsed?: boolean   // 折叠的群聊: contact.flag 第 28 位 (0x10000000)
-  isFoldGroup?: boolean   // 折叠的聊天聚合虚拟会话 (@placeholder_foldgroup)
+export type {
+  ChatSession,
+  ContactInfo,
+  Message,
+  ChatLabSourceMessage,
+  ChatRecordItem,
+  Contact,
 }
-
-export interface ContactInfo {
-  username: string
-  displayName: string
-  remark?: string
-  nickname?: string
-  avatarUrl?: string
-  type: 'friend' | 'group' | 'official' | 'former_friend' | 'other'
-  isWeCom?: boolean
-  weComCorp?: string
-  lastContactTime?: number
-}
-
-const SYSTEM_CONTACT_USERNAMES = new Set([
-  'filehelper',
-  'fmessage',
-  'floatbottle',
-  'medianote',
-  'newsapp',
-  'qmessage',
-  'qqmail',
-  'weixin',
-  'brandsessionholder',
-  'brandservicesessionholder',
-  'notifymessage',
-  'opencustomerservicemsg',
-  'notification_messages',
-  'userexperience_alarm'
-])
-
-function isSystemContactUsername(username: string): boolean {
-  const lower = username.trim().toLowerCase()
-  if (!lower) return true
-  if (SYSTEM_CONTACT_USERNAMES.has(lower)) return true
-  return lower.startsWith('fake_') || lower.includes('@kefu.openim') || lower.includes('service_')
-}
-
-function detectContactInfoType(username: string, row: Record<string, any>): ContactInfo['type'] | null {
-  const lower = username.trim().toLowerCase()
-  if (isSystemContactUsername(lower)) return null
-  if (lower.includes('@chatroom')) return 'group'
-  if (lower.startsWith('gh_')) return 'official'
-
-  const rawType = row.local_type ?? row.type
-  const numericType = rawType === null || rawType === undefined || rawType === '' ? Number.NaN : Number(rawType)
-  if (Number.isFinite(numericType) && numericType === 3) return 'official'
-
-  // 不同微信版本的 contact.local_type 含义不稳定；普通个人号在排除系统号后应作为好友保留。
-  return 'friend'
-}
-
-export interface Message {
-  localId: number
-  serverId: number
-  localType: number
-  createTime: number
-  sortSeq: number
-  isSend: number | null
-  senderUsername: string | null
-  parsedContent: string
-  rawContent: string
-  // 表情包相关
-  emojiCdnUrl?: string
-  emojiMd5?: string
-  emojiLocalPath?: string  // 本地缓存路径
-  // 引用消息相关
-  quotedContent?: string
-  quotedSender?: string
-  quotedImageMd5?: string
-  quotedEmojiMd5?: string
-  quotedEmojiCdnUrl?: string
-  // 图片相关
-  imageMd5?: string
-  imageDatName?: string
-  isLivePhoto?: boolean  // 是否为实况照片
-  // 视频相关
-  videoMd5?: string
-  videoDuration?: number  // 视频时长（秒）
-  voiceDuration?: number  // 语音时长（秒）
-  // 商店表情相关
-  productId?: string
-  // 文件消息相关
-  fileName?: string       // 文件名
-  fileSize?: number       // 文件大小（字节）
-  fileExt?: string        // 文件扩展名
-  fileMd5?: string        // 文件 MD5
-  chatRecordList?: ChatRecordItem[] // 聊天记录列表 (Type 19)
-  // 转账消息相关
-  transferPayerUsername?: string    // 转账付款方 wxid
-  transferReceiverUsername?: string // 转账收款方 wxid
-}
-
-export interface ChatLabSourceMessage {
-  localId: number
-  serverId: number
-  localType: number
-  createTime: number
-  sortSeq: number
-  isSend: number | null
-  senderUsername: string | null
-  parsedContent: string
-  rawContent: string
-  chatRecordList?: ChatRecordItem[]
-}
-
-export interface ChatRecordItem {
-  datatype: number
-  datadesc?: string
-  datatitle?: string
-  sourcename?: string
-  sourcetime?: string
-  sourceheadurl?: string
-  fileext?: string
-  datasize?: number
-  messageuuid?: string
-  // 媒体信息
-  dataurl?: string
-  datathumburl?: string
-  datacdnurl?: string
-  qaeskey?: string
-  aeskey?: string
-  md5?: string
-  imgheight?: number
-  imgwidth?: number
-  thumbheadurl?: string
-  duration?: number
-}
-
-export interface Contact {
-  username: string
-  alias: string
-  remark: string
-  nickName: string
-}
-
-function compareMessageCursorAsc(
-  a: Pick<Message, 'sortSeq' | 'createTime' | 'localId'>,
-  b: Pick<Message, 'sortSeq' | 'createTime' | 'localId'>
-): number {
-  const aSortSeq = Number(a.sortSeq || 0)
-  const bSortSeq = Number(b.sortSeq || 0)
-  if (aSortSeq > 0 && bSortSeq > 0 && aSortSeq !== bSortSeq) {
-    return aSortSeq - bSortSeq
-  }
-  return Number(a.createTime || 0) - Number(b.createTime || 0)
-    || Number(a.localId || 0) - Number(b.localId || 0)
-    || aSortSeq - bSortSeq
-}
-
-function compareMessageCursorDesc(
-  a: Pick<Message, 'sortSeq' | 'createTime' | 'localId'>,
-  b: Pick<Message, 'sortSeq' | 'createTime' | 'localId'>
-): number {
-  return compareMessageCursorAsc(b, a)
-}
-
-function messageIdentityKey(msg: Pick<Message, 'serverId' | 'localId' | 'createTime' | 'sortSeq'>): string {
-  return `${msg.serverId}-${msg.localId}-${msg.createTime}-${msg.sortSeq}`
-}
-
-// 表情包缓存
-const emojiCache: Map<string, string> = new Map()
-const emojiDownloading: Map<string, Promise<string | null>> = new Map()
-
-// 缓存过期时间（毫秒）
-const SESSION_TABLE_CACHE_DURATION = 60 * 1000  // 60秒，与原项目一致
 
 class ChatService extends EventEmitter {
   private configService: ConfigService
@@ -284,83 +167,6 @@ class ChatService extends EventEmitter {
     } catch (e) {
       console.warn('[ChatService] 预加载失败:', e)
     }
-  }
-
-  /**
-   * 清理账号目录名（支持 wxid_ 格式和自定义微信号格式）
-   * 保留以兼容原来内部对 cleanedMyWxid 的使用语义
-   */
-  private cleanAccountDirName(dirName: string): string {
-    const trimmed = dirName.trim()
-    if (!trimmed) return trimmed
-
-    // wxid_ 开头的标准格式: wxid_xxx_yyyy -> wxid_xxx
-    if (trimmed.toLowerCase().startsWith('wxid_')) {
-      const match = trimmed.match(/^(wxid_[a-zA-Z0-9]+)/i)
-      if (match) return match[1]
-      return trimmed
-    }
-
-    // 自定义微信号格式: xxx_yyyy (4位后缀) -> xxx
-    // 例如: xiangchao1985_b29d -> xiangchao1985
-    const suffixMatch = trimmed.match(/^(.+)_([a-zA-Z0-9]{4})$/)
-    if (suffixMatch) return suffixMatch[1]
-
-    return trimmed
-  }
-
-  /**
-   * 查找账号对应的实际目录名（仅用于表情包/文件路径解析等非数据库场景）
-   */
-  private findAccountDir(baseDir: string, wxid: string): string | null {
-    if (!fs.existsSync(baseDir)) return null
-
-    const cleanedWxid = this.cleanAccountDirName(wxid)
-
-    const directPath = path.join(baseDir, wxid)
-    if (fs.existsSync(directPath)) {
-      return wxid
-    }
-
-    if (cleanedWxid !== wxid) {
-      const cleanedPath = path.join(baseDir, cleanedWxid)
-      if (fs.existsSync(cleanedPath)) {
-        return cleanedWxid
-      }
-    }
-
-    try {
-      const entries = fs.readdirSync(baseDir, { withFileTypes: true })
-      for (const entry of entries) {
-        if (!entry.isDirectory()) continue
-
-        const dirName = entry.name
-        const dirNameLower = dirName.toLowerCase()
-        const wxidLower = wxid.toLowerCase()
-        const cleanedWxidLower = cleanedWxid.toLowerCase()
-
-        if (dirNameLower === wxidLower || dirNameLower === cleanedWxidLower) {
-          return dirName
-        }
-
-        if (dirNameLower.startsWith(wxidLower + '_') || dirNameLower.startsWith(cleanedWxidLower + '_')) {
-          return dirName
-        }
-
-        if (wxidLower.startsWith(dirNameLower + '_') || cleanedWxidLower.startsWith(dirNameLower + '_')) {
-          return dirName
-        }
-
-        const cleanedDirName = this.cleanAccountDirName(dirName)
-        if (cleanedDirName.toLowerCase() === wxidLower || cleanedDirName.toLowerCase() === cleanedWxidLower) {
-          return dirName
-        }
-      }
-    } catch (e) {
-      console.error('查找账号目录失败:', e)
-    }
-
-    return null
   }
 
   /**
@@ -505,7 +311,7 @@ class ChatService extends EventEmitter {
       for (const row of rows.slice(0, safeLimit)) {
         const username = row.username || row.user_name || row.userName || ''
 
-        if (!this.shouldKeepSession(username)) continue
+        if (!shouldKeepSession(username)) continue
 
         const sortTs = row.sort_timestamp || row.sortTimestamp || 0
         const lastTs = row.last_timestamp || row.lastTimestamp || sortTs
@@ -515,7 +321,7 @@ class ChatService extends EventEmitter {
           username,
           type: row.type || 0,
           unreadCount: row.unread_count || row.unreadCount || 0,
-          summary: this.processSummary(row.summary || row.digest || '', row.last_msg_type || row.lastMsgType || 1),
+          summary: processSummary(row.summary || row.digest || '', row.last_msg_type || row.lastMsgType || 1),
           sortTimestamp: sortTs,
           lastTimestamp: lastTs,
           lastMsgType: row.last_msg_type || row.lastMsgType || 0,
@@ -971,7 +777,7 @@ class ChatService extends EventEmitter {
     const value = String(raw || '').trim()
     if (!value) return []
     const lowerRaw = value.toLowerCase()
-    const cleaned = this.cleanAccountDirName(value).toLowerCase()
+    const cleaned = cleanAccountDirName(value).toLowerCase()
     return cleaned && cleaned !== lowerRaw ? [cleaned, lowerRaw] : [lowerRaw]
   }
 
@@ -1005,16 +811,6 @@ class ChatService extends EventEmitter {
     return null
   }
 
-  private coerceRowNumber(value: any, fallback = 0): number {
-    if (value === null || value === undefined || value === '') return fallback
-    if (typeof value === 'number') return Number.isFinite(value) ? value : fallback
-    if (typeof value === 'bigint') return Number(value)
-    const text = String(value).trim()
-    if (!text) return fallback
-    const parsed = Number(text)
-    return Number.isFinite(parsed) ? parsed : fallback
-  }
-
   private resolveMessageLocalType(row: Record<string, any>, fallback = 1): number {
     const fieldNames = [
       'local_type',
@@ -1031,9 +827,9 @@ class ChatService extends EventEmitter {
     let zeroCandidate: number | undefined
 
     for (const fieldName of fieldNames) {
-      const value = this.getRowField(row, [fieldName])
+      const value = getRowField(row, [fieldName])
       if (value === null || value === undefined || value === '') continue
-      const parsed = this.coerceRowNumber(value, Number.NaN)
+      const parsed = coerceRowNumber(value, Number.NaN)
       if (!Number.isFinite(parsed)) continue
       if (parsed > 0) return parsed
       if (parsed === 0 && zeroCandidate === undefined) {
@@ -1042,14 +838,6 @@ class ChatService extends EventEmitter {
     }
 
     return zeroCandidate ?? fallback
-  }
-
-  private coerceRowString(value: any): string | undefined {
-    if (value === null || value === undefined) return undefined
-    if (Buffer.isBuffer(value)) return value.toString('utf-8')
-    if (value instanceof Uint8Array) return Buffer.from(value).toString('utf-8')
-    const text = String(value).trim()
-    return text || undefined
   }
 
   private isMessageVisibleForSession(sessionId: string, msg: Message): boolean {
@@ -1118,13 +906,13 @@ class ChatService extends EventEmitter {
   }
 
   private rowToMessage(row: any): Message {
-    const content = this.decodeMessageContent(
-      this.getRowField(row, ['message_content', 'messageContent', 'rawContent', 'raw_content', 'content', 'Content']),
-      this.getRowField(row, ['compress_content', 'compressContent', 'compressedContent', 'CompressContent'])
+    const content = decodeMessageContent(
+      getRowField(row, ['message_content', 'messageContent', 'rawContent', 'raw_content', 'content', 'Content']),
+      getRowField(row, ['compress_content', 'compressContent', 'compressedContent', 'CompressContent'])
     )
     const localType = this.resolveMessageLocalType(row, 1)
-    const senderUsername = this.coerceRowString(
-      this.getRowField(row, ['sender_username', 'senderUsername', 'sender', 'talker', 'src'])
+    const senderUsername = coerceRowString(
+      getRowField(row, ['sender_username', 'senderUsername', 'sender', 'talker', 'src'])
     ) || null
     const isSend = this.resolveRowIsSend(row, senderUsername)
 
@@ -1144,13 +932,13 @@ class ChatService extends EventEmitter {
     let voiceDuration: number | undefined
 
     if (localType === 47 && content) {
-      const emojiInfo = this.parseEmojiInfo(content)
+      const emojiInfo = parseEmojiInfo(content)
       emojiCdnUrl = emojiInfo.cdnUrl
       emojiMd5 = emojiInfo.md5
       emojiProductId = emojiInfo.productId
     } else if (localType === 3 && content) {
-      const imageInfo = this.parseImageInfo(content)
-      imageMd5 = this.coerceRowString(this.getRowField(row, [
+      const imageInfo = parseImageInfo(content)
+      imageMd5 = coerceRowString(getRowField(row, [
         'imageMd5',
         'image_md5',
         'md5',
@@ -1162,7 +950,7 @@ class ChatService extends EventEmitter {
         'fullmd5',
         'fullMd5'
       ])) || imageInfo.md5
-      imageDatName = this.coerceRowString(this.getRowField(row, [
+      imageDatName = coerceRowString(getRowField(row, [
         'imageDatName',
         'image_dat_name',
         'datName',
@@ -1172,15 +960,15 @@ class ChatService extends EventEmitter {
         'filename',
         'path',
         'filePath'
-      ])) || this.parseImageDatNameFromRow(row)
+      ])) || parseImageDatNameFromRow(row)
       isLivePhoto = imageInfo.isLivePhoto
     } else if (localType === 43 && content) {
-      videoMd5 = this.parseVideoMd5(content)
-      videoDuration = this.parseVideoDuration(content)
+      videoMd5 = parseVideoMd5(content)
+      videoDuration = parseVideoDuration(content)
     } else if (localType === 34 && content) {
-      voiceDuration = this.parseVoiceDuration(content)
+      voiceDuration = parseVoiceDuration(content)
     } else if (localType === 244813135921 || (content && content.includes('<type>57</type>'))) {
-      const quoteInfo = this.parseQuoteMessage(content)
+      const quoteInfo = parseQuoteMessage(content)
       quotedContent = quoteInfo.content
       quotedSender = quoteInfo.sender
       quotedImageMd5 = quoteInfo.imageMd5
@@ -1193,7 +981,7 @@ class ChatService extends EventEmitter {
     let fileExt: string | undefined
     let fileMd5: string | undefined
     if (localType === 49 && content) {
-      const fileInfo = this.parseFileInfo(content)
+      const fileInfo = parseFileInfo(content)
       fileName = fileInfo.fileName
       fileSize = fileInfo.fileSize
       fileExt = fileInfo.fileExt
@@ -1202,31 +990,31 @@ class ChatService extends EventEmitter {
 
     let chatRecordList: ChatRecordItem[] | undefined
     if (content) {
-      const xmlType = this.extractXmlValue(content, 'type')
+      const xmlType = extractXmlValue(content, 'type')
       if (xmlType === '19' || localType === 49) {
-        chatRecordList = this.parseChatHistory(content)
+        chatRecordList = parseChatHistory(content)
       }
     }
 
     let transferPayerUsername: string | undefined
     let transferReceiverUsername: string | undefined
     if ((localType === 49 || localType === 8589934592049) && content) {
-      const xmlType = this.extractXmlValue(content, 'type')
+      const xmlType = extractXmlValue(content, 'type')
       if (xmlType === '2000') {
-        transferPayerUsername = this.extractXmlValue(content, 'payer_username') || undefined
-        transferReceiverUsername = this.extractXmlValue(content, 'receiver_username') || undefined
+        transferPayerUsername = extractXmlValue(content, 'payer_username') || undefined
+        transferReceiverUsername = extractXmlValue(content, 'receiver_username') || undefined
       }
     }
 
     return {
-      localId: this.coerceRowNumber(this.getRowField(row, ['local_id', 'localId', 'id', 'ID']), 0),
-      serverId: this.coerceRowNumber(this.getRowField(row, ['server_id', 'serverId', 'MsgSvrID', 'msgSvrId']), 0),
+      localId: coerceRowNumber(getRowField(row, ['local_id', 'localId', 'id', 'ID']), 0),
+      serverId: coerceRowNumber(getRowField(row, ['server_id', 'serverId', 'MsgSvrID', 'msgSvrId']), 0),
       localType,
-      createTime: this.coerceRowNumber(this.getRowField(row, ['create_time', 'createTime', 'CreateTime']), 0),
-      sortSeq: this.coerceRowNumber(this.getRowField(row, ['sort_seq', 'sortSeq', 'sequence', 'Sequence']), 0),
+      createTime: coerceRowNumber(getRowField(row, ['create_time', 'createTime', 'CreateTime']), 0),
+      sortSeq: coerceRowNumber(getRowField(row, ['sort_seq', 'sortSeq', 'sequence', 'Sequence']), 0),
       isSend,
       senderUsername,
-      parsedContent: this.coerceRowString(this.getRowField(row, ['parsedContent', 'parsed_content'])) || this.parseMessageContent(content, localType),
+      parsedContent: coerceRowString(getRowField(row, ['parsedContent', 'parsed_content'])) || parseMessageContent(content, localType),
       rawContent: content,
       emojiCdnUrl: row.emojiCdnUrl || emojiCdnUrl,
       emojiMd5: row.emojiMd5 || emojiMd5,
@@ -1293,7 +1081,7 @@ class ChatService extends EventEmitter {
 
       // 获取当前用户的 wxid
       const myWxid = this.configService.get('myWxid')
-      const cleanedMyWxid = myWxid ? this.cleanAccountDirName(myWxid) : ''
+      const cleanedMyWxid = myWxid ? cleanAccountDirName(myWxid) : ''
 
       // 使用缓存查找会话对应的数据库和表
       const dbTablePairs = await this.findSessionTables(sessionId)
@@ -1340,7 +1128,7 @@ class ChatService extends EventEmitter {
 
           // 批量处理消息
           for (const row of rows) {
-            const content = this.decodeMessageContent(row.message_content, row.compress_content)
+            const content = decodeMessageContent(row.message_content, row.compress_content)
             const localType = this.resolveMessageLocalType(row, 1)
             const isSend = this.resolveRowIsSend(row, row.sender_username || null)
 
@@ -1361,22 +1149,22 @@ class ChatService extends EventEmitter {
             let voiceDuration: number | undefined
 
             if (localType === 47 && content) {
-              const emojiInfo = this.parseEmojiInfo(content)
+              const emojiInfo = parseEmojiInfo(content)
               emojiCdnUrl = emojiInfo.cdnUrl
               emojiMd5 = emojiInfo.md5
               emojiProductId = emojiInfo.productId
             } else if (localType === 3 && content) {
-              const imageInfo = this.parseImageInfo(content)
+              const imageInfo = parseImageInfo(content)
               imageMd5 = imageInfo.md5
-              imageDatName = this.parseImageDatNameFromRow(row)
+              imageDatName = parseImageDatNameFromRow(row)
               isLivePhoto = imageInfo.isLivePhoto
             } else if (localType === 43 && content) {
-              videoMd5 = this.parseVideoMd5(content)
-              videoDuration = this.parseVideoDuration(content)
+              videoMd5 = parseVideoMd5(content)
+              videoDuration = parseVideoDuration(content)
             } else if (localType === 34 && content) {
-              voiceDuration = this.parseVoiceDuration(content)
+              voiceDuration = parseVoiceDuration(content)
             } else if (localType === 244813135921 || (content && content.includes('<type>57</type>'))) {
-              const quoteInfo = this.parseQuoteMessage(content)
+              const quoteInfo = parseQuoteMessage(content)
               quotedContent = quoteInfo.content
               quotedSender = quoteInfo.sender
               quotedImageMd5 = quoteInfo.imageMd5
@@ -1389,7 +1177,7 @@ class ChatService extends EventEmitter {
             let fileExt: string | undefined
             let fileMd5: string | undefined
             if (localType === 49 && content) {
-              const fileInfo = this.parseFileInfo(content)
+              const fileInfo = parseFileInfo(content)
               fileName = fileInfo.fileName
               fileSize = fileInfo.fileSize
               fileExt = fileInfo.fileExt
@@ -1398,23 +1186,23 @@ class ChatService extends EventEmitter {
 
             let chatRecordList: ChatRecordItem[] | undefined
             if (content) {
-              const xmlType = this.extractXmlValue(content, 'type')
+              const xmlType = extractXmlValue(content, 'type')
               if (xmlType === '19' || localType === 49) {
-                chatRecordList = this.parseChatHistory(content)
+                chatRecordList = parseChatHistory(content)
               }
             }
 
             let transferPayerUsername: string | undefined
             let transferReceiverUsername: string | undefined
             if ((localType === 49 || localType === 8589934592049) && content) {
-              const xmlType = this.extractXmlValue(content, 'type')
+              const xmlType = extractXmlValue(content, 'type')
               if (xmlType === '2000') {
-                transferPayerUsername = this.extractXmlValue(content, 'payer_username') || undefined
-                transferReceiverUsername = this.extractXmlValue(content, 'receiver_username') || undefined
+                transferPayerUsername = extractXmlValue(content, 'payer_username') || undefined
+                transferReceiverUsername = extractXmlValue(content, 'receiver_username') || undefined
               }
             }
 
-            const parsedContent = this.parseMessageContent(content, localType)
+            const parsedContent = parseMessageContent(content, localType)
 
             allMessages.push({
               localId: row.local_id || 0,
@@ -1580,7 +1368,7 @@ class ChatService extends EventEmitter {
       }
 
       const myWxid = this.configService.get('myWxid')
-      const cleanedMyWxid = myWxid ? this.cleanAccountDirName(myWxid) : ''
+      const cleanedMyWxid = myWxid ? cleanAccountDirName(myWxid) : ''
       const dbTablePairs = await this.findSessionTables(sessionId)
 
       if (dbTablePairs.length === 0) {
@@ -1639,13 +1427,13 @@ class ChatService extends EventEmitter {
           }
 
           for (const row of rows) {
-            const content = this.decodeMessageContent(row.message_content, row.compress_content)
+            const content = decodeMessageContent(row.message_content, row.compress_content)
             const localType = this.resolveMessageLocalType(row, 1)
             const isSend = this.resolveRowIsSend(row, row.sender_username || null)
-            const parsedContent = this.parseMessageContent(content, localType)
-            const xmlType = content ? this.extractXmlValue(content, 'type') : undefined
+            const parsedContent = parseMessageContent(content, localType)
+            const xmlType = content ? extractXmlValue(content, 'type') : undefined
             const chatRecordList = content && (xmlType === '19' || localType === 49)
-              ? this.parseChatHistory(content)
+              ? parseChatHistory(content)
               : undefined
 
             allMessages.push({
@@ -1704,7 +1492,7 @@ class ChatService extends EventEmitter {
   ): Promise<{ success: boolean; messages?: Message[]; hasMore?: boolean; error?: string }> {
     try {
       const myWxid = this.configService.get('myWxid')
-      const cleanedMyWxid = myWxid ? this.cleanAccountDirName(myWxid) : ''
+      const cleanedMyWxid = myWxid ? cleanAccountDirName(myWxid) : ''
 
       const dbTablePairs = await this.findSessionTables(sessionId)
       if (dbTablePairs.length === 0) {
@@ -1833,7 +1621,7 @@ class ChatService extends EventEmitter {
   ): Promise<{ success: boolean; messages?: Message[]; hasMore?: boolean; error?: string }> {
     try {
       const myWxid = this.configService.get('myWxid')
-      const cleanedMyWxid = myWxid ? this.cleanAccountDirName(myWxid) : ''
+      const cleanedMyWxid = myWxid ? cleanAccountDirName(myWxid) : ''
 
       const dbTablePairs = await this.findSessionTables(sessionId)
       if (dbTablePairs.length === 0) {
@@ -1917,7 +1705,7 @@ class ChatService extends EventEmitter {
           }
 
           for (const row of rows) {
-            const content = this.decodeMessageContent(row.message_content, row.compress_content)
+            const content = decodeMessageContent(row.message_content, row.compress_content)
             const localType = this.resolveMessageLocalType(row, 1)
             const isSend = this.resolveRowIsSend(row, row.sender_username || null)
 
@@ -1937,22 +1725,22 @@ class ChatService extends EventEmitter {
             let voiceDuration: number | undefined
 
             if (localType === 47 && content) {
-              const emojiInfo = this.parseEmojiInfo(content)
+              const emojiInfo = parseEmojiInfo(content)
               emojiCdnUrl = emojiInfo.cdnUrl
               emojiMd5 = emojiInfo.md5
               emojiProductId = emojiInfo.productId
             } else if (localType === 3 && content) {
-              const imageInfo = this.parseImageInfo(content)
+              const imageInfo = parseImageInfo(content)
               imageMd5 = imageInfo.md5
-              imageDatName = this.parseImageDatNameFromRow(row)
+              imageDatName = parseImageDatNameFromRow(row)
               isLivePhoto = imageInfo.isLivePhoto
             } else if (localType === 43 && content) {
-              videoMd5 = this.parseVideoMd5(content)
-              videoDuration = this.parseVideoDuration(content)
+              videoMd5 = parseVideoMd5(content)
+              videoDuration = parseVideoDuration(content)
             } else if (localType === 34 && content) {
-              voiceDuration = this.parseVoiceDuration(content)
+              voiceDuration = parseVoiceDuration(content)
             } else if (localType === 244813135921 || (content && content.includes('<type>57</type>'))) {
-              const quoteInfo = this.parseQuoteMessage(content)
+              const quoteInfo = parseQuoteMessage(content)
               quotedContent = quoteInfo.content
               quotedSender = quoteInfo.sender
               quotedImageMd5 = quoteInfo.imageMd5
@@ -1965,7 +1753,7 @@ class ChatService extends EventEmitter {
             let fileExt: string | undefined
             let fileMd5: string | undefined
             if (localType === 49 && content) {
-              const fileInfo = this.parseFileInfo(content)
+              const fileInfo = parseFileInfo(content)
               fileName = fileInfo.fileName
               fileSize = fileInfo.fileSize
               fileExt = fileInfo.fileExt
@@ -1974,23 +1762,23 @@ class ChatService extends EventEmitter {
 
             let chatRecordList: ChatRecordItem[] | undefined
             if (content) {
-              const xmlType = this.extractXmlValue(content, 'type')
+              const xmlType = extractXmlValue(content, 'type')
               if (xmlType === '19' || localType === 49) {
-                chatRecordList = this.parseChatHistory(content)
+                chatRecordList = parseChatHistory(content)
               }
             }
 
             let transferPayerUsername: string | undefined
             let transferReceiverUsername: string | undefined
             if ((localType === 49 || localType === 8589934592049) && content) {
-              const xmlType = this.extractXmlValue(content, 'type')
+              const xmlType = extractXmlValue(content, 'type')
               if (xmlType === '2000') {
-                transferPayerUsername = this.extractXmlValue(content, 'payer_username') || undefined
-                transferReceiverUsername = this.extractXmlValue(content, 'receiver_username') || undefined
+                transferPayerUsername = extractXmlValue(content, 'payer_username') || undefined
+                transferReceiverUsername = extractXmlValue(content, 'receiver_username') || undefined
               }
             }
 
-            const parsedContent = this.parseMessageContent(content, localType)
+            const parsedContent = parseMessageContent(content, localType)
 
             allMessages.push({
               localId: row.local_id || 0,
@@ -2086,7 +1874,7 @@ class ChatService extends EventEmitter {
         : (endTime ?? watermark)
 
       const myWxid = this.configService.get('myWxid')
-      const cleanedMyWxid = myWxid ? this.cleanAccountDirName(myWxid) : ''
+      const cleanedMyWxid = myWxid ? cleanAccountDirName(myWxid) : ''
       const dbTablePairs = await this.findSessionTables(sessionId)
 
       if (dbTablePairs.length === 0) {
@@ -2146,13 +1934,13 @@ class ChatService extends EventEmitter {
           }
 
           for (const row of rows) {
-            const content = this.decodeMessageContent(row.message_content, row.compress_content)
+            const content = decodeMessageContent(row.message_content, row.compress_content)
             const localType = this.resolveMessageLocalType(row, 1)
             const isSend = this.resolveRowIsSend(row, row.sender_username || null)
-            const parsedContent = this.parseMessageContent(content, localType)
-            const xmlType = content ? this.extractXmlValue(content, 'type') : undefined
+            const parsedContent = parseMessageContent(content, localType)
+            const xmlType = content ? extractXmlValue(content, 'type') : undefined
             const chatRecordList = content && (xmlType === '19' || localType === 49)
-              ? this.parseChatHistory(content)
+              ? parseChatHistory(content)
               : undefined
 
             allMessages.push({
@@ -2207,7 +1995,7 @@ class ChatService extends EventEmitter {
   ): Promise<{ success: boolean; messages?: Message[]; error?: string }> {
     try {
       const myWxid = this.configService.get('myWxid')
-      const cleanedMyWxid = myWxid ? this.cleanAccountDirName(myWxid) : ''
+      const cleanedMyWxid = myWxid ? cleanAccountDirName(myWxid) : ''
 
       // 使用与 getMessages 相同的方法查找会话对应的表
       const dbTablePairs = await this.findSessionTables(sessionId)
@@ -2271,10 +2059,10 @@ class ChatService extends EventEmitter {
 
           // 处理查询结果
           for (const row of rows) {
-            const content = this.decodeMessageContent(row.message_content, row.compress_content)
+            const content = decodeMessageContent(row.message_content, row.compress_content)
             const localType = this.resolveMessageLocalType(row, 1)
             const isSend = this.resolveRowIsSend(row, row.sender_username || null)
-            const voiceDuration = this.parseVoiceDuration(content)
+            const voiceDuration = parseVoiceDuration(content)
 
             allVoiceMessages.push({
               localId: row.local_id || 0,
@@ -2354,9 +2142,9 @@ class ChatService extends EventEmitter {
           )
 
           for (const row of rows) {
-            const content = this.decodeMessageContent(row.message_content, row.compress_content)
-            const imageInfo = this.parseImageInfo(content)
-            const datName = this.parseImageDatNameFromRow(row)
+            const content = decodeMessageContent(row.message_content, row.compress_content)
+            const imageInfo = parseImageInfo(content)
+            const datName = parseImageDatNameFromRow(row)
             if (imageInfo.md5 || datName) {
               images.push({ imageMd5: imageInfo.md5, imageDatName: datName, createTime: row.create_time })
             }
@@ -2397,7 +2185,7 @@ class ChatService extends EventEmitter {
   ): Promise<{ success: boolean; messages?: Message[]; targetIndex?: number; error?: string }> {
     try {
       const myWxid = this.configService.get('myWxid')
-      const cleanedMyWxid = myWxid ? this.cleanAccountDirName(myWxid) : ''
+      const cleanedMyWxid = myWxid ? cleanAccountDirName(myWxid) : ''
 
       const dbTablePairs = await this.findSessionTables(sessionId)
       if (dbTablePairs.length === 0) {
@@ -2449,7 +2237,7 @@ class ChatService extends EventEmitter {
 
           // 处理消息
           for (const row of rows) {
-            const content = this.decodeMessageContent(row.message_content, row.compress_content)
+            const content = decodeMessageContent(row.message_content, row.compress_content)
             const localType = this.resolveMessageLocalType(row, 1)
             const isSend = this.resolveRowIsSend(row, row.sender_username || null)
 
@@ -2469,22 +2257,22 @@ class ChatService extends EventEmitter {
             let voiceDuration: number | undefined
 
             if (localType === 47 && content) {
-              const emojiInfo = this.parseEmojiInfo(content)
+              const emojiInfo = parseEmojiInfo(content)
               emojiCdnUrl = emojiInfo.cdnUrl
               emojiMd5 = emojiInfo.md5
               emojiProductId = emojiInfo.productId
             } else if (localType === 3 && content) {
-              const imageInfo = this.parseImageInfo(content)
+              const imageInfo = parseImageInfo(content)
               imageMd5 = imageInfo.md5
-              imageDatName = this.parseImageDatNameFromRow(row)
+              imageDatName = parseImageDatNameFromRow(row)
               isLivePhoto = imageInfo.isLivePhoto
             } else if (localType === 43 && content) {
-              videoMd5 = this.parseVideoMd5(content)
-              videoDuration = this.parseVideoDuration(content)
+              videoMd5 = parseVideoMd5(content)
+              videoDuration = parseVideoDuration(content)
             } else if (localType === 34 && content) {
-              voiceDuration = this.parseVoiceDuration(content)
+              voiceDuration = parseVoiceDuration(content)
             } else if (localType === 244813135921 || (content && content.includes('<type>57</type>'))) {
-              const quoteInfo = this.parseQuoteMessage(content)
+              const quoteInfo = parseQuoteMessage(content)
               quotedContent = quoteInfo.content
               quotedSender = quoteInfo.sender
               quotedImageMd5 = quoteInfo.imageMd5
@@ -2497,7 +2285,7 @@ class ChatService extends EventEmitter {
             let fileExt: string | undefined
             let fileMd5: string | undefined
             if (localType === 49 && content) {
-              const fileInfo = this.parseFileInfo(content)
+              const fileInfo = parseFileInfo(content)
               fileName = fileInfo.fileName
               fileSize = fileInfo.fileSize
               fileExt = fileInfo.fileExt
@@ -2506,23 +2294,23 @@ class ChatService extends EventEmitter {
 
             let chatRecordList: ChatRecordItem[] | undefined
             if (content) {
-              const xmlType = this.extractXmlValue(content, 'type')
+              const xmlType = extractXmlValue(content, 'type')
               if (xmlType === '19' || localType === 49) {
-                chatRecordList = this.parseChatHistory(content)
+                chatRecordList = parseChatHistory(content)
               }
             }
 
             let transferPayerUsername: string | undefined
             let transferReceiverUsername: string | undefined
             if ((localType === 49 || localType === 8589934592049) && content) {
-              const xmlType = this.extractXmlValue(content, 'type')
+              const xmlType = extractXmlValue(content, 'type')
               if (xmlType === '2000') {
-                transferPayerUsername = this.extractXmlValue(content, 'payer_username') || undefined
-                transferReceiverUsername = this.extractXmlValue(content, 'receiver_username') || undefined
+                transferPayerUsername = extractXmlValue(content, 'payer_username') || undefined
+                transferReceiverUsername = extractXmlValue(content, 'receiver_username') || undefined
               }
             }
 
-            const parsedContent = this.parseMessageContent(content, localType)
+            const parsedContent = parseMessageContent(content, localType)
 
             allMessages.push({
               localId: row.local_id || 0,
@@ -2644,788 +2432,6 @@ class ChatService extends EventEmitter {
     }
   }
 
-  /**
-   * 解析消息内容
-   */
-  private parseMessageContent(content: string, localType: number): string {
-    if (!content) {
-      return this.getMessageTypeLabel(localType)
-    }
-
-    // 尝试解码 Buffer
-    if (Buffer.isBuffer(content)) {
-      content = content.toString('utf-8')
-    }
-
-    content = this.decodeHtmlEntities(content)
-
-    // 检查 XML type，用于识别引用消息等
-    const xmlType = this.extractXmlValue(content, 'type')
-
-    switch (localType) {
-      case 1:
-        return this.stripSenderPrefix(content)
-      case 3:
-        return '[图片]'
-      case 34:
-        return '[语音消息]'
-      case 42: {
-        const nickname = content.match(/nickname="([^"]*)"/)?.[1]
-        return nickname ? `[名片] ${nickname}` : '[名片]'
-      }
-      case 43:
-        return '[视频]'
-      case 47:
-        return '[动画表情]'
-      case 48: {
-        const poiname = content.match(/poiname="([^"]*)"/)?.[1]
-        const label = content.match(/label="([^"]*)"/)?.[1]
-        return poiname ? `[位置] ${poiname}` : label ? `[位置] ${label}` : '[位置]'
-      }
-      case 49:
-        return this.parseType49(content)
-      case 50:
-        return this.parseVoipMessage(content)
-      case 10000:
-        return this.cleanSystemMessage(content)
-      case 244813135921:
-        // 引用消息，提取 title
-        const title = this.extractXmlValue(content, 'title')
-        return title || '[引用消息]'
-      default:
-        // 对于未知的 localType，检查 XML type 来判断消息类型
-        if (xmlType) {
-          // type=87 群公告消息
-          if (xmlType === '87') {
-            const textAnnouncement = this.extractXmlValue(content, 'textannouncement')
-            if (textAnnouncement) {
-              return `[群公告] ${textAnnouncement}`
-            }
-            return '[群公告]'
-          }
-          // 如果有 XML type，尝试按 type 49 的逻辑解析
-          if (xmlType === '2000' || xmlType === '5' || xmlType === '6' || xmlType === '19' || 
-              xmlType === '33' || xmlType === '36' || xmlType === '49' || xmlType === '57') {
-            return this.parseType49(content)
-          }
-          // type=57 的引用消息
-          if (xmlType === '57') {
-            const title = this.extractXmlValue(content, 'title')
-            return title || '[引用消息]'
-          }
-        }
-        // 其他情况
-        if (content.length > 200) {
-          return this.getMessageTypeLabel(localType)
-        }
-        return this.stripSenderPrefix(content) || this.getMessageTypeLabel(localType)
-    }
-  }
-
-  private parseType49(content: string): string {
-    const title = this.extractXmlValue(content, 'title')
-    const type = this.extractXmlValue(content, 'type')
-
-    // 群公告消息（type 87）特殊处理
-    if (type === '87') {
-      const textAnnouncement = this.extractXmlValue(content, 'textannouncement')
-      if (textAnnouncement) {
-        return `[群公告] ${textAnnouncement}`
-      }
-      return '[群公告]'
-    }
-
-    // 转账消息特殊处理
-    if (type === '2000') {
-      const feedesc = this.extractXmlValue(content, 'feedesc')
-      const payMemo = this.extractXmlValue(content, 'pay_memo')
-      if (feedesc) {
-        return payMemo ? `[转账] ${feedesc} ${payMemo}` : `[转账] ${feedesc}`
-      }
-      return '[转账]'
-    }
-
-    // 红包消息
-    if (type === '2001') {
-      const greeting = this.extractXmlValue(content, 'receivertitle') || this.extractXmlValue(content, 'sendertitle')
-      return greeting ? `[红包] ${greeting}` : '[红包]'
-    }
-
-    // 微信礼物
-    if (type === '115') {
-      const wish = this.extractXmlValue(content, 'wishmessage')
-      const skutitle = this.extractXmlValue(content, 'skutitle')
-      return skutitle ? `[微信礼物] ${wish || '送你一份心意'} - ${skutitle}` : `[微信礼物] ${wish || '送你一份心意'}`
-    }
-
-    // 音乐分享
-    if (type === '3') {
-      const des = this.extractXmlValue(content, 'des')
-      return title ? `[音乐] ${title}${des ? ` - ${des}` : ''}` : '[音乐]'
-    }
-
-    if (title) {
-      switch (type) {
-        case '5':
-        case '49':
-          return `[链接] ${title}`
-        case '6':
-          return `[文件] ${title}`
-        case '19':
-          return `[聊天记录] ${title}`
-        case '33':
-        case '36':
-          return `[小程序] ${title}`
-        case '57':
-          // 引用消息，title 就是回复的内容
-          return title
-        default:
-          return title
-      }
-    }
-    return '[消息]'
-  }
-
-  /**
-   * 解析合并转发的聊天记录 (Type 19)
-   */
-  private parseChatHistory(content: string): ChatRecordItem[] | undefined {
-    try {
-      const type = this.extractXmlValue(content, 'type')
-      if (type !== '19') return undefined
-
-      // 提取 recorditem 中的 CDATA
-      // CDATA 格式: <recorditem><![CDATA[ ... ]]></recorditem>
-      const match = /<recorditem>[\s\S]*?<!\[CDATA\[([\s\S]*?)\]\]>[\s\S]*?<\/recorditem>/.exec(content)
-      if (!match) return undefined
-
-      const innerXml = match[1]
-
-      const items: ChatRecordItem[] = []
-      // 使用更宽松的正则匹配 dataitem
-      const itemRegex = /<dataitem\s+(.*?)>([\s\S]*?)<\/dataitem>/g
-      let itemMatch
-
-      while ((itemMatch = itemRegex.exec(innerXml)) !== null) {
-        const attrs = itemMatch[1]
-        const body = itemMatch[2]
-
-        const datatypeMatch = /datatype="(\d+)"/.exec(attrs)
-        const datatype = datatypeMatch ? parseInt(datatypeMatch[1]) : 0
-
-        const sourcename = this.extractXmlValue(body, 'sourcename')
-        const sourcetime = this.extractXmlValue(body, 'sourcetime')
-        const sourceheadurl = this.extractXmlValue(body, 'sourceheadurl')
-        const datadesc = this.extractXmlValue(body, 'datadesc')
-        const datatitle = this.extractXmlValue(body, 'datatitle')
-        const fileext = this.extractXmlValue(body, 'fileext')
-        const datasize = parseInt(this.extractXmlValue(body, 'datasize') || '0')
-        const messageuuid = this.extractXmlValue(body, 'messageuuid')
-
-        // 提取媒体信息
-        const dataurl = this.extractXmlValue(body, 'dataurl')
-        const datathumburl = this.extractXmlValue(body, 'datathumburl') || this.extractXmlValue(body, 'thumburl')
-        const datacdnurl = this.extractXmlValue(body, 'datacdnurl') || this.extractXmlValue(body, 'cdnurl')
-        const aeskey = this.extractXmlValue(body, 'aeskey') || this.extractXmlValue(body, 'qaeskey')
-        const md5 = this.extractXmlValue(body, 'md5') || this.extractXmlValue(body, 'datamd5')
-        const imgheight = parseInt(this.extractXmlValue(body, 'imgheight') || '0')
-        const imgwidth = parseInt(this.extractXmlValue(body, 'imgwidth') || '0')
-        const duration = parseInt(this.extractXmlValue(body, 'duration') || '0')
-
-        items.push({
-          datatype,
-          sourcename,
-          sourcetime,
-          sourceheadurl,
-          datadesc: this.decodeHtmlEntities(datadesc),
-          datatitle: this.decodeHtmlEntities(datatitle),
-          fileext,
-          datasize,
-          messageuuid,
-          dataurl: this.decodeHtmlEntities(dataurl),
-          datathumburl: this.decodeHtmlEntities(datathumburl),
-          datacdnurl: this.decodeHtmlEntities(datacdnurl),
-          aeskey: this.decodeHtmlEntities(aeskey),
-          md5,
-          imgheight,
-          imgwidth,
-          duration
-        })
-      }
-
-      return items.length > 0 ? items : undefined
-    } catch (e) {
-      console.error('ChatService: 解析聊天记录失败:', e)
-      return undefined
-    }
-  }
-
-  /**
-   * 解析表情包信息
-   */
-  private parseEmojiInfo(content: string): { cdnUrl?: string; md5?: string; productId?: string } {
-    try {
-      // 提取 cdnurl (增强正则表达式以适配多种格式)
-      let cdnUrl: string | undefined
-      const cdnUrlMatch = /cdnurl\s*=\s*['"]([^'"]+)['"]/i.exec(content) || /cdnurl\s*=\s*([^'"]+?)(?=\s|\/|>)/i.exec(content)
-      if (cdnUrlMatch) {
-        cdnUrl = cdnUrlMatch[1].replace(/&amp;/g, '&')
-        if (cdnUrl.includes('%')) {
-          try { cdnUrl = decodeURIComponent(cdnUrl) } catch { }
-        }
-      }
-
-      // 如果没有 cdnurl，尝试 thumburl
-      if (!cdnUrl) {
-        const thumbUrlMatch = /thumburl\s*=\s*['"]([^'"]+)['"]/i.exec(content) || /thumburl\s*=\s*([^'"]+?)(?=\s|\/|>)/i.exec(content)
-        if (thumbUrlMatch) {
-          cdnUrl = thumbUrlMatch[1].replace(/&amp;/g, '&')
-          if (cdnUrl.includes('%')) {
-            try { cdnUrl = decodeURIComponent(cdnUrl) } catch { }
-          }
-        }
-      }
-
-      // 提取 md5 (适配有引号、无引号以及标签形式)
-      const md5Match = /md5\s*=\s*['"]([a-fA-F0-9]+)['"]/i.exec(content) ||
-        /md5\s*=\s*([a-fA-F0-9]+)/i.exec(content) ||
-        /<md5>([^<]+)<\/md5>/i.exec(content)
-      const md5 = md5Match ? md5Match[1] : undefined
-
-      // 提取 productid
-      const idMatch = /productid\s*=\s*['"]([^'"]+)['"]/i.exec(content) || /productid\s*=\s*([^'"]+?)(?=\s|\/|>)/i.exec(content)
-      const productId = idMatch ? idMatch[1] : undefined
-
-      return { cdnUrl, md5, productId }
-    } catch (e) {
-      console.error('[ChatService] 表情包解析异常:', e)
-      return {}
-    }
-  }
-
-  /**
-   * 解析图片信息
-   */
-  private parseImageInfo(content: string): { md5?: string; aesKey?: string; isLivePhoto?: boolean } {
-    try {
-      // 检查是否有实况照片（只要有 <live> 标签就是实况）
-      const isLivePhoto = /<live>/i.test(content)
-
-      // 提取图片 md5 时，先去掉 <live> 段避免误匹配
-      const contentNoLive = content.replace(/<live>[\s\S]*?<\/live>/gi, '')
-      const md5 =
-        this.extractXmlValue(contentNoLive, 'md5') ||
-        this.extractXmlAttribute(contentNoLive, 'img', 'md5') ||
-        this.extractXmlAttribute(contentNoLive, 'img', 'cdnthumbmd5') ||
-        this.extractXmlAttribute(contentNoLive, 'img', 'thumbfullmd5') ||
-        this.extractXmlAttribute(contentNoLive, 'img', 'fullmd5') ||
-        undefined
-      const aesKey = this.extractXmlAttribute(content, 'img', 'aeskey') || undefined
-
-      return { md5: md5?.toLowerCase(), aesKey, isLivePhoto: isLivePhoto || undefined }
-    } catch {
-      return {}
-    }
-  }
-
-  /**
-   * 解析视频MD5
-   */
-  private parseVideoDuration(content: string): number | undefined {
-    if (!content) return undefined
-    try {
-      const match = /playlength\s*=\s*['"](\d+)['"]/i.exec(content)
-      return match ? parseInt(match[1], 10) : undefined
-    } catch {
-      return undefined
-    }
-  }
-
-  private parseVideoMd5(content: string): string | undefined {
-    if (!content) return undefined
-
-    try {
-      // 尝试从XML中提取md5
-      // 格式可能是: <md5>xxx</md5> 或 md5="xxx"
-      const md5 =
-        this.extractXmlValue(content, 'md5') ||
-        this.extractXmlAttribute(content, 'videomsg', 'md5') ||
-        this.extractXmlValue(content, 'newmd5') ||
-        this.extractXmlAttribute(content, 'videomsg', 'newmd5') ||
-        this.extractXmlValue(content, 'rawmd5') ||
-        this.extractXmlAttribute(content, 'videomsg', 'rawmd5') ||
-        undefined
-
-      return md5?.toLowerCase()
-    } catch {
-      return undefined
-    }
-  }
-
-  /**
-   * 解析文件消息信息
-   * 从 type=6 的文件消息 XML 中提取文件信息
-   */
-  private parseFileInfo(content: string): { fileName?: string; fileSize?: number; fileExt?: string; fileMd5?: string } {
-    if (!content) return {}
-
-    try {
-      // 检查是否是文件消息 (type=6)
-      const type = this.extractXmlValue(content, 'type')
-      if (type !== '6') return {}
-
-      // 提取文件名 (title)
-      const fileName = this.extractXmlValue(content, 'title')
-
-      // 提取文件大小 (totallen)
-      const totallenStr = this.extractXmlValue(content, 'totallen')
-      const fileSize = totallenStr ? parseInt(totallenStr, 10) : undefined
-
-      // 提取文件扩展名 (fileext)
-      const fileExt = this.extractXmlValue(content, 'fileext')
-
-      // 提取文件 MD5
-      const fileMd5 = this.extractXmlValue(content, 'md5')?.toLowerCase()
-
-      return { fileName, fileSize, fileExt, fileMd5 }
-    } catch {
-      return {}
-    }
-  }
-
-  /**
-   * 从数据库行中解析图片 dat 文件名
-   */
-  private parseImageDatNameFromRow(row: Record<string, any>): string | undefined {
-    const packed = this.getRowField(row, [
-      'packed_info_data',
-      'packed_info',
-      'packedInfoData',
-      'packedInfo',
-      'PackedInfoData',
-      'PackedInfo',
-      'packed_info_blob',
-      'packedInfoBlob',
-      'BytesExtra',
-      'bytes_extra',
-      'reserved0',
-      'Reserved0',
-      'WCDB_CT_packed_info_data',
-      'WCDB_CT_packed_info',
-      'WCDB_CT_PackedInfoData',
-      'WCDB_CT_PackedInfo',
-      'WCDB_CT_Reserved0'
-    ])
-    const buffer = this.decodePackedInfo(packed)
-    if (!buffer || buffer.length === 0) return undefined
-    const printable: number[] = []
-    for (let i = 0; i < buffer.length; i++) {
-      const byte = buffer[i]
-      if (byte >= 0x20 && byte <= 0x7e) {
-        printable.push(byte)
-      } else {
-        printable.push(0x20)
-      }
-    }
-    const text = Buffer.from(printable).toString('utf-8')
-    const match = /([0-9a-fA-F]{8,})(?:\.t)?\.dat/.exec(text)
-    if (match?.[1]) return match[1].toLowerCase()
-    const hexMatch = /([0-9a-fA-F]{16,})/.exec(text)
-    return hexMatch?.[1]?.toLowerCase()
-  }
-
-  /**
-   * 从行数据中获取字段值（支持多种字段名）
-   */
-  private getRowField(row: Record<string, any>, fieldNames: string[]): any {
-    for (const name of fieldNames) {
-      if (row[name] !== undefined && row[name] !== null) {
-        return row[name]
-      }
-    }
-    const lowerMap = new Map<string, string>()
-    for (const actual of Object.keys(row || {})) {
-      lowerMap.set(actual.toLowerCase(), actual)
-    }
-    for (const name of fieldNames) {
-      const actual = lowerMap.get(name.toLowerCase())
-      if (actual && row[actual] !== undefined && row[actual] !== null) {
-        return row[actual]
-      }
-    }
-    return undefined
-  }
-
-  /**
-   * 解码 packed_info 数据
-   */
-  private decodePackedInfo(raw: any): Buffer | null {
-    if (!raw) return null
-    if (Buffer.isBuffer(raw)) return raw
-    if (raw instanceof Uint8Array) return Buffer.from(raw)
-    if (Array.isArray(raw)) return Buffer.from(raw)
-    if (typeof raw === 'string') {
-      const trimmed = raw.trim()
-      if (/^[a-fA-F0-9]+$/.test(trimmed) && trimmed.length % 2 === 0) {
-        try {
-          return Buffer.from(trimmed, 'hex')
-        } catch { }
-      }
-      try {
-        return Buffer.from(trimmed, 'base64')
-      } catch { }
-    }
-    if (typeof raw === 'object' && Array.isArray(raw.data)) {
-      return Buffer.from(raw.data)
-    }
-    return null
-  }
-
-  /**
-   * 从 XML 中提取属性值
-   */
-  private extractXmlAttribute(xml: string, tagName: string, attrName: string): string {
-    // 匹配 <tagName ... attrName="value" ... /> 或 <tagName ... attrName="value" ...>
-    const regex = new RegExp(`<${tagName}[^>]*\\s${attrName}\\s*=\\s*['"]([^'"]*)['"']`, 'i')
-    const match = regex.exec(xml)
-    return match ? match[1] : ''
-  }
-
-  /**
-   * 解析引用消息
-   */
-  private parseQuoteMessage(content: string): { content?: string; sender?: string; imageMd5?: string; emojiMd5?: string; emojiCdnUrl?: string } {
-    try {
-      // 提取 refermsg 部分
-      const referMsgStart = content.indexOf('<refermsg>')
-      const referMsgEnd = content.indexOf('</refermsg>')
-
-      if (referMsgStart === -1 || referMsgEnd === -1) {
-        return {}
-      }
-
-      const referMsgXml = content.substring(referMsgStart, referMsgEnd + 11)
-
-      // 提取发送者名称
-      let displayName = this.extractXmlValue(referMsgXml, 'displayname')
-      // 过滤掉 wxid
-      if (displayName && this.looksLikeWxid(displayName)) {
-        displayName = ''
-      }
-
-      // 提取引用内容并解码
-      let referContent = this.extractXmlValue(referMsgXml, 'content')
-      referContent = this.decodeHtmlEntities(referContent)
-      const referType = this.extractXmlValue(referMsgXml, 'type')
-      let imageMd5: string | undefined
-
-      // 根据类型渲染引用内容
-      let displayContent = referContent
-      switch (referType) {
-        case '1':
-          // 文本消息，清理可能的 wxid
-          displayContent = this.sanitizeQuotedContent(referContent)
-          break
-        case '3':
-          displayContent = '[图片]'
-          // 尝试从引用的内容 XML 中提取图片 MD5（标签或属性）
-          const innerMd5 = this.extractXmlValue(referContent, 'md5') ||
-            (referContent.match(/\bmd5="([a-f0-9]+)"/i)?.[1])
-          imageMd5 = innerMd5 || undefined
-          break
-        case '34':
-          displayContent = '[语音]'
-          break
-        case '43':
-          displayContent = '[视频]'
-          break
-        case '47':
-          displayContent = '[动画表情]'
-          // 提取表情包信息用于引用显示
-          const emojiInfo = this.parseEmojiInfo(referContent)
-          return {
-            content: displayContent,
-            sender: displayName,
-            emojiMd5: emojiInfo.md5,
-            emojiCdnUrl: emojiInfo.cdnUrl
-          }
-        case '49':
-          const appTitle = this.extractXmlValue(referContent, 'title')
-          displayContent = appTitle || '[链接]'
-          break
-        case '42':
-          displayContent = '[名片]'
-          break
-        case '48':
-          displayContent = '[位置]'
-          break
-        default:
-          if (!referContent || referContent.includes('wxid_')) {
-            displayContent = '[消息]'
-          } else {
-            displayContent = this.sanitizeQuotedContent(referContent)
-          }
-      }
-
-      return {
-        content: displayContent,
-        sender: displayName || undefined,
-        imageMd5
-      }
-    } catch {
-      return {}
-    }
-  }
-
-  /**
-   * 判断是否像 wxid
-   */
-  private looksLikeWxid(text: string): boolean {
-    if (!text) return false
-    const trimmed = text.trim().toLowerCase()
-    if (trimmed.startsWith('wxid_')) return true
-    return /^wx[a-z0-9_-]{4,}$/.test(trimmed)
-  }
-
-  /**
-   * 清理引用内容中的 wxid
-   */
-  private sanitizeQuotedContent(content: string): string {
-    if (!content) return ''
-    let result = content
-    // 去掉 wxid_xxx
-    result = result.replace(/wxid_[A-Za-z0-9_-]{3,}/g, '')
-    // 去掉开头的分隔符
-    result = result.replace(/^[\s:：\-]+/, '')
-    // 折叠重复分隔符
-    result = result.replace(/[:：]{2,}/g, ':')
-    result = result.replace(/^[\s:：\-]+/, '')
-    // 标准化空白
-    result = result.replace(/\s+/g, ' ').trim()
-    return result
-  }
-
-  private parseVoipMessage(content: string): string {
-    const msg = this.extractXmlValue(content, 'msg')
-    return msg || '通话'
-  }
-
-  private getMessageTypeLabel(localType: number): string {
-    const labels: Record<number, string> = {
-      1: '[文本]',
-      3: '[图片]',
-      34: '[语音]',
-      42: '[名片]',
-      43: '[视频]',
-      47: '[表情]',
-      48: '[位置]',
-      49: '[链接]',
-      50: '[通话]',
-      10000: '[系统消息]'
-    }
-    return labels[localType] || '[消息]'
-  }
-
-  private extractXmlValue(xml: string, tagName: string): string {
-    const regex = new RegExp(`<${tagName}>([\\s\\S]*?)</${tagName}>`, 'i')
-    const match = regex.exec(xml)
-    if (match) {
-      return match[1].replace(/<!\[CDATA\[/g, '').replace(/\]\]>/g, '').trim()
-    }
-    return ''
-  }
-
-  private cleanSystemMessage(content: string): string {
-    // 移除 XML 声明
-    let cleaned = content.replace(/<\?xml[^?]*\?>/gi, '')
-    // 移除所有 XML/HTML 标签
-    cleaned = cleaned.replace(/<[^>]+>/g, '')
-    // 移除尾部的数字（如撤回消息后的时间戳）
-    cleaned = cleaned.replace(/\d+\s*$/, '')
-    // 清理多余空白
-    cleaned = cleaned.replace(/\s+/g, ' ').trim()
-    return cleaned || '[系统消息]'
-  }
-
-  private stripSenderPrefix(content: string): string {
-    return content.replace(/^[\s]*([a-zA-Z0-9_-]+):(?!\/\/)\s*/, '')
-  }
-
-  private decodeHtmlEntities(content: string): string {
-    const decodeCodePoint = (value: string, radix: 10 | 16, fallback: string): string => {
-      const codePoint = Number.parseInt(value, radix)
-      if (!Number.isFinite(codePoint) || codePoint < 0 || codePoint > 0x10FFFF) return fallback
-      try {
-        return String.fromCodePoint(codePoint)
-      } catch {
-        return fallback
-      }
-    }
-
-    return String(content || '')
-      .replace(/&amp;/g, '&')
-      .replace(/&lt;/g, '<')
-      .replace(/&gt;/g, '>')
-      .replace(/&quot;/g, '"')
-      .replace(/&#39;/g, "'")
-      .replace(/&apos;/g, "'")
-      .replace(/&nbsp;/g, ' ')
-      .replace(/&#x([0-9a-fA-F]+);/g, (entity, hex) => decodeCodePoint(hex, 16, entity))
-      .replace(/&#(\d+);/g, (entity, dec) => decodeCodePoint(dec, 10, entity))
-  }
-
-  private cleanString(str: string): string {
-    if (!str) return ''
-    if (Buffer.isBuffer(str)) {
-      str = str.toString('utf-8')
-    }
-    return String(str).replace(/[\x00-\x08\x0B-\x0C\x0E-\x1F\x7F-\x9F]/g, '')
-  }
-
-  /**
-   * 处理会话摘要，如果为空则根据消息类型生成默认摘要
-   */
-  private processSummary(summary: string, lastMsgType: number): string {
-    const cleaned = this.cleanString(summary)
-
-    // 如果摘要不为空且不是纯空白，直接返回
-    if (cleaned && cleaned.trim()) {
-      return cleaned
-    }
-
-    // 如果摘要为空，根据最后一条消息类型生成默认摘要
-    return this.getMessageTypeLabel(lastMsgType)
-  }
-
-  /**
-   * 解码消息内容（处理 BLOB 和压缩数据）
-   */
-  private decodeMessageContent(messageContent: any, compressContent: any): string {
-    // 优先使用 compress_content
-    let content = this.decodeMaybeCompressed(compressContent)
-    if (!content || content.length === 0) {
-      content = this.decodeMaybeCompressed(messageContent)
-    }
-    return content
-  }
-
-  /**
-   * 尝试解码可能压缩的内容
-   */
-  private decodeMaybeCompressed(raw: any): string {
-    if (!raw) return ''
-
-    // 如果是 Buffer/Uint8Array
-    if (Buffer.isBuffer(raw)) {
-      return this.decodeBinaryContent(raw)
-    }
-
-    // 如果是字符串
-    if (typeof raw === 'string') {
-      if (raw.length === 0) return ''
-
-      // 检查是否是 hex 编码
-      // 只有当字符串足够长（超过16字符）且看起来像 hex 时才尝试解码
-      // 短字符串（如 "123456" 等纯数字）容易被误判为 hex
-      if (raw.length > 16 && this.looksLikeHex(raw)) {
-        const bytes = Buffer.from(raw, 'hex')
-        if (bytes.length > 0) {
-          return this.decodeBinaryContent(bytes)
-        }
-      }
-
-      // 检查是否是 base64 编码
-      // 只有当字符串足够长（超过16字符）且看起来像 base64 时才尝试解码
-      // 短字符串（如 "test", "home" 等）容易被误判为 base64
-      if (raw.length > 16 && this.looksLikeBase64(raw)) {
-        try {
-          const bytes = Buffer.from(raw, 'base64')
-          return this.decodeBinaryContent(bytes)
-        } catch { }
-      }
-
-      // 普通字符串
-      return raw
-    }
-
-    return ''
-  }
-
-  /**
-   * 解码二进制内容（处理 zstd 压缩）
-   */
-  private decodeBinaryContent(data: Buffer): string {
-    if (data.length === 0) return ''
-
-    try {
-      // 检查是否是 zstd 压缩数据 (magic number: 0xFD2FB528)
-      if (data.length >= 4) {
-        const magic = data.readUInt32LE(0)
-        if (magic === 0xFD2FB528) {
-          // zstd 压缩，需要解压
-          try {
-            const decompressed = fzstd.decompress(data)
-            return Buffer.from(decompressed).toString('utf-8')
-          } catch (e) {
-            console.error('zstd 解压失败:', e)
-          }
-        }
-      }
-
-      // 尝试直接 UTF-8 解码
-      const decoded = data.toString('utf-8')
-      // 检查是否有太多替换字符
-      const replacementCount = (decoded.match(/\uFFFD/g) || []).length
-      if (replacementCount < decoded.length * 0.2) {
-        return decoded.replace(/\uFFFD/g, '')
-      }
-
-      // 尝试 latin1 解码
-      return data.toString('latin1')
-    } catch {
-      return ''
-    }
-  }
-
-  /**
-   * 检查是否像 hex 编码
-   */
-  private looksLikeHex(s: string): boolean {
-    if (s.length % 2 !== 0) return false
-    return /^[0-9a-fA-F]+$/.test(s)
-  }
-
-  /**
-   * 检查是否像 base64 编码
-   */
-  private looksLikeBase64(s: string): boolean {
-    if (s.length % 4 !== 0) return false
-    return /^[A-Za-z0-9+/=]+$/.test(s)
-  }
-
-  private shouldKeepSession(username: string): boolean {
-    if (!username) return false
-    if (username.startsWith('gh_')) return false
-
-    // @placeholder_foldgroup 是微信"折叠的聊天"聚合虚拟会话，保留并由前端渲染
-
-    const excludeList = [
-      'weixin', 'qqmail', 'fmessage', 'medianote', 'floatbottle',
-      'newsapp', 'brandsessionholder', 'brandservicesessionholder',
-      'notifymessage', 'opencustomerservicemsg', 'notification_messages',
-      'userexperience_alarm'
-    ]
-
-    for (const prefix of excludeList) {
-      if (username.startsWith(prefix) || username === prefix) return false
-    }
-
-    // 仅过滤微信客服（@kefu.openim），保留企业微信用户（@openim）以便在聊天列表显示并加标识
-    if (username.includes('@kefu.openim')) return false
-    if (username.includes('service_')) return false
-
-    return true
-  }
 
   async getContact(username: string): Promise<Contact | null> {
     try {
@@ -3561,7 +2567,7 @@ class ChatService extends EventEmitter {
 
       // 获取当前用户 wxid，用于识别"自己"
       const myWxid = this.configService.get('myWxid')
-      const cleanedMyWxid = myWxid ? this.cleanAccountDirName(myWxid) : ''
+      const cleanedMyWxid = myWxid ? cleanAccountDirName(myWxid) : ''
 
       // 解析名称：自己 > 群昵称 > 备注 > 昵称 > alias > wxid
       const resolveName = async (username: string): Promise<string> => {
@@ -3690,7 +2696,7 @@ class ChatService extends EventEmitter {
 
       if (!row) {
         // 如果找不到，尝试用清理后的 wxid
-        const cleanedWxid = this.cleanAccountDirName(myWxid)
+        const cleanedWxid = cleanAccountDirName(myWxid)
 
         const row2 = await dbAdapter.get<any>(
           'contact',
@@ -3779,7 +2785,7 @@ class ChatService extends EventEmitter {
 
       if (!row) {
         // 如果找不到，尝试用清理后的 wxid
-        const cleanedWxid = this.cleanAccountDirName(myWxid)
+        const cleanedWxid = cleanAccountDirName(myWxid)
         row = await dbAdapter.get<any>(
           'contact',
           '',
@@ -3789,7 +2795,7 @@ class ChatService extends EventEmitter {
       }
 
       if (!row) {
-        const cleanedWxid = this.cleanAccountDirName(myWxid)
+        const cleanedWxid = cleanAccountDirName(myWxid)
         const fallbackAvatarUrl = await this.getAvatarFromHeadImageDb(cleanedWxid || myWxid) || await this.getAvatarFromHeadImageDb(myWxid)
         return {
           success: true,
@@ -4053,7 +3059,7 @@ class ChatService extends EventEmitter {
         return null
       }
 
-      const accountDirName = this.findAccountDir(dbPath, myWxid)
+      const accountDirName = findAccountDir(dbPath, myWxid)
       if (!accountDirName) {
         return null
       }
@@ -4174,7 +3180,7 @@ class ChatService extends EventEmitter {
         return null
       }
 
-      const accountDirName = this.findAccountDir(dbPath, myWxid)
+      const accountDirName = findAccountDir(dbPath, myWxid)
       if (!accountDirName) {
         return null
       }
@@ -4316,11 +3322,11 @@ class ChatService extends EventEmitter {
               }
 
               for (const row of rows) {
-                const content = this.decodeMessageContent(row.message_content, row.compress_content)
+                const content = decodeMessageContent(row.message_content, row.compress_content)
                 if (!content) continue
 
                 // 解析表情信息
-                const emojiInfo = this.parseEmojiInfo(content)
+                const emojiInfo = parseEmojiInfo(content)
 
                 // 检查 MD5 是否匹配（不区分大小写）
                 if (emojiInfo.md5 && emojiInfo.md5.toLowerCase() === md5.toLowerCase()) {
@@ -5240,20 +4246,6 @@ class ChatService extends EventEmitter {
   }
 
   /**
-   * 解析语音时长（秒）
-   */
-  private parseVoiceDuration(content: string): number | undefined {
-    if (!content) return undefined
-    // 匹配 voicelength, length, time, playlength 等字段（毫秒）
-    const match = /(voicelength|length|time|playlength)\s*=\s*['"]?([0-9]+(?:\.[0-9]+)?)['"]?/i.exec(content)
-    if (!match) return undefined
-    const ms = parseFloat(match[2])
-    if (isNaN(ms) || ms <= 0) return undefined
-    // 转换为秒，保留1位小数
-    return Math.round(ms / 100) / 10
-  }
-
-  /**
    * 查找 media 数据库文件
    */
   private findMediaDbs(): string[] {
@@ -5293,7 +4285,7 @@ class ChatService extends EventEmitter {
   public async getMessageByLocalId(sessionId: string, localId: number): Promise<{ success: boolean; message?: Message; error?: string }> {
     const dbTablePairs = await this.findSessionTables(sessionId)
     const myWxid = this.configService.get('myWxid')
-    const cleanedMyWxid = myWxid ? this.cleanAccountDirName(myWxid) : ''
+    const cleanedMyWxid = myWxid ? cleanAccountDirName(myWxid) : ''
 
     for (const { tableName, dbPath } of dbTablePairs) {
       try {
@@ -5333,7 +4325,7 @@ class ChatService extends EventEmitter {
         }
 
         if (row) {
-          const content = this.decodeMessageContent(row.message_content, row.compress_content)
+          const content = decodeMessageContent(row.message_content, row.compress_content)
           const localType = this.resolveMessageLocalType(row, 1)
           const isSend = this.resolveRowIsSend(row, row.sender_username || null)
 
@@ -5353,22 +4345,22 @@ class ChatService extends EventEmitter {
           let voiceDuration: number | undefined
 
           if (localType === 47 && content) {
-            const emojiInfo = this.parseEmojiInfo(content)
+            const emojiInfo = parseEmojiInfo(content)
             emojiCdnUrl = emojiInfo.cdnUrl
             emojiMd5 = emojiInfo.md5
             emojiProductId = emojiInfo.productId
           } else if (localType === 3 && content) {
-            const imageInfo = this.parseImageInfo(content)
+            const imageInfo = parseImageInfo(content)
             imageMd5 = imageInfo.md5
-            imageDatName = this.parseImageDatNameFromRow(row)
+            imageDatName = parseImageDatNameFromRow(row)
             isLivePhoto = imageInfo.isLivePhoto
           } else if (localType === 43 && content) {
-            videoMd5 = this.parseVideoMd5(content)
-            videoDuration = this.parseVideoDuration(content)
+            videoMd5 = parseVideoMd5(content)
+            videoDuration = parseVideoDuration(content)
           } else if (localType === 34 && content) {
-            voiceDuration = this.parseVoiceDuration(content)
+            voiceDuration = parseVoiceDuration(content)
           } else if (localType === 244813135921 || (content && content.includes('<type>57</type>'))) {
-            const quoteInfo = this.parseQuoteMessage(content)
+            const quoteInfo = parseQuoteMessage(content)
             quotedContent = quoteInfo.content
             quotedSender = quoteInfo.sender
             quotedImageMd5 = quoteInfo.imageMd5
@@ -5381,7 +4373,7 @@ class ChatService extends EventEmitter {
           let fileExt: string | undefined
           let fileMd5: string | undefined
           if (localType === 49 && content) {
-            const fileInfo = this.parseFileInfo(content)
+            const fileInfo = parseFileInfo(content)
             fileName = fileInfo.fileName
             fileSize = fileInfo.fileSize
             fileExt = fileInfo.fileExt
@@ -5390,19 +4382,19 @@ class ChatService extends EventEmitter {
 
           let chatRecordList: ChatRecordItem[] | undefined
           if (content) {
-            const xmlType = this.extractXmlValue(content, 'type')
+            const xmlType = extractXmlValue(content, 'type')
             if (xmlType === '19' || localType === 49) {
-              chatRecordList = this.parseChatHistory(content)
+              chatRecordList = parseChatHistory(content)
             }
           }
 
           let transferPayerUsername: string | undefined
           let transferReceiverUsername: string | undefined
           if ((localType === 49 || localType === 8589934592049) && content) {
-            const xmlType = this.extractXmlValue(content, 'type')
+            const xmlType = extractXmlValue(content, 'type')
             if (xmlType === '2000') {
-              transferPayerUsername = this.extractXmlValue(content, 'payer_username') || undefined
-              transferReceiverUsername = this.extractXmlValue(content, 'receiver_username') || undefined
+              transferPayerUsername = extractXmlValue(content, 'payer_username') || undefined
+              transferReceiverUsername = extractXmlValue(content, 'receiver_username') || undefined
             }
           }
 
@@ -5416,7 +4408,7 @@ class ChatService extends EventEmitter {
               sortSeq: row.sort_seq || 0,
               isSend,
               senderUsername: row.sender_username || null,
-              parsedContent: this.parseMessageContent(content, localType),
+              parsedContent: parseMessageContent(content, localType),
               rawContent: content,
               emojiCdnUrl,
               emojiMd5,
@@ -5463,7 +4455,7 @@ class ChatService extends EventEmitter {
     try {
       const hasName2IdTable = await this.checkTableExists(dbPath, 'Name2Id')
       const myWxid = this.configService.get('myWxid')
-      const cleanedMyWxid = myWxid ? this.cleanAccountDirName(myWxid) : ''
+      const cleanedMyWxid = myWxid ? cleanAccountDirName(myWxid) : ''
       const myRowId = await this.resolveMyRowId(dbPath, myWxid, cleanedMyWxid, hasName2IdTable)
       const qTable = quoteIdent(tableName)
 
@@ -5635,7 +4627,7 @@ class ChatService extends EventEmitter {
               )
               for (const r of rows) {
                 if (this.resolveMessageLocalType(r, 1) !== 34) continue
-                const lid = this.coerceRowNumber(this.getRowField(r, ['local_id', 'localId', 'id', 'ID']), 0)
+                const lid = coerceRowNumber(getRowField(r, ['local_id', 'localId', 'id', 'ID']), 0)
                 if (lid > 0) allLocalIds.push(lid)
               }
             } catch { }
