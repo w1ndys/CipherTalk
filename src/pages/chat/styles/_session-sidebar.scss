@@ -218,9 +218,23 @@
   display: flex;
   align-items: center;
   justify-content: center;
+  overflow: visible;
 
   svg {
     color: #fff;
+  }
+
+  .fold-group-unread-dot {
+    position: absolute;
+    top: -2px;
+    right: -2px;
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background: #f56c6c;
+    border: 2px solid var(--bg-primary);
+    box-sizing: content-box;
+    pointer-events: none;
   }
 }
 

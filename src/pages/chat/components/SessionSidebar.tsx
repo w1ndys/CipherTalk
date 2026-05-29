@@ -179,7 +179,8 @@ export const SessionRow = (props: RowComponentProps<SessionRowData>) => {
   // 折叠的聊天 虚拟会话项（来自 @placeholder_foldgroup）
   if (session.isFoldGroup) {
     const summary = (session.summary || '').split('\n')[0] || '暂无消息'
-    const unread = item.foldGroupUnreadTotal ?? session.unreadCount ?? 0
+    const foldedUnread = item.foldGroupUnreadTotal ?? 0
+    const hasUnread = foldedUnread > 0
     return (
       <div
         style={style}
@@ -188,6 +189,7 @@ export const SessionRow = (props: RowComponentProps<SessionRowData>) => {
       >
         <div className="session-avatar fold-group-avatar" style={{ width: 48, height: 48 }}>
           <MessageSquareDashed size={26} />
+          {hasUnread && <span className="fold-group-unread-dot" aria-label="有新消息" />}
         </div>
         <div className="session-info">
           <div className="session-top">
@@ -200,9 +202,6 @@ export const SessionRow = (props: RowComponentProps<SessionRowData>) => {
             <span className="session-summary">
               <MessageContent content={summary} disableLinks={true} />
             </span>
-            {unread > 0 && (
-              <span className="unread-badge">{unread > 99 ? '99+' : unread}</span>
-            )}
           </div>
         </div>
       </div>
