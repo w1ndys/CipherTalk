@@ -8,10 +8,10 @@ import * as fzstd from 'fzstd'
 import { ChatServiceState } from './chat/state'
 import { getAppPath, getDocumentsPath, getExePath, isElectronPackaged } from './runtimePaths'
 import { dbAdapter } from './dbAdapter'
-import { findMessageDbPaths, getDbStoragePath } from './dbStoragePaths'
+import { getDbStoragePath } from './dbStoragePaths'
 import { wcdbService } from './wcdbService'
 import { imageDecryptService } from './imageDecryptService'
-import { clearMessageDbScannerCache, getMessageTableColumns } from './messageDbScanner'
+import { getMessageTableColumns } from './messageDbScanner'
 import { buildMessageStatsWhere, quoteIdent, recordStatsError } from './statsSqlHelpers'
 import type { StatsPartialError } from './statsConstants'
 import {
@@ -29,7 +29,6 @@ import {
   detectContactInfoType,
   emojiCache,
   emojiDownloading,
-  SESSION_TABLE_CACHE_DURATION,
 } from './chat/constants'
 import {
   cleanAccountDirName,
@@ -75,6 +74,13 @@ import {
   extractWeComWordingRef,
   extractWeComCorpName,
 } from './chat/weComParser'
+import {
+  findMessageDbs,
+  findSessionTables,
+  checkTableExists,
+  resolveMyRowId,
+  refreshMessageDbCache as refreshMessageDbCacheImpl,
+} from './chat/tableResolver'
 
 export type {
   ChatSession,
@@ -521,225 +527,12 @@ class ChatService extends EventEmitter {
   }
 
   /**
-   * 查找消息数据库（增量扫描：返回所有数据库，包括新发现的）
-   */
-  private findMessageDbs(): { allDbs: string[]; newDbs: string[] } {
-    const allDbs: string[] = []
-    const newDbs: string[] = []
-
-    try {
-      for (const fullPath of findMessageDbPaths()) {
-        allDbs.push(fullPath)
-        if (!this.state.knownMessageDbFiles.has(fullPath)) {
-          newDbs.push(fullPath)
-          this.state.knownMessageDbFiles.add(fullPath)
-        }
-      }
-    } catch { }
-
-    return { allDbs, newDbs }
-  }
-
-  /**
    * 刷新消息数据库缓存（解密后调用）
    */
   refreshMessageDbCache(): void {
-    this.state.knownMessageDbFiles.clear()
-    this.state.sessionTableCache.clear()
-    this.state.sessionTableCacheTime = 0
-    this.state.myRowIdCache.clear()
-    this.state.hasName2IdCache.clear()
-    this.state.contactColumnsCache = null
-    this.state.weComCorpNameCache.clear()
-    this.state.hasOpenImWordingTable = null
-    clearMessageDbScannerCache()
+    refreshMessageDbCacheImpl(this.state)
     // 尝试推送增量消息（fire-and-forget，避免把同步方法改成 async）
     void this.checkNewMessagesForCurrentSession()
-  }
-
-  /**
-   * 计算消息表名 hash
-   */
-  private getTableNameHash(sessionId: string): string {
-    const crypto = require('crypto')
-    const hash = crypto.createHash('md5').update(sessionId).digest('hex')
-    return hash
-  }
-
-  /**
-   * 从消息表名中提取会话 hash（兼容大小写与后缀）
-   */
-  private extractTableHash(tableName: string): string | null {
-    const match = tableName.match(/msg_([0-9a-f]{32})/i)
-    if (match?.[1]) return match[1].toLowerCase()
-    return null
-  }
-
-  /**
-   * 在消息数据库中查找会话的消息表（带缓存）
-   */
-  private async findMessageTable(dbPath: string, sessionId: string): Promise<string | null> {
-    try {
-      const tables = await dbAdapter.all<any>(
-        'message',
-        dbPath,
-        "SELECT name FROM sqlite_master WHERE type='table' AND lower(name) LIKE 'msg_%'"
-      )
-
-      const hash = this.getTableNameHash(sessionId).toLowerCase()
-
-      for (const table of tables) {
-        const name = table.name as string
-
-        // 优先精确提取 hash 匹配
-        const tableHash = this.extractTableHash(name)
-        if (tableHash && tableHash === hash) {
-          return name
-        }
-
-      }
-
-      if (tables.length > 0 && process.env.CIPHERTALK_CHAT_DEBUG === '1') {
-        const sample = tables.slice(0, 8).map(t => t.name).join(', ')
-        console.warn(`[ChatService] 未匹配到消息表: session=${sessionId}, hash=${hash}, tables=${tables.length}, sample=[${sample}]`)
-      }
-    } catch { }
-
-    return null
-  }
-
-  /**
-   * 查找会话对应的所有数据库和表（带缓存过期）
-   *
-   * 缓存策略：
-   * 1. 缓存60秒后自动过期，重新扫描
-   * 2. 如果有新数据库文件，在新数据库中查找并追加到缓存
-   * 3. 如果会话未缓存，全量扫描所有数据库
-   */
-  private async findSessionTables(sessionId: string): Promise<{ tableName: string; dbPath: string }[]> {
-    const now = Date.now()
-    const { allDbs, newDbs } = this.findMessageDbs()
-    if (allDbs.length === 0) return []
-
-    // 检查缓存是否过期
-    const cacheExpired = (now - this.state.sessionTableCacheTime) > SESSION_TABLE_CACHE_DURATION
-    if (cacheExpired) {
-      this.state.sessionTableCache.clear()
-      this.state.sessionTableCacheTime = now
-    }
-
-    // 获取已缓存的结果
-    let cached = this.state.sessionTableCache.get(sessionId)
-
-    // 情况1：有缓存，且有新数据库 -> 只在新数据库中查找
-    if (cached && cached.length > 0 && newDbs.length > 0) {
-      const newPairs: { dbPath: string; tableName: string }[] = []
-
-      for (const dbPath of newDbs) {
-        const tableName = await this.findMessageTable(dbPath, sessionId)
-        if (tableName) {
-          newPairs.push({ dbPath, tableName })
-        }
-      }
-
-      // 合并到缓存
-      if (newPairs.length > 0) {
-        cached = [...cached, ...newPairs]
-        this.state.sessionTableCache.set(sessionId, cached)
-      }
-    }
-
-    // 情况2：有缓存，没有新数据库 -> 直接使用缓存
-    if (cached && cached.length > 0) {
-      return cached.map(item => ({ tableName: item.tableName, dbPath: item.dbPath }))
-    }
-
-    // 情况3：没有缓存 -> 全量扫描所有数据库
-    const dbTablePairs: { tableName: string; dbPath: string }[] = []
-
-    for (const dbPath of allDbs) {
-      const tableName = await this.findMessageTable(dbPath, sessionId)
-      if (tableName) {
-        dbTablePairs.push({ tableName, dbPath })
-      }
-    }
-
-    // 存入缓存
-    if (dbTablePairs.length > 0) {
-      this.state.sessionTableCache.set(sessionId, dbTablePairs.map(p => ({ dbPath: p.dbPath, tableName: p.tableName })))
-    }
-
-    return dbTablePairs
-  }
-
-  /**
-   * 检查表是否存在（带缓存）
-   */
-  private async checkTableExists(dbPath: string, tableName: string): Promise<boolean> {
-    const cacheKey = `${dbPath}:${tableName}`
-    const cached = this.state.hasName2IdCache.get(cacheKey)
-    if (cached !== undefined) return cached
-
-    try {
-      const result = await dbAdapter.get<any>(
-        'message',
-        dbPath,
-        "SELECT name FROM sqlite_master WHERE type='table' AND name = ?",
-        [tableName]
-      )
-      const exists = !!result
-      this.state.hasName2IdCache.set(cacheKey, exists)
-      return exists
-    } catch {
-      this.state.hasName2IdCache.set(cacheKey, false)
-      return false
-    }
-  }
-
-  /**
-   * 解析当前用户在 Name2Id 表中的 rowid（带缓存）。
-   * 行为与原各个 query 方法中内联的逻辑完全一致：
-   *   - 优先按原始 myWxid 查
-   *   - 否则按清理后的 cleanedMyWxid 查
-   *   - 以 dbPath:<key> 作为缓存 key
-   */
-  private async resolveMyRowId(dbPath: string, myWxid: string, cleanedMyWxid: string, hasName2IdTable: boolean): Promise<number | null> {
-    if (!myWxid || !hasName2IdTable) return null
-
-    const cacheKeyOriginal = `${dbPath}:${myWxid}`
-    const cachedRowIdOriginal = this.state.myRowIdCache.get(cacheKeyOriginal)
-    if (cachedRowIdOriginal !== undefined) return cachedRowIdOriginal
-
-    const row = await dbAdapter.get<any>(
-      'message',
-      dbPath,
-      'SELECT rowid FROM Name2Id WHERE user_name = ?',
-      [myWxid]
-    )
-    if (row?.rowid) {
-      const rid = row.rowid as number
-      this.state.myRowIdCache.set(cacheKeyOriginal, rid)
-      return rid
-    }
-
-    if (cleanedMyWxid && cleanedMyWxid !== myWxid) {
-      const cacheKeyCleaned = `${dbPath}:${cleanedMyWxid}`
-      const cachedRowIdCleaned = this.state.myRowIdCache.get(cacheKeyCleaned)
-      if (cachedRowIdCleaned !== undefined) return cachedRowIdCleaned
-
-      const row2 = await dbAdapter.get<any>(
-        'message',
-        dbPath,
-        'SELECT rowid FROM Name2Id WHERE user_name = ?',
-        [cleanedMyWxid]
-      )
-      const rid = row2?.rowid ?? null
-      this.state.myRowIdCache.set(cacheKeyCleaned, rid)
-      return rid
-    }
-
-    this.state.myRowIdCache.set(cacheKeyOriginal, null)
-    return null
   }
 
   private buildIdentityKeys(raw: string): string[] {
@@ -1053,7 +846,7 @@ class ChatService extends EventEmitter {
       const cleanedMyWxid = myWxid ? cleanAccountDirName(myWxid) : ''
 
       // 使用缓存查找会话对应的数据库和表
-      const dbTablePairs = await this.findSessionTables(sessionId)
+      const dbTablePairs = await findSessionTables(this.state, sessionId)
       if (dbTablePairs.length === 0) {
         return { success: false, error: '未找到该会话的消息表' }
       }
@@ -1064,10 +857,10 @@ class ChatService extends EventEmitter {
 
       for (const { tableName, dbPath } of dbTablePairs) {
         try {
-          const hasName2IdTable = await this.checkTableExists(dbPath, 'Name2Id')
+          const hasName2IdTable = await checkTableExists(this.state, dbPath, 'Name2Id')
 
           // 获取当前用户的 rowid（使用缓存）
-          const myRowId = await this.resolveMyRowId(dbPath, myWxid, cleanedMyWxid, hasName2IdTable)
+          const myRowId = await resolveMyRowId(this.state, dbPath, myWxid, cleanedMyWxid, hasName2IdTable)
 
           // 构造查询 SQL（与原 getPreparedStatement 语义一致）
           let sql: string
@@ -1338,7 +1131,7 @@ class ChatService extends EventEmitter {
 
       const myWxid = this.state.configService.get('myWxid')
       const cleanedMyWxid = myWxid ? cleanAccountDirName(myWxid) : ''
-      const dbTablePairs = await this.findSessionTables(sessionId)
+      const dbTablePairs = await findSessionTables(this.state, sessionId)
 
       if (dbTablePairs.length === 0) {
         return { success: false, error: '未找到该会话的消息表' }
@@ -1349,8 +1142,8 @@ class ChatService extends EventEmitter {
 
       for (const { tableName, dbPath } of dbTablePairs) {
         try {
-          const hasName2IdTable = await this.checkTableExists(dbPath, 'Name2Id')
-          const myRowId = await this.resolveMyRowId(dbPath, myWxid, cleanedMyWxid, hasName2IdTable)
+          const hasName2IdTable = await checkTableExists(this.state, dbPath, 'Name2Id')
+          const myRowId = await resolveMyRowId(this.state, dbPath, myWxid, cleanedMyWxid, hasName2IdTable)
 
           const whereParts: string[] = []
           const params: Array<number> = []
@@ -1463,7 +1256,7 @@ class ChatService extends EventEmitter {
       const myWxid = this.state.configService.get('myWxid')
       const cleanedMyWxid = myWxid ? cleanAccountDirName(myWxid) : ''
 
-      const dbTablePairs = await this.findSessionTables(sessionId)
+      const dbTablePairs = await findSessionTables(this.state, sessionId)
       if (dbTablePairs.length === 0) {
         return { success: false, error: '未找到该会话的消息表' }
       }
@@ -1475,8 +1268,8 @@ class ChatService extends EventEmitter {
 
       for (const { tableName, dbPath } of dbTablePairs) {
         try {
-          const hasName2IdTable = await this.checkTableExists(dbPath, 'Name2Id')
-          const myRowId = await this.resolveMyRowId(dbPath, myWxid, cleanedMyWxid, hasName2IdTable)
+          const hasName2IdTable = await checkTableExists(this.state, dbPath, 'Name2Id')
+          const myRowId = await resolveMyRowId(this.state, dbPath, myWxid, cleanedMyWxid, hasName2IdTable)
 
           let sql: string
           let rows: any[]
@@ -1592,7 +1385,7 @@ class ChatService extends EventEmitter {
       const myWxid = this.state.configService.get('myWxid')
       const cleanedMyWxid = myWxid ? cleanAccountDirName(myWxid) : ''
 
-      const dbTablePairs = await this.findSessionTables(sessionId)
+      const dbTablePairs = await findSessionTables(this.state, sessionId)
       if (dbTablePairs.length === 0) {
         return { success: false, error: '未找到该会话的消息表' }
       }
@@ -1604,8 +1397,8 @@ class ChatService extends EventEmitter {
 
       for (const { tableName, dbPath } of dbTablePairs) {
         try {
-          const hasName2IdTable = await this.checkTableExists(dbPath, 'Name2Id')
-          const myRowId = await this.resolveMyRowId(dbPath, myWxid, cleanedMyWxid, hasName2IdTable)
+          const hasName2IdTable = await checkTableExists(this.state, dbPath, 'Name2Id')
+          const myRowId = await resolveMyRowId(this.state, dbPath, myWxid, cleanedMyWxid, hasName2IdTable)
 
           let sql: string
           let rows: any[]
@@ -1844,7 +1637,7 @@ class ChatService extends EventEmitter {
 
       const myWxid = this.state.configService.get('myWxid')
       const cleanedMyWxid = myWxid ? cleanAccountDirName(myWxid) : ''
-      const dbTablePairs = await this.findSessionTables(sessionId)
+      const dbTablePairs = await findSessionTables(this.state, sessionId)
 
       if (dbTablePairs.length === 0) {
         return { success: false, error: '未找到该会话的消息表' }
@@ -1855,8 +1648,8 @@ class ChatService extends EventEmitter {
 
       for (const { tableName, dbPath } of dbTablePairs) {
         try {
-          const hasName2IdTable = await this.checkTableExists(dbPath, 'Name2Id')
-          const myRowId = await this.resolveMyRowId(dbPath, myWxid, cleanedMyWxid, hasName2IdTable)
+          const hasName2IdTable = await checkTableExists(this.state, dbPath, 'Name2Id')
+          const myRowId = await resolveMyRowId(this.state, dbPath, myWxid, cleanedMyWxid, hasName2IdTable)
 
           const whereParts: string[] = []
           const params: Array<number> = []
@@ -1967,7 +1760,7 @@ class ChatService extends EventEmitter {
       const cleanedMyWxid = myWxid ? cleanAccountDirName(myWxid) : ''
 
       // 使用与 getMessages 相同的方法查找会话对应的表
-      const dbTablePairs = await this.findSessionTables(sessionId)
+      const dbTablePairs = await findSessionTables(this.state, sessionId)
       if (dbTablePairs.length === 0) {
         return { success: false, error: '未找到该会话的消息表' }
       }
@@ -1976,8 +1769,8 @@ class ChatService extends EventEmitter {
 
       for (const { tableName, dbPath } of dbTablePairs) {
         try {
-          const hasName2IdTable = await this.checkTableExists(dbPath, 'Name2Id')
-          const myRowId = await this.resolveMyRowId(dbPath, myWxid, cleanedMyWxid, hasName2IdTable)
+          const hasName2IdTable = await checkTableExists(this.state, dbPath, 'Name2Id')
+          const myRowId = await resolveMyRowId(this.state, dbPath, myWxid, cleanedMyWxid, hasName2IdTable)
 
           // 查询所有语音消息 (localType = 34)
           // 检查表结构
@@ -2079,7 +1872,7 @@ class ChatService extends EventEmitter {
     sessionId: string
   ): Promise<{ success: boolean; images?: { imageMd5?: string; imageDatName?: string; createTime?: number }[]; error?: string }> {
     try {
-      const dbTablePairs = await this.findSessionTables(sessionId)
+      const dbTablePairs = await findSessionTables(this.state, sessionId)
       if (dbTablePairs.length === 0) {
         return { success: false, error: '未找到该会话的消息表' }
       }
@@ -2156,7 +1949,7 @@ class ChatService extends EventEmitter {
       const myWxid = this.state.configService.get('myWxid')
       const cleanedMyWxid = myWxid ? cleanAccountDirName(myWxid) : ''
 
-      const dbTablePairs = await this.findSessionTables(sessionId)
+      const dbTablePairs = await findSessionTables(this.state, sessionId)
       if (dbTablePairs.length === 0) {
         return { success: false, error: '未找到该会话的消息表' }
       }
@@ -2171,8 +1964,8 @@ class ChatService extends EventEmitter {
 
       for (const { tableName, dbPath } of dbTablePairs) {
         try {
-          const hasName2IdTable = await this.checkTableExists(dbPath, 'Name2Id')
-          const myRowId = await this.resolveMyRowId(dbPath, myWxid, cleanedMyWxid, hasName2IdTable)
+          const hasName2IdTable = await checkTableExists(this.state, dbPath, 'Name2Id')
+          const myRowId = await resolveMyRowId(this.state, dbPath, myWxid, cleanedMyWxid, hasName2IdTable)
 
           // 查询目标日期或之后的消息，按时间升序获取
           let sql: string
@@ -2358,7 +2151,7 @@ class ChatService extends EventEmitter {
     month: number
   ): Promise<{ success: boolean; dates?: string[]; error?: string }> {
     try {
-      const dbTablePairs = await this.findSessionTables(sessionId)
+      const dbTablePairs = await findSessionTables(this.state, sessionId)
       if (dbTablePairs.length === 0) {
         return { success: true, dates: [] }
       }
@@ -3241,7 +3034,7 @@ class ChatService extends EventEmitter {
   private async findEmojiUrlFromMessages(md5: string, createTime?: number): Promise<string | null> {
     try {
       // 查找所有消息数据库
-      const { allDbs } = this.findMessageDbs()
+      const { allDbs } = findMessageDbs(this.state)
 
       if (allDbs.length === 0) return null
 
@@ -3913,7 +3706,7 @@ class ChatService extends EventEmitter {
       }
 
       // 查找所有包含该会话消息的数据库和表
-      const dbTablePairs = await this.findSessionTables(sessionId)
+      const dbTablePairs = await findSessionTables(this.state, sessionId)
       const messageTables: { dbName: string; tableName: string; count: number }[] = []
       let totalMessageCount = 0
       let firstMessageTime: number | undefined
@@ -4077,14 +3870,14 @@ class ChatService extends EventEmitter {
    * 获取单条消息
    */
   public async getMessageByLocalId(sessionId: string, localId: number): Promise<{ success: boolean; message?: Message; error?: string }> {
-    const dbTablePairs = await this.findSessionTables(sessionId)
+    const dbTablePairs = await findSessionTables(this.state, sessionId)
     const myWxid = this.state.configService.get('myWxid')
     const cleanedMyWxid = myWxid ? cleanAccountDirName(myWxid) : ''
 
     for (const { tableName, dbPath } of dbTablePairs) {
       try {
-        const hasName2IdTable = await this.checkTableExists(dbPath, 'Name2Id')
-        const myRowId = await this.resolveMyRowId(dbPath, myWxid, cleanedMyWxid, hasName2IdTable)
+        const hasName2IdTable = await checkTableExists(this.state, dbPath, 'Name2Id')
+        const myRowId = await resolveMyRowId(this.state, dbPath, myWxid, cleanedMyWxid, hasName2IdTable)
 
         let row: any
         if (hasName2IdTable && myRowId !== null) {
@@ -4247,10 +4040,10 @@ class ChatService extends EventEmitter {
     dbPath: string
   ): Promise<{ success: boolean; message?: Message; error?: string }> {
     try {
-      const hasName2IdTable = await this.checkTableExists(dbPath, 'Name2Id')
+      const hasName2IdTable = await checkTableExists(this.state, dbPath, 'Name2Id')
       const myWxid = this.state.configService.get('myWxid')
       const cleanedMyWxid = myWxid ? cleanAccountDirName(myWxid) : ''
-      const myRowId = await this.resolveMyRowId(dbPath, myWxid, cleanedMyWxid, hasName2IdTable)
+      const myRowId = await resolveMyRowId(this.state, dbPath, myWxid, cleanedMyWxid, hasName2IdTable)
       const qTable = quoteIdent(tableName)
 
       let row: any
@@ -4410,7 +4203,7 @@ class ChatService extends EventEmitter {
       const getSameTimeIndex = async (): Promise<number> => {
         if (sameTimeIndex !== null) return sameTimeIndex
         try {
-          const dbTablePairs = await this.findSessionTables(sessionId)
+          const dbTablePairs = await findSessionTables(this.state, sessionId)
           const allLocalIds: number[] = []
           for (const { tableName, dbPath } of dbTablePairs) {
             try {
@@ -4720,7 +4513,7 @@ class ChatService extends EventEmitter {
    * 解析会话对应的消息表路径（可能跨多个 .db），供 randomMomentService 等模块使用。
    */
   public async getSessionMessageTables(sessionId: string): Promise<{ tableName: string; dbPath: string }[]> {
-    return this.findSessionTables(sessionId)
+    return findSessionTables(this.state, sessionId)
   }
 }
 
