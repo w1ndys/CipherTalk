@@ -27,6 +27,15 @@ export interface AgentComposerProps {
   onToggleServer: (name: string, status: McpServerStatus) => void
   skills: AgentSkill[]
   allowSessionAttachments?: boolean
+  features?: {
+    mention?: boolean
+    slash?: boolean
+    mcp?: boolean
+    skills?: boolean
+    context?: boolean
+    voice?: boolean
+    suggestions?: boolean
+  }
 }
 
 const READ_LIMIT_OPTIONS = [500, 1000, 1500, 2000] as const
@@ -77,6 +86,7 @@ export function AgentComposer({
   onSend, disabled, suggestions, slashCommands,
   mcpServers, busyServers, onToggleServer, skills,
   allowSessionAttachments = false,
+  features,
 }: AgentComposerProps) {
   const [value, setValue] = useState('')
   const [showSlash, setShowSlash] = useState(false)
@@ -95,7 +105,16 @@ export function AgentComposer({
   const mentionSearchRef = useRef<HTMLInputElement>(null)
   const mentionLoadingRef = useRef(false)
   const mentionLoadedRef = useRef(false)
-  const canAttachSessions = scope.kind === 'global' || allowSessionAttachments
+  const composerFeatures = {
+    mention: features?.mention ?? (scope.kind === 'global' || allowSessionAttachments),
+    slash: features?.slash ?? true,
+    mcp: features?.mcp ?? true,
+    skills: features?.skills ?? true,
+    context: features?.context ?? true,
+    voice: features?.voice ?? true,
+    suggestions: features?.suggestions ?? true,
+  }
+  const canAttachSessions = composerFeatures.mention
 
   // 一次性拉取所有会话（最多 1000 条），后续纯客户端过滤
   const loadMentionSessions = useCallback(async () => {
@@ -190,7 +209,7 @@ export function AgentComposer({
 
   const handleKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); submit() }
-    if (e.key === '/' && !value) { setShowSlash(true) }
+    if (composerFeatures.slash && e.key === '/' && !value) { setShowSlash(true) }
     if (e.key === '@' && !canAttachSessions) return
     if (e.key === 'Escape' && showMention) { setShowMention(false); return }
     if (e.key === 'Escape') closeAll()
@@ -215,7 +234,7 @@ export function AgentComposer({
 
   return (
     <footer className="agent-composer-wrap">
-      {suggestions.length ? (
+      {composerFeatures.suggestions && suggestions.length ? (
         <div className="agent-suggestions">
           {suggestions.map(suggestion => (
             <button key={suggestion} type="button" onClick={() => onSend(suggestion, [], readLimit, [])} disabled={disabled}>
@@ -265,7 +284,9 @@ export function AgentComposer({
               if (!showMention) { setShowMention(true); loadMentionSessions() }
               setMentionQuery(match[1])
             }
-            setShowSlash(text.startsWith('/') && !text.includes(' '))
+            if (composerFeatures.slash) {
+              setShowSlash(text.startsWith('/') && !text.includes(' '))
+            }
             resizeTextarea()
           }}
           onKeyDown={handleKeyDown}
@@ -344,181 +365,191 @@ export function AgentComposer({
             ) : null}
 
             {/* 斜杠命令 */}
-            <div className="agent-popover-host">
-              <button
-                type="button"
-                className={`agent-command-button${showSlash ? ' is-open' : ''}`}
-                onClick={event => { event.stopPropagation(); closeAll(); setShowSlash(v => !v) }}
-                title="命令"
-              >
-                <Slash size={15} />
-              </button>
-              {showSlash ? (
-                <ComposerPopover title="命令" onClose={() => setShowSlash(false)}>
-                  {visibleSlashCommands.map(item => (
-                    <button
-                      className="agent-popover-row agent-popover-row--command"
-                      key={item.command}
-                      type="button"
-                      onClick={() => {
-                        setValue(`${item.command} `)
-                        setShowSlash(false)
-                        textareaRef.current?.focus()
-                      }}
-                    >
-                      <code>{item.command}</code>
-                      <small>{item.description}</small>
-                    </button>
-                  ))}
-                </ComposerPopover>
-              ) : null}
-            </div>
+            {composerFeatures.slash ? (
+              <div className="agent-popover-host">
+                <button
+                  type="button"
+                  className={`agent-command-button${showSlash ? ' is-open' : ''}`}
+                  onClick={event => { event.stopPropagation(); closeAll(); setShowSlash(v => !v) }}
+                  title="命令"
+                >
+                  <Slash size={15} />
+                </button>
+                {showSlash ? (
+                  <ComposerPopover title="命令" onClose={() => setShowSlash(false)}>
+                    {visibleSlashCommands.map(item => (
+                      <button
+                        className="agent-popover-row agent-popover-row--command"
+                        key={item.command}
+                        type="button"
+                        onClick={() => {
+                          setValue(`${item.command} `)
+                          setShowSlash(false)
+                          textareaRef.current?.focus()
+                        }}
+                      >
+                        <code>{item.command}</code>
+                        <small>{item.description}</small>
+                      </button>
+                    ))}
+                  </ComposerPopover>
+                ) : null}
+              </div>
+            ) : null}
 
             <div className="agent-composer__divider" />
 
             {/* MCP 服务器 */}
-            <div className="agent-popover-host">
-              <button
-                type="button"
-                className={`agent-tool-button${showMcp ? ' is-open' : ''}`}
-                onClick={event => { event.stopPropagation(); closeAll(); setShowMcp(v => !v) }}
-                title="MCP 服务"
-              >
-                <MCP size={13} />
-                <span>MCP</span>
-                {connectedCount > 0 && (
-                  <span className="agent-tool-badge">{connectedCount}</span>
-                )}
-              </button>
-              {showMcp ? (
-                <ComposerPopover title="MCP 服务" onClose={() => setShowMcp(false)}>
-                  {mcpServers.length === 0 ? (
-                    <p className="agent-popover-empty">暂无已配置的 MCP 服务器</p>
-                  ) : mcpServers.map(server => {
-                    const isBusy = busyServers.has(server.id)
-                    const isOn = server.status === 'connected'
-                    return (
-                      <button
-                        className="agent-popover-row agent-popover-row--toggle"
-                        key={server.id}
-                        type="button"
-                        disabled={isBusy}
-                        onClick={() => onToggleServer(server.name, server.status)}
-                      >
-                        <span className={`agent-server-status agent-server-status--${server.status}`} />
-                        <span className="agent-popover-row__text">
-                          <strong>{server.name}</strong>
-                          <small>
-                            {server.status === 'error' && server.error
-                              ? server.error
-                              : `${server.toolCount} 个工具`}
-                          </small>
-                        </span>
-                        <span className={`agent-toggle${isOn ? ' is-on' : ''}${isBusy ? ' is-busy' : ''}`} />
-                      </button>
-                    )
-                  })}
-                </ComposerPopover>
-              ) : null}
-            </div>
+            {composerFeatures.mcp ? (
+              <div className="agent-popover-host">
+                <button
+                  type="button"
+                  className={`agent-tool-button${showMcp ? ' is-open' : ''}`}
+                  onClick={event => { event.stopPropagation(); closeAll(); setShowMcp(v => !v) }}
+                  title="MCP 服务"
+                >
+                  <MCP size={13} />
+                  <span>MCP</span>
+                  {connectedCount > 0 && (
+                    <span className="agent-tool-badge">{connectedCount}</span>
+                  )}
+                </button>
+                {showMcp ? (
+                  <ComposerPopover title="MCP 服务" onClose={() => setShowMcp(false)}>
+                    {mcpServers.length === 0 ? (
+                      <p className="agent-popover-empty">暂无已配置的 MCP 服务器</p>
+                    ) : mcpServers.map(server => {
+                      const isBusy = busyServers.has(server.id)
+                      const isOn = server.status === 'connected'
+                      return (
+                        <button
+                          className="agent-popover-row agent-popover-row--toggle"
+                          key={server.id}
+                          type="button"
+                          disabled={isBusy}
+                          onClick={() => onToggleServer(server.name, server.status)}
+                        >
+                          <span className={`agent-server-status agent-server-status--${server.status}`} />
+                          <span className="agent-popover-row__text">
+                            <strong>{server.name}</strong>
+                            <small>
+                              {server.status === 'error' && server.error
+                                ? server.error
+                                : `${server.toolCount} 个工具`}
+                            </small>
+                          </span>
+                          <span className={`agent-toggle${isOn ? ' is-on' : ''}${isBusy ? ' is-busy' : ''}`} />
+                        </button>
+                      )
+                    })}
+                  </ComposerPopover>
+                ) : null}
+              </div>
+            ) : null}
 
             {/* Skills */}
-            <div className="agent-popover-host">
-              <button
-                type="button"
-                className={`agent-tool-button${showSkills ? ' is-open' : ''}`}
-                onClick={event => { event.stopPropagation(); closeAll(); setShowSkills(v => !v) }}
-                title="技能"
-              >
-                <Hammer size={13} />
-                <span>Skills</span>
-                {skillEnabledCount > 0 && (
-                  <span className="agent-tool-badge">{skillEnabledCount}</span>
-                )}
-              </button>
-              {showSkills ? (
-                <ComposerPopover title="技能" onClose={() => setShowSkills(false)}>
-                  {skills.length === 0
-                    ? <p className="agent-popover-empty">暂无已导入的技能</p>
-                    : skills.map(skill => {
-                        const isEnabled = enabledSkills.has(skill.id)
-                        return (
-                          <button
-                            className="agent-popover-row agent-popover-row--toggle"
-                            key={skill.id}
-                            type="button"
-                            onClick={() => toggleSkill(skill.id)}
-                          >
-                            <span className="agent-popover-row__icon"><Hammer size={14} /></span>
-                            <span className="agent-popover-row__text">
-                              <strong>{skill.name}</strong>
-                              <small>{skill.description}</small>
-                            </span>
-                            {skill.builtin && <span className="agent-skill-tag">内置</span>}
-                            <span className={`agent-toggle${isEnabled ? ' is-on' : ''}`} />
-                          </button>
-                        )
-                      })
-                  }
-                </ComposerPopover>
-              ) : null}
-            </div>
+            {composerFeatures.skills ? (
+              <div className="agent-popover-host">
+                <button
+                  type="button"
+                  className={`agent-tool-button${showSkills ? ' is-open' : ''}`}
+                  onClick={event => { event.stopPropagation(); closeAll(); setShowSkills(v => !v) }}
+                  title="技能"
+                >
+                  <Hammer size={13} />
+                  <span>Skills</span>
+                  {skillEnabledCount > 0 && (
+                    <span className="agent-tool-badge">{skillEnabledCount}</span>
+                  )}
+                </button>
+                {showSkills ? (
+                  <ComposerPopover title="技能" onClose={() => setShowSkills(false)}>
+                    {skills.length === 0
+                      ? <p className="agent-popover-empty">暂无已导入的技能</p>
+                      : skills.map(skill => {
+                          const isEnabled = enabledSkills.has(skill.id)
+                          return (
+                            <button
+                              className="agent-popover-row agent-popover-row--toggle"
+                              key={skill.id}
+                              type="button"
+                              onClick={() => toggleSkill(skill.id)}
+                            >
+                              <span className="agent-popover-row__icon"><Hammer size={14} /></span>
+                              <span className="agent-popover-row__text">
+                                <strong>{skill.name}</strong>
+                                <small>{skill.description}</small>
+                              </span>
+                              {skill.builtin && <span className="agent-skill-tag">内置</span>}
+                              <span className={`agent-toggle${isEnabled ? ' is-on' : ''}`} />
+                            </button>
+                          )
+                        })
+                    }
+                  </ComposerPopover>
+                ) : null}
+              </div>
+            ) : null}
 
             {/* 上下文设置 */}
-            <div className="agent-popover-host">
-              <button
-                type="button"
-                className={`agent-tool-button${showContext ? ' is-open' : ''}`}
-                onClick={event => { event.stopPropagation(); closeAll(); setShowContext(v => !v) }}
-                title="上下文设置"
-              >
-                <SlidersHorizontal size={13} />
-              </button>
-              {showContext ? (
-                <ComposerPopover title="上下文设置" onClose={() => setShowContext(false)}>
-                  <div className="agent-ctx-row">
-                    <label>
-                      创意程度
-                      <span className="agent-ctx-value">{temperature.toFixed(1)}</span>
-                    </label>
-                    <input
-                      className="agent-ctx-slider"
-                      type="range"
-                      min={0}
-                      max={1}
-                      step={0.1}
-                      value={temperature}
-                      onChange={e => { const v = Number(e.target.value); setTemperature(v); void saveTemperature(v) }}
-                    />
-                    <div className="agent-ctx-slider-labels">
-                      <span>精确</span>
-                      <span>创意</span>
+            {composerFeatures.context ? (
+              <div className="agent-popover-host">
+                <button
+                  type="button"
+                  className={`agent-tool-button${showContext ? ' is-open' : ''}`}
+                  onClick={event => { event.stopPropagation(); closeAll(); setShowContext(v => !v) }}
+                  title="上下文设置"
+                >
+                  <SlidersHorizontal size={13} />
+                </button>
+                {showContext ? (
+                  <ComposerPopover title="上下文设置" onClose={() => setShowContext(false)}>
+                    <div className="agent-ctx-row">
+                      <label>
+                        创意程度
+                        <span className="agent-ctx-value">{temperature.toFixed(1)}</span>
+                      </label>
+                      <input
+                        className="agent-ctx-slider"
+                        type="range"
+                        min={0}
+                        max={1}
+                        step={0.1}
+                        value={temperature}
+                        onChange={e => { const v = Number(e.target.value); setTemperature(v); void saveTemperature(v) }}
+                      />
+                      <div className="agent-ctx-slider-labels">
+                        <span>精确</span>
+                        <span>创意</span>
+                      </div>
                     </div>
-                  </div>
-                  <div className="agent-ctx-row">
-                    <label>读取条数上限</label>
-                    <div className="agent-ctx-chips">
-                      {READ_LIMIT_OPTIONS.map(n => (
-                        <button
-                          key={n}
-                          type="button"
-                          className={`agent-ctx-chip${readLimit === n ? ' is-active' : ''}`}
-                          onClick={() => { setReadLimit(n); void saveReadLimit(n) }}
-                        >
-                          {n}
-                        </button>
-                      ))}
+                    <div className="agent-ctx-row">
+                      <label>读取条数上限</label>
+                      <div className="agent-ctx-chips">
+                        {READ_LIMIT_OPTIONS.map(n => (
+                          <button
+                            key={n}
+                            type="button"
+                            className={`agent-ctx-chip${readLimit === n ? ' is-active' : ''}`}
+                            onClick={() => { setReadLimit(n); void saveReadLimit(n) }}
+                          >
+                            {n}
+                          </button>
+                        ))}
+                      </div>
                     </div>
-                  </div>
-                </ComposerPopover>
-              ) : null}
-            </div>
+                  </ComposerPopover>
+                ) : null}
+              </div>
+            ) : null}
           </div>
 
           <div className="agent-composer__right">
-            <button className="agent-round-button" type="button" title="语音输入" disabled={disabled}>
-              <Mic size={14} />
-            </button>
+            {composerFeatures.voice ? (
+              <button className="agent-round-button" type="button" title="语音输入" disabled={disabled}>
+                <Mic size={14} />
+              </button>
+            ) : null}
             <button
               className={`agent-send-button${value.trim() ? ' is-ready' : ''}`}
               type="button"
@@ -536,7 +567,7 @@ export function AgentComposer({
         <span><kbd>Enter</kbd> 发送</span>
         <span><kbd>Shift</kbd> + <kbd>Enter</kbd> 换行</span>
         {canAttachSessions ? <span><kbd>@</kbd> 引用</span> : null}
-        <span><kbd>/</kbd> 命令</span>
+        {composerFeatures.slash ? <span><kbd>/</kbd> 命令</span> : null}
         <span>AI生成，请注意甄别！</span>
       </div>
     </footer>

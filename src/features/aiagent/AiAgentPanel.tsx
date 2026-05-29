@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { MessageList } from './components/MessageList'
 import { AgentComposer } from './components/AgentComposer'
+import type { AgentComposerProps } from './components/AgentComposer'
 import { ConversationSidebar } from './components/ConversationSidebar'
 import { useAiAgentChat } from './hooks/useAiAgentChat'
 import { useMcpSkillsData } from '../../hooks/useMcpSkillsData'
@@ -57,6 +58,7 @@ interface Props {
   layout: 'full' | 'embedded'
   allowSessionAttachments?: boolean
   baseScopedSessions?: Array<{ id: string; name: string }>
+  composerFeatures?: AgentComposerProps['features']
 }
 
 export function AiAgentPanel({
@@ -64,6 +66,7 @@ export function AiAgentPanel({
   layout,
   allowSessionAttachments = false,
   baseScopedSessions = [],
+  composerFeatures,
 }: Props) {
   const {
     messages, loading, conversationId, conversations,
@@ -117,6 +120,7 @@ export function AiAgentPanel({
           onToggleServer={toggleServer}
           skills={skills}
           allowSessionAttachments={allowSessionAttachments}
+          features={composerFeatures}
         />
       </main>
     </div>

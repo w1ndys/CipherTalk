@@ -27,8 +27,7 @@ export function SessionAiAgentPanel({
         <AiAgentPanel
           scope={{ kind: 'session', sessionId: session.username, sessionName }}
           layout="embedded"
-          allowSessionAttachments
-          baseScopedSessions={[{ id: session.username, name: sessionName }]}
+          composerFeatures={{ mention: false }}
         />
       </div>
     </div>
