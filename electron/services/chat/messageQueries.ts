@@ -49,18 +49,8 @@ export async function getMessages(state: ChatServiceState,
     const normalizedLimit = Math.max(1, Math.min(500, Math.floor(Number(limit) || 50)))
 
     if (Math.max(0, Math.floor(Number(offset) || 0)) === 0) {
-      const nativeDirect = await wcdbService.getNativeMessages(sessionId, normalizedLimit + 1, 0)
-      if (nativeDirect.success && nativeDirect.rows) {
-        const normalized = normalizeMessagesForUi(
-          nativeDirect.rows.map(row => rowToMessage(state, row)),
-          sessionId,
-          normalizedLimit
-        )
-        const page = normalized.messages
-        updateSessionCursorFromPage(state, sessionId, page)
-        return { success: true, messages: page, hasMore: normalized.hasExtra }
-      }
-
+      // 跳过 direct native 批量读取；该 native 路径异常时会触发 napi fatal，无法被 JS 捕获。
+      // cursor 路径失败时仍会继续走下面的 SQL fallback。
       const nativeCursor = await getMessagesViaNativeCursor(state, sessionId, normalizedLimit)
       if (nativeCursor.success) {
         return nativeCursor

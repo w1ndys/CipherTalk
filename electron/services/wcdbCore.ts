@@ -480,31 +480,7 @@ export class WcdbCore {
   }
 
   async getNativeMessages(sessionId: string, limit: number, offset: number): Promise<{ success: boolean; rows?: any[]; error?: string }> {
-    if (!this.initialized || this.handle === null) {
-      return { success: false, error: 'WCDB 未初始化' }
-    }
-    if (!this.wcdbGetMessages) {
-      return { success: false, error: 'native 未支持直接消息读取' }
-    }
-
-    try {
-      const outJson = [null as any]
-      const result = this.wcdbGetMessages(
-        this.handle,
-        sessionId,
-        Math.max(1, Math.floor(Number(limit) || 50)),
-        Math.max(0, Math.floor(Number(offset) || 0)),
-        outJson
-      )
-      if (result !== 0 || !outJson[0]) {
-        return { success: false, error: this.mapCursorStatusCode(result, '直接读取消息失败') }
-      }
-      const jsonStr = this.decodeJsonPtr(outJson[0])
-      if (!jsonStr) return { success: false, error: '解析消息失败' }
-      return { success: true, rows: this.parseMessageJson(jsonStr) }
-    } catch (e: any) {
-      return { success: false, error: e?.message || String(e) }
-    }
+    return { success: false, error: 'direct native 消息读取已禁用，请使用 cursor 路径' }
   }
 
   async openMessageCursor(
