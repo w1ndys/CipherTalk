@@ -16,7 +16,7 @@ import { BatchDecryptModal } from './components/BatchDecryptModal'
 import { BatchTranscribeModal } from './components/BatchTranscribeModal'
 import { ChatHeader } from './components/ChatHeader'
 import { MessageList } from './components/MessageList'
-import { SessionDetailPanel } from './components/SessionDetailPanel'
+import { SessionAiAgentPanel } from './components/SessionAiAgentPanel'
 import { SessionSidebar } from './components/SessionSidebar'
 import { SharePosterModal } from './components/SharePosterModal'
 import { ContextMenuPortal } from './components/portals/ContextMenuPortal'
@@ -25,7 +25,6 @@ import { MessageInfoModal } from './components/portals/MessageInfoModal'
 import { TopToastPortal } from './components/portals/TopToastPortal'
 import { setLastIncrementalUpdateTime } from './components/messageBubble/mediaState'
 import { useContextMenuState } from './hooks/useContextMenuState'
-import { useSessionDetail } from './hooks/useSessionDetail'
 import { useSidebarResize } from './hooks/useSidebarResize'
 import { useThrottledScroll } from './hooks/useThrottledScroll'
 import { useTopToast } from './hooks/useTopToast'
@@ -121,16 +120,22 @@ function ChatPage(_props: ChatPageProps) {
   const [myAvatarUrl, setMyAvatarUrl] = useState<string | undefined>(undefined)
   // showScrollToBottom 由 useThrottledScroll hook 管理
   const { sidebarWidth, isResizing, handleResizeStart } = useSidebarResize(260)
-  const {
-    showDetailPanel,
-    isDetailClosing,
-    sessionDetail,
-    isLoadingDetail,
-    setSessionDetail,
-    loadSessionDetail,
-    closeDetailPanel,
-    toggleDetailPanel
-  } = useSessionDetail(currentSessionId)
+  const [showDetailPanel, setShowDetailPanel] = useState(false)
+  const [isDetailClosing, setIsDetailClosing] = useState(false)
+  const closeDetailPanel = useCallback(() => {
+    setIsDetailClosing(true)
+    setTimeout(() => {
+      setShowDetailPanel(false)
+      setIsDetailClosing(false)
+    }, 220)
+  }, [])
+  const toggleDetailPanel = useCallback(() => {
+    if (showDetailPanel) {
+      closeDetailPanel()
+    } else {
+      setShowDetailPanel(true)
+    }
+  }, [showDetailPanel, closeDetailPanel])
   const [hasImageKey, setHasImageKey] = useState<boolean | null>(null)
   const {
     contextMenu,
@@ -601,15 +606,6 @@ function ChatPage(_props: ChatPageProps) {
     restoreScrollAnchor(anchor)
   }, [messages.length, restoreScrollAnchor])
 
-  const copyText = useCallback(async (text: string) => {
-    try {
-      await navigator.clipboard.writeText(text || '')
-      showTopToast('已复制', true)
-    } catch (e) {
-      console.error('复制失败:', e)
-    }
-  }, [showTopToast])
-
   const enterSelectMode = useCallback((localId: number) => {
     setSelectMode(true)
     setSelectedMessages(new Set([localId]))
@@ -1046,11 +1042,6 @@ function ChatPage(_props: ChatPageProps) {
     saveCurrentSessionMessageCache(currentSessionId)
     currentSessionIdRef.current = session.username
     setCurrentSession(session.username)
-    // 重置详情面板
-    setSessionDetail(null)
-    if (showDetailPanel) {
-      loadSessionDetail(session.username)
-    }
 
     const cached = restoreSessionMessageCache(session.username)
     if (cached) {
@@ -2016,12 +2007,10 @@ function ChatPage(_props: ChatPageProps) {
               />
 
               {showDetailPanel && (
-                <SessionDetailPanel
+                <SessionAiAgentPanel
                   isClosing={isDetailClosing}
-                  isLoading={isLoadingDetail}
-                  detail={sessionDetail}
+                  session={currentSession}
                   onClose={closeDetailPanel}
-                  onCopyText={copyText}
                 />
               )}
             </div>

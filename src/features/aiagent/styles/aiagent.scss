@@ -59,6 +59,33 @@
   opacity: 0.58;
 }
 
+.agent-page--embedded {
+  flex: 1;
+  background: var(--agent-bg);
+}
+
+.agent-page--embedded .agent-message-list__inner,
+.agent-page--embedded .agent-composer-wrap > * {
+  width: min(100% - 24px, 640px);
+}
+
+.agent-page--embedded .agent-message-list__inner {
+  padding-top: 16px;
+}
+
+.agent-page--embedded .agent-composer-wrap {
+  padding-bottom: 6px;
+}
+
+.agent-page--embedded .agent-suggestions {
+  gap: 6px;
+}
+
+.agent-page--embedded .agent-suggestions button {
+  min-height: 28px;
+  padding: 0 10px;
+}
+
 .agent-sidebar {
   width: 272px;
   flex: 0 0 272px;

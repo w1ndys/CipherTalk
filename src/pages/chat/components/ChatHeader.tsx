@@ -1,4 +1,4 @@
-import { Aperture, BadgeCheck, BrainCircuit, Image as ImageIcon, Info, Loader2, Mic, Origami, Radar, RefreshCw, Sparkles, TriangleAlert } from 'lucide-react'
+import { Aperture, BadgeCheck, Bot, BrainCircuit, Image as ImageIcon, Loader2, Mic, Origami, Radar, RefreshCw, Sparkles, TriangleAlert } from 'lucide-react'
 import AppDatePicker from '../../../components/AppDatePicker'
 import type { ChatSession } from '../../../types/models'
 import type { SessionVectorIndexState } from '../../../types/ai'
@@ -222,9 +222,10 @@ export function ChatHeader({
         <button
           className={`icon-btn detail-btn ${showDetailPanel ? 'active' : ''}`}
           onClick={onToggleDetailPanel}
-          data-tooltip="会话详情"
+          data-tooltip="AI 助手"
+          aria-label="打开 AI 助手"
         >
-          <Info size={18} />
+          <Bot size={18} />
         </button>
       </div>
     </div>

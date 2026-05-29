@@ -207,6 +207,16 @@
   }
 }
 
+.detail-panel.session-aiagent-panel {
+  width: min(560px, calc(100% - 32px));
+
+  .session-aiagent-panel__body {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+  }
+}
+
 @keyframes slideInRight {
   from {
     opacity: 0;

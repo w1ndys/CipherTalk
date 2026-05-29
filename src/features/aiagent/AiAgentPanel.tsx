@@ -64,7 +64,7 @@ export function AiAgentPanel({ scope, layout }: Props) {
     selectConversation, deleteConversation, renameConversation,
   } = useAiAgentChat(scope)
   const { mcpServers, skills, busyServers, toggleServer } = useMcpSkillsData()
-  const [collapsed, setCollapsed] = useState(false)
+  const [collapsed, setCollapsed] = useState(layout === 'embedded')
   const [query, setQuery] = useState('')
   const [aiProvider, setAiProvider] = useState('')
 
