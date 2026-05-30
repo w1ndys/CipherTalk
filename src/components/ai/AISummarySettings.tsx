@@ -83,6 +83,8 @@ const PROTOCOL_LABELS: Record<AiProviderProtocol, string> = {
   google: 'Google Gemini'
 }
 
+const AI_DROPDOWN_LIST_CLASS = 'ct-ai-dropdown-list max-h-80 overflow-y-auto'
+
 function normalizeProviderId(providerId: string) {
   return LEGACY_CUSTOM_PROVIDER_MAP[providerId] || providerId
 }
@@ -709,7 +711,7 @@ function AISummarySettings({ showMessage }: AISummarySettingsProps) {
                         <Select.Indicator />
                       </Select.Trigger>
                       <Select.Popover>
-                        <ListBox className="max-h-80 overflow-y-auto">
+                        <ListBox className={AI_DROPDOWN_LIST_CLASS}>
                           {providerOptions.map(option => (
                             <ListBox.Item key={option.value} id={option.value} textValue={option.label} isDisabled={option.disabled} className="shrink-0">
                               {option.content ?? (
@@ -825,7 +827,7 @@ function AISummarySettings({ showMessage }: AISummarySettingsProps) {
                           <ComboBox.Trigger />
                         </ComboBox.InputGroup>
                         <ComboBox.Popover>
-                          <ListBox className="max-h-80 overflow-y-auto">
+                          <ListBox className={AI_DROPDOWN_LIST_CLASS}>
                             {modelOptions.map(option => (
                               <ListBox.Item key={option.value} id={option.value} textValue={option.label} isDisabled={option.disabled} className="shrink-0">
                                 {option.content ?? option.label}
@@ -936,29 +938,32 @@ function AISummarySettings({ showMessage }: AISummarySettingsProps) {
         <Modal state={savePresetModalState}>
           <Modal.Backdrop variant="blur">
             <Modal.Container size="lg" scroll="inside" placement="center">
-              <Modal.Dialog className="max-w-190">
-                <Modal.Header className="items-center justify-between">
+              <Modal.Dialog className="relative max-w-190">
+                <CloseButton
+                  aria-label="关闭预设编辑"
+                  className="absolute right-5 top-5 z-10"
+                  onPress={() => setShowSavePresetDialog(false)}
+                />
+                <Modal.Header className="items-center text-center">
                   <Modal.Heading className="text-base font-semibold text-foreground">{editingPresetId ? '编辑配置预设' : '新增配置预设'}</Modal.Heading>
-                  <CloseButton aria-label="关闭预设编辑" onPress={() => setShowSavePresetDialog(false)} />
                 </Modal.Header>
 
                 <Modal.Body>
-                  <Tabs selectedKey={presetTab} onSelectionChange={handlePresetTabChange} className="w-full" variant="secondary">
+                  <Tabs selectedKey={presetTab} onSelectionChange={handlePresetTabChange} className="w-full">
                     <Tabs.ListContainer>
-                      <Tabs.List aria-label="预设配置步骤">
+                      <Tabs.List aria-label="预设配置步骤" className="w-full *:flex-1">
                         <Tabs.Tab id="name">名称<Tabs.Indicator /></Tabs.Tab>
                         <Tabs.Tab id="provider">服务商<Tabs.Indicator /></Tabs.Tab>
                         <Tabs.Tab id="config">接入配置<Tabs.Indicator /></Tabs.Tab>
                       </Tabs.List>
                     </Tabs.ListContainer>
 
-                    <Tabs.Panel id="name" className="pt-5">
+                    <Tabs.Panel id="name" className="pt-4">
                       <TextField
                         fullWidth
                         value={presetName}
                         onChange={setPresetName}
                         isInvalid={!presetName.trim() && presetTab !== 'name'}
-                        autoFocus
                       >
                         <Label>配置名称</Label>
                         <Input placeholder="例如：OpenAI 主力配置" variant="secondary" />
@@ -967,7 +972,7 @@ function AISummarySettings({ showMessage }: AISummarySettingsProps) {
                       </TextField>
                     </Tabs.Panel>
 
-                    <Tabs.Panel id="provider" className="pt-5">
+                    <Tabs.Panel id="provider" className="pt-4">
                       <Select
                         selectedKey={presetDraft.provider || null}
                         onSelectionChange={(key) => {
@@ -987,7 +992,7 @@ function AISummarySettings({ showMessage }: AISummarySettingsProps) {
                           <Select.Indicator />
                         </Select.Trigger>
                         <Select.Popover>
-                          <ListBox className="max-h-80 overflow-y-auto">
+                          <ListBox className={AI_DROPDOWN_LIST_CLASS}>
                             {providerOptions.map(option => (
                               <ListBox.Item key={option.value} id={option.value} textValue={option.label} isDisabled={option.disabled} className="shrink-0">
                                 {option.content ?? option.label}
@@ -999,7 +1004,7 @@ function AISummarySettings({ showMessage }: AISummarySettingsProps) {
                       </Select>
                     </Tabs.Panel>
 
-                    <Tabs.Panel id="config" className="pt-5">
+                    <Tabs.Panel id="config" className="pt-4">
                       <Fieldset className="space-y-4">
                         <Fieldset.Group className="grid gap-4">
                           {!!presetDraftProvider?.protocolOptions?.length && (
@@ -1067,7 +1072,7 @@ function AISummarySettings({ showMessage }: AISummarySettingsProps) {
                               <ComboBox.Trigger />
                             </ComboBox.InputGroup>
                             <ComboBox.Popover>
-                              <ListBox className="max-h-80 overflow-y-auto">
+                              <ListBox className={AI_DROPDOWN_LIST_CLASS}>
                                 {presetDraftModelOptions.map(option => (
                                   <ListBox.Item key={option.value} id={option.value} textValue={option.label} isDisabled={option.disabled} className="shrink-0">
                                     {option.content ?? option.label}

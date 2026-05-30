@@ -1,6 +1,7 @@
 .moments-window {
   width: 100%;
-  height: 100vh;
+  flex: 1;
+  min-height: 0;
   display: flex;
   flex-direction: column;
   background: var(--bg-primary);
@@ -1479,19 +1480,19 @@
   --title-bar-right-safe: calc(var(--window-controls-right-safe) + 12px);
 }
 
-html[data-window-platform="darwin"] .moments-window .title-actions {
+html[data-window-platform="darwin"] .moments-title-bar .title-actions {
   gap: 6px;
 }
 
 @media (max-width: 1040px) {
-  html[data-window-platform="darwin"] .moments-window .title-actions .export-btn {
+  html[data-window-platform="darwin"] .moments-title-bar .title-actions .export-btn {
     width: 30px;
     padding: 6px;
     gap: 0;
     justify-content: center;
   }
 
-  html[data-window-platform="darwin"] .moments-window .title-actions .export-btn span {
+  html[data-window-platform="darwin"] .moments-title-bar .title-actions .export-btn span {
     display: none;
   }
 }

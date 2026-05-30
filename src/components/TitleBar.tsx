@@ -10,11 +10,14 @@ interface TitleBarProps {
   rightContent?: ReactNode
   title?: string
   variant?: 'app' | 'standalone'
+  showTitle?: boolean
 }
 
-function TitleBar({ className, rightContent, title, variant = 'app' }: TitleBarProps) {
+function TitleBar({ className, rightContent, title, variant = 'app', showTitle = true }: TitleBarProps) {
   const storeRightContent = useTitleBarStore(state => state.rightContent)
+  const storeTitle = useTitleBarStore(state => state.title)
   const displayContent = rightContent ?? storeRightContent
+  const displayTitle = title ?? storeTitle
   const isUpdating = useUpdateStatusStore(state => state.isUpdating)
   const { isMac } = usePlatformInfo()
   const titleBarClassName = ['title-bar', `variant-${variant}`, isMac ? 'is-mac' : 'is-win', className]
@@ -32,12 +35,12 @@ function TitleBar({ className, rightContent, title, variant = 'app' }: TitleBarP
     </div>
   ) : null
 
-  const titleNode = (
+  const titleNode = showTitle ? (
     <>
       <img src="./logo.png" alt="密语" className="title-logo" />
-      <span className="titles">{title || 'CipherTalk'}</span>
+      <span className="titles">{displayTitle || 'CipherTalk'}</span>
     </>
-  )
+  ) : null
 
   return (
     <div className={titleBarClassName}>

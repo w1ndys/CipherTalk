@@ -430,7 +430,8 @@ function App() {
   // 独立朋友圈窗口
   if (isMomentsWindow) {
     return (
-      <div className="chat-window-container">
+      <div className="standalone-window">
+        <TitleBar variant="standalone" className="moments-title-bar" />
         <MomentsWindow />
       </div>
     )
@@ -448,7 +449,8 @@ function App() {
   // 独立聊天记录窗口
   if (location.pathname.startsWith('/chat-history/')) {
     return (
-      <div className="chat-window-container">
+      <div className="standalone-window">
+        <TitleBar variant="standalone" />
         <ChatHistoryPage />
       </div>
     )
@@ -476,7 +478,12 @@ function App() {
 
   // 独立浏览器窗口
   if (location.pathname === '/browser-window') {
-    return <BrowserWindowPage />
+    return (
+      <div className="standalone-window">
+        <TitleBar variant="standalone" />
+        <BrowserWindowPage />
+      </div>
+    )
   }
 
   // 启动屏
@@ -605,8 +612,10 @@ function App() {
   const isFullPage = fullPageRoutes.includes(location.pathname)
 
   return (
-    <div className="app-container">
-      <TitleBar />
+    <div className={`app-container${navLayout === 'sidebar' ? ' app-container--sidebar' : ''}`}>
+      {navLayout === 'sidebar' && <Sidebar />}
+      <div className="app-shell">
+      <TitleBar showTitle={false} />
       {updateInfo && !updateInfo.forceUpdate && !isUpdateDownloading && (
         <div className="update-toast">
           <div className="update-toast-icon">🎉</div>
@@ -684,7 +693,6 @@ function App() {
           overflow: 'hidden',
         }}
       >
-        {navLayout === 'sidebar' && <Sidebar />}
         <Box
           component="main"
           sx={{
@@ -694,6 +702,11 @@ function App() {
             px: isFullPage ? 0 : 3,
             pt: isFullPage ? 0 : 3,
             pb: 0,
+            // 侧栏布局：内容做成内嵌圆角面板，与外壳（侧栏同色）形成夹角圆角
+            ...(navLayout === 'sidebar' ? {
+              bgcolor: 'var(--bg-primary)',
+              borderTopLeftRadius: '12px',
+            } : {}),
           }}
         >
           <RouteGuard>
@@ -713,6 +726,7 @@ function App() {
           </RouteGuard>
         </Box>
       </Box>
+      </div>
       {navLayout === 'dock' && <BottomDock />}
       <DecryptProgressOverlay />
       {progressPercent !== null && (

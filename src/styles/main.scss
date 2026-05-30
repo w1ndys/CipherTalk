@@ -122,6 +122,38 @@ img {
   }
 }
 
+.ct-ai-dropdown-list {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-color) transparent;
+  scrollbar-gutter: stable;
+
+  &::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+
+  &::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  &::-webkit-scrollbar-thumb {
+    min-height: 32px;
+    background: var(--border-color);
+    background-clip: content-box;
+    border: 2px solid transparent;
+    border-radius: 9999px;
+
+    &:hover {
+      background: var(--text-tertiary);
+      background-clip: content-box;
+    }
+  }
+
+  &::-webkit-scrollbar-corner {
+    background: transparent;
+  }
+}
+
 // 按钮基础样式
 .btn {
   display: inline-flex;

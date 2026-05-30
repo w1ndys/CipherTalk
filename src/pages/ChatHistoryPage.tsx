@@ -1,8 +1,8 @@
 import React, { useEffect, useState } from 'react'
 import { useLocation, useParams } from 'react-router-dom'
 import { ChatRecordItem } from '../types/models'
-import TitleBar from '../components/TitleBar'
 import MessageContent from '../components/MessageContent'
+import { useTitleBarStore } from '../stores/titleBarStore'
 import './ChatHistoryPage.scss'
 
 export default function ChatHistoryPage() {
@@ -12,6 +12,13 @@ export default function ChatHistoryPage() {
     const [loading, setLoading] = useState(true)
     const [title, setTitle] = useState('聊天记录')
     const [error, setError] = useState('')
+    const setTitleBarTitle = useTitleBarStore(state => state.setTitle)
+
+    // 标题交给窗口级标题栏（App 渲染），本页只负责把标题写进 store
+    useEffect(() => {
+        setTitleBarTitle(title)
+        return () => setTitleBarTitle(null)
+    }, [title, setTitleBarTitle])
 
     // 简单的 XML 标签内容提取
     const extractXmlValue = (xml: string, tag: string): string => {
@@ -167,7 +174,6 @@ export default function ChatHistoryPage() {
 
     return (
         <div className="chat-history-page">
-            <TitleBar className="chat-history-title-bar" title={title} variant="standalone" />
             <div className="history-list">
                 {loading ? (
                     <div className="status-msg">加载中...</div>

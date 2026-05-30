@@ -17,7 +17,7 @@ interface ThemeState {
 
 export const useThemeStore = create<ThemeState>()((set, get) => ({
   themeMode: 'light',
-  navLayout: 'dock',
+  navLayout: 'sidebar',
   dockAutoHide: true,
   isLoaded: false,
 
@@ -60,13 +60,13 @@ export const useThemeStore = create<ThemeState>()((set, get) => ({
       const dockAutoHide = await window.electronAPI.config.get('dockAutoHide') as boolean | undefined
       const nextThemeMode: ThemeMode = themeMode === 'dark' || themeMode === 'system' ? themeMode : 'light'
 
-      // 一次性迁移：旧版本没有 navLayout 选项，统一切换到 Dock 模式
-      const migrated = await window.electronAPI.config.get('navLayoutMigratedV6') as boolean | undefined
+      // 一次性迁移：统一切换到左侧边栏布局（与窗口标题栏融为一体的微信式布局）
+      const migrated = await window.electronAPI.config.get('navLayoutMigratedV7') as boolean | undefined
       if (!migrated) {
-        navLayout = 'dock'
+        navLayout = 'sidebar'
         try {
-          await window.electronAPI.config.set('navLayout', 'dock')
-          await window.electronAPI.config.set('navLayoutMigratedV6', true)
+          await window.electronAPI.config.set('navLayout', 'sidebar')
+          await window.electronAPI.config.set('navLayoutMigratedV7', true)
         } catch (e) {
           console.error('迁移导航布局失败:', e)
         }
@@ -74,7 +74,7 @@ export const useThemeStore = create<ThemeState>()((set, get) => ({
 
       set({
         themeMode: nextThemeMode,
-        navLayout: navLayout || 'dock',
+        navLayout: navLayout || 'sidebar',
         dockAutoHide: dockAutoHide ?? true,
         isLoaded: true
       })

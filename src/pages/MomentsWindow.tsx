@@ -3,7 +3,7 @@ import { Loader2, RefreshCw, Search, Calendar, User, X, Filter, AlertTriangle, P
 import { ImagePreview } from '../components/ImagePreview'
 import { LivePhotoIcon } from '../components/LivePhotoIcon'
 import { parseWechatEmoji, parseWechatEmojiHtml } from '../utils/wechatEmoji'
-import TitleBar from '../components/TitleBar'
+import { useTitleBarStore } from '../stores/titleBarStore'
 import JumpToDateDialog from '../components/JumpToDateDialog'
 import DateRangePicker from '../components/DateRangePicker'
 import './MomentsWindow.scss'
@@ -838,6 +838,25 @@ function MomentsWindow() {
   // 导出状态
   const [exporting, setExporting] = useState(false)
   const [showExportOptions, setShowExportOptions] = useState(false)
+
+  // 标题与右侧操作交给窗口级标题栏（由 App 渲染），本页只写入 store
+  const setTitleBarTitle = useTitleBarStore(state => state.setTitle)
+  const setTitleBarRightContent = useTitleBarStore(state => state.setRightContent)
+  useEffect(() => {
+    setTitleBarTitle('朋友圈')
+    setTitleBarRightContent(
+      <div className="title-actions">
+        <button className="export-btn" onClick={() => setShowExportOptions(true)} data-tooltip="导出">
+          <FileDown size={14} />
+          <span>导出</span>
+        </button>
+      </div>
+    )
+    return () => {
+      setTitleBarTitle(null)
+      setTitleBarRightContent(null)
+    }
+  }, [setTitleBarTitle, setTitleBarRightContent])
   const [exportDateRange, setExportDateRange] = useState<{ start: string, end: string }>({ start: '', end: '' })
   const [exportOptions, setExportOptions] = useState({
     includeImages: true
@@ -1594,20 +1613,6 @@ document.querySelectorAll('.vi video').forEach(function(v) {
 
   return (
     <div className="moments-window">
-      <TitleBar
-        className="moments-title-bar"
-        title="朋友圈"
-        variant="standalone"
-        rightContent={
-          <div className="title-actions">
-            <button className="export-btn" onClick={() => setShowExportOptions(true)} data-tooltip="导出">
-              <FileDown size={14} />
-              <span>导出</span>
-            </button>
-          </div>
-        }
-      />
-
       <div className="moments-container">
         {/* 侧边栏 (左侧) */}
         <aside className={`sns-sidebar ${isSidebarOpen ? 'open' : 'closed'}`}>

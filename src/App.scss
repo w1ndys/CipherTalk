@@ -5,6 +5,27 @@
   background: var(--bg-primary);
 }
 
+// 侧边栏布局：左侧栏贯通到顶，右侧为「拖拽区 + 内容」一列（微信式）
+// 整体「窗口外壳」用侧栏同色，内容区做成内嵌圆角面板。
+.app-container--sidebar {
+  flex-direction: row;
+  background: var(--bg-secondary);
+}
+
+.app-shell {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+// 侧边栏布局下，顶部拖拽条与侧栏同色（让用户能分辨可拖拽区域），无下边框
+.app-container--sidebar .title-bar.variant-app {
+  background: var(--bg-secondary);
+  border-bottom: none;
+}
+
 // 更新提示悬浮卡片
 .update-toast {
   position: fixed;
@@ -226,6 +247,14 @@
 // 独立聊天窗口容器
 .chat-window-container {
   height: 100vh;
+  overflow: hidden;
+}
+
+// 独立窗口统一布局：窗口级标题栏 + 填充剩余高度的页面内容
+.standalone-window {
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
   overflow: hidden;
 }
 

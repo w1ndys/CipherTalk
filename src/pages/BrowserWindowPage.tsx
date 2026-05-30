@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useRef } from 'react';
-import TitleBar from '../components/TitleBar';
+import { useTitleBarStore } from '../stores/titleBarStore';
 
 // 简化的内置浏览器窗口
 // 实际上由于 Electron 的限制，iframe 无法直接加载大部分外部网站（同源/CSP限制）
@@ -17,6 +17,13 @@ const BrowserWindowPage = () => {
     const [isLoading, setIsLoading] = useState(true);
     const [pageTitle, setPageTitle] = useState('加载中...');
     const webviewRef = useRef<any>(null);
+    const setTitleBarTitle = useTitleBarStore(state => state.setTitle);
+
+    // 标题交给窗口级标题栏（App 渲染），本页只把当前页标题写进 store
+    useEffect(() => {
+        setTitleBarTitle(pageTitle);
+        return () => setTitleBarTitle(null);
+    }, [pageTitle, setTitleBarTitle]);
 
     useEffect(() => {
         // 从 URL 参数获取
@@ -73,9 +80,7 @@ const BrowserWindowPage = () => {
     if (!params.url) return null;
 
     return (
-        <div className="browser-window" style={{ display: 'flex', flexDirection: 'column', height: '100vh', background: '#fff' }}>
-            <TitleBar className="browser-window-title-bar" title={pageTitle} variant="standalone" />
-
+        <div className="browser-window" style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, background: '#fff' }}>
             {/* 简单的进度条 */}
             {isLoading && (
                 <div style={{

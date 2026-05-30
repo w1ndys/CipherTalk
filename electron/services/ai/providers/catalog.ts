@@ -249,6 +249,7 @@ const MODELS_DEV_CACHE_PATH = process.env.CIPHERTALK_MODELS_PATH || path.join(
   getUserDataPath(),
   MODELS_DEV_SOURCE === 'https://models.dev' ? 'models-dev.json' : `models-dev-${Buffer.from(MODELS_DEV_SOURCE).toString('hex').slice(0, 16)}.json`
 )
+let modelsDevFetchPromise: Promise<any> | null = null
 
 function toMetadata(provider: ProviderConnectionMetadata, modelDetails: AIModelInfo[] = [], pricing = EMPTY_PRICING): AIProviderMetadata {
   return {
@@ -320,6 +321,24 @@ function readBundledModelsDevData(): any | null {
   }
 }
 
+function readAvailableModelsDevData(): any | null {
+  if (modelsDevCache?.data) return modelsDevCache.data
+
+  const diskCache = readModelsDevCacheFile()
+  if (diskCache) {
+    modelsDevCache = diskCache
+    return diskCache.data
+  }
+
+  const bundled = readBundledModelsDevData()
+  if (bundled) {
+    modelsDevCache = { updatedAt: Date.now(), data: bundled }
+    return bundled
+  }
+
+  return null
+}
+
 async function fetchModelsDevData(): Promise<any> {
   const controller = new AbortController()
   const timeout = setTimeout(() => controller.abort(), 10000)
@@ -335,6 +354,22 @@ async function fetchModelsDevData(): Promise<any> {
   } finally {
     clearTimeout(timeout)
   }
+}
+
+async function fetchAndCacheModelsDevData(): Promise<any> {
+  if (!modelsDevFetchPromise) {
+    modelsDevFetchPromise = fetchModelsDevData()
+      .then((data) => {
+        modelsDevCache = { updatedAt: Date.now(), data }
+        writeModelsDevCacheFile(data)
+        return data
+      })
+      .finally(() => {
+        modelsDevFetchPromise = null
+      })
+  }
+
+  return modelsDevFetchPromise
 }
 
 async function getModelsDevData(): Promise<any> {
@@ -363,10 +398,7 @@ async function getModelsDevData(): Promise<any> {
   }
 
   try {
-    const data = await fetchModelsDevData()
-    modelsDevCache = { updatedAt: now, data }
-    writeModelsDevCacheFile(data)
-    return data
+    return await fetchAndCacheModelsDevData()
   } catch (error) {
     if (diskCache) {
       console.warn('[AIProviderCatalog] models.dev 在线获取失败，使用本地缓存:', error instanceof Error ? error.message : String(error))
@@ -531,22 +563,28 @@ function getPricingFromModelsDevProvider(provider: any): { pricing: string; pric
 async function enrichProvider(provider: ProviderConnectionMetadata): Promise<AIProviderMetadata> {
   try {
     const data = await getModelsDevData()
-    const modelsDevProvider = getModelsDevProvider(data, provider.id)
-    if (!modelsDevProvider) return toMetadata(provider)
-
-    return toMetadata(
-      provider,
-      readModelDetailsFromModelsDevProvider(provider.id, modelsDevProvider),
-      getPricingFromModelsDevProvider(modelsDevProvider)
-    )
+    return enrichProviderWithModelsDevData(provider, data)
   } catch (error) {
     console.warn('[AIProviderCatalog] models.dev 获取失败:', error instanceof Error ? error.message : String(error))
     return toMetadata(provider)
   }
 }
 
+function enrichProviderWithModelsDevData(provider: ProviderConnectionMetadata, data: any): AIProviderMetadata {
+  const modelsDevProvider = getModelsDevProvider(data, provider.id)
+  if (!modelsDevProvider) return toMetadata(provider)
+
+  return toMetadata(
+    provider,
+    readModelDetailsFromModelsDevProvider(provider.id, modelsDevProvider),
+    getPricingFromModelsDevProvider(modelsDevProvider)
+  )
+}
+
 export async function getProviderDefinitions(): Promise<AIProviderMetadata[]> {
-  return Promise.all(PROVIDERS.map(enrichProvider))
+  const data = readAvailableModelsDevData()
+  if (!data) return PROVIDERS.map(provider => toMetadata(provider))
+  return PROVIDERS.map(provider => enrichProviderWithModelsDevData(provider, data))
 }
 
 export function getProviderDefinition(providerId: string): AIProviderMetadata | undefined {
