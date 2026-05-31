@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react'
-import './ProgressBar.scss'
+import './ProgressBar.css'
 
 interface ProgressBarProps {
   value: number

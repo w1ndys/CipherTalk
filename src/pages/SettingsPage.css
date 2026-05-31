@@ -142,119 +142,6 @@
     opacity: 0.6;
   }
 }
-.about-tab {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  min-height: 400px;
-  text-align: center;
-}
-
-.about-card {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  padding: 40px;
-}
-.about-card .about-logo {
-  width: min(360px, 82vw);
-  height: auto;
-  overflow: hidden;
-  margin-bottom: 18px;
-}
-.about-card .about-logo img {
-  width: 100%;
-  height: auto;
-  display: block;
-  object-fit: contain;
-}
-.about-card .about-name {
-  margin: 0;
-  font-size: 28px;
-  font-weight: 700;
-  color: var(--text-primary);
-}
-.about-card .about-slogan {
-  margin: 4px 0 0;
-  font-size: 14px;
-  color: var(--text-tertiary);
-  letter-spacing: 2px;
-}
-.about-card .about-version {
-  margin: 16px 0 0;
-  padding: 4px 12px;
-  font-size: 13px;
-  color: var(--text-secondary);
-  background: var(--bg-tertiary);
-  border-radius: 20px;
-}
-.about-card .about-update {
-  margin-top: 24px;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 12px;
-}
-.about-card .about-update .update-hint {
-  margin: 0;
-  font-size: 14px;
-  color: var(--primary);
-}
-
-.about-footer {
-  margin-top: auto;
-  padding-top: 24px;
-  text-align: center;
-}
-.about-footer .about-desc {
-  margin: 0;
-  font-size: 14px;
-  color: var(--text-secondary);
-  line-height: 1.6;
-}
-.about-footer .about-desc a {
-  color: var(--primary);
-  text-decoration: none;
-  font-weight: 500;
-  padding: 0 2px;
-  border-radius: 3px;
-  transition: all 0.2s;
-}
-.about-footer .about-desc a:hover {
-  background: var(--primary);
-  color: white;
-}
-.about-footer .about-warning {
-  margin: 8px 0 0;
-  font-size: 12px;
-  color: #e74c3c;
-  font-weight: 500;
-}
-.about-footer .about-links {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 10px;
-  margin-top: 12px;
-  font-size: 14px;
-}
-.about-footer .about-links a {
-  color: var(--primary);
-  text-decoration: none;
-}
-.about-footer .about-links a:hover {
-  text-decoration: underline;
-}
-.about-footer .about-links span {
-  color: var(--text-tertiary);
-}
-.about-footer .copyright {
-  margin: 16px 0 0;
-  font-size: 12px;
-  color: var(--text-tertiary);
-}
-
 .spin {
   animation: spin 1s linear infinite;
 }
@@ -1309,26 +1196,9 @@
   background: var(--primary);
   color: white;
 }
-.settings-page .github-capsules {
-  display: flex;
-  gap: var(--settings-gap);
-  justify-content: center;
-  margin-bottom: 16px;
-}
-.settings-page .github-link-btn {
-  align-items: center;
-  gap: 8px;
-  padding: 8px 16px;
-}
-.settings-page .about-warning {
-  color: var(--danger);
-  font-weight: 600;
-  margin-bottom: 20px;
-}
 @media (max-width: 768px) {
   .settings-page .quote-style-options,
-  .settings-page .window-close-options,
-  .settings-page .github-capsules {
+  .settings-page .window-close-options {
     flex-direction: column;
   }
   .settings-page .btn-row {

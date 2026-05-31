@@ -1,3 +1,4 @@
+import { ScrollShadow } from '@heroui/react'
 import './AgreementPage.scss'
 import * as configService from '../services/config'
 import { usePlatformInfo } from '../hooks/usePlatformInfo'
@@ -11,7 +12,7 @@ function AgreementPage() {
         {isMac && <div className="agreement-titlebar-spacer" aria-hidden="true" />}
         <span>用户协议与隐私政策</span>
       </div>
-      <div className="agreement-content">
+      <ScrollShadow className="agreement-content" size={72}>
         <h2>密语（CipherTalk）软件用户协议与隐私政策</h2>
         <p>欢迎您使用"密语（CipherTalk）"桌面软件（以下简称"本软件"）。在下载、安装、使用本软件之前，请您务必仔细阅读并充分理解本《软件用户协议与隐私政策》（以下简称"本协议"）。一旦您安装、使用本软件，即视为您已阅读、理解并同意接受本协议的全部条款。如您不同意本协议的任何内容，请立即停止使用本软件。</p>
 
@@ -99,7 +100,7 @@ function AgreementPage() {
           <span>协议版本：v{configService.CURRENT_AGREEMENT_VERSION}.0</span>
           <span>更新日期：2026年01月23日</span>
         </div>
-      </div>
+      </ScrollShadow>
     </div>
   )
 }

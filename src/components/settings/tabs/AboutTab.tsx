@@ -1,8 +1,8 @@
-import { Download, RefreshCw, Github } from 'lucide-react'
+import { Alert, Button, Chip, Label, ProgressBar, Separator, Typography } from '@heroui/react'
+import { Download, ExternalLink, Github, RefreshCw, ShieldCheck } from 'lucide-react'
 import type { UpdateDownloadProgressPayload } from '../../../types/electron'
 import type { UpdateInfo } from '../types'
 import { formatFileSize, formatSpeed } from '../utils'
-import { ProgressBar } from '../ui'
 
 interface AboutTabProps {
   appVersion: string
@@ -15,6 +15,16 @@ interface AboutTabProps {
   onCheckUpdate: () => void
 }
 
+const projectLinks = [
+  { label: '密语 CipherTalk', url: 'https://github.com/ILoveBingLu/miyu' },
+  { label: 'WeFlow', url: 'https://github.com/hicccc77/WeFlow' }
+]
+
+const relatedLinks = [
+  { label: '官网', url: 'https://miyu.aiqji.com' },
+  { label: 'ChatLab', url: 'https://chatlab.fun' }
+]
+
 function AboutTab({
   appVersion,
   updateInfo,
@@ -25,79 +35,214 @@ function AboutTab({
   onUpdateNow,
   onCheckUpdate
 }: AboutTabProps) {
-  return (
-    <div className="tab-content about-tab">
-      <div className="about-card">
-        <div className="about-logo">
-          <img src="./About.png" alt="密语 CipherTalk" />
-        </div>
-        <p className="about-version">v{appVersion || '...'}</p>
+  const updateVersion = updateInfo?.version || updateInfo?.diagnostics?.targetVersion
+  const transferredBytes = downloadProgressDetail?.transferred ?? updateInfo?.diagnostics?.downloadedBytes ?? 0
+  const totalBytes = downloadProgressDetail?.total ?? updateInfo?.diagnostics?.totalBytes ?? 0
+  const currentYear = new Date().getFullYear()
+  const updateSourceLabel = updateInfo?.updateSource === 'custom' ? '自定义源' : updateInfo?.updateSource === 'github' ? 'GitHub' : '默认'
+  const policySourceLabel = updateInfo?.policySource === 'custom' ? '自定义策略' : updateInfo?.policySource === 'github' ? 'GitHub 策略' : '无'
 
-        <div className="about-update">
-          {updateInfo?.hasUpdate ? (
-            <>
-              <p className="update-hint">
-                {isDownloading ? `正在下载 v${updateInfo.version}` : updateInfo.forceUpdate ? '检测到强制更新' : `新版本 v${updateInfo.version} 可用`}
-              </p>
-              {isDownloading ? (
-                <ProgressBar
-                  value={downloadProgress}
-                  label={`${downloadProgress.toFixed(0)}%`}
-                  meta={(
-                    <>
-                      <span>
-                        {formatFileSize(downloadProgressDetail?.transferred ?? updateInfo.diagnostics?.downloadedBytes ?? 0)} / {formatFileSize(downloadProgressDetail?.total ?? updateInfo.diagnostics?.totalBytes ?? 0)}
-                      </span>
-                      <span>速度 {formatSpeed(downloadProgressDetail?.bytesPerSecond ?? 0)}</span>
-                    </>
-                  )}
-                />
-              ) : (
-                <button className="btn btn-primary" onClick={onUpdateNow} disabled={isDownloading}>
-                  <Download size={16} /> 立即更新
-                </button>
+  const openExternal = (url: string) => {
+    void window.electronAPI.shell.openExternal(url)
+  }
+
+  const openAgreement = () => {
+    void window.electronAPI.window.openAgreementWindow()
+  }
+
+  const renderUpdateContent = () => {
+    if (updateInfo?.hasUpdate) {
+      return (
+        <div className="space-y-4">
+          <Alert status={updateInfo.forceUpdate ? 'warning' : 'success'}>
+            <Alert.Indicator />
+            <Alert.Content>
+              <Alert.Title>
+                {isDownloading
+                  ? `正在下载 v${updateVersion || '新版本'}`
+                  : updateInfo.forceUpdate
+                    ? '检测到强制更新'
+                    : `新版本 v${updateVersion || '...'} 可用`}
+              </Alert.Title>
+              {(updateInfo.message || updateInfo.title || updateInfo.releaseNotes) && (
+                <Alert.Description>
+                  {updateInfo.message || updateInfo.title || updateInfo.releaseNotes}
+                </Alert.Description>
               )}
-            </>
+            </Alert.Content>
+          </Alert>
+
+          {isDownloading ? (
+            <div className="space-y-3">
+              <ProgressBar value={downloadProgress} valueLabel={`${downloadProgress.toFixed(0)}%`}>
+                <div className="flex items-center justify-between gap-3">
+                  <Label>下载进度</Label>
+                  <ProgressBar.Output />
+                </div>
+                <ProgressBar.Track>
+                  <ProgressBar.Fill />
+                </ProgressBar.Track>
+              </ProgressBar>
+              <div className="flex flex-wrap items-center justify-between gap-2 text-sm text-muted">
+                <span>{formatFileSize(transferredBytes)} / {formatFileSize(totalBytes)}</span>
+                <span>速度 {formatSpeed(downloadProgressDetail?.bytesPerSecond ?? 0)}</span>
+              </div>
+            </div>
           ) : (
-            <button className="btn btn-secondary" onClick={onCheckUpdate} disabled={isCheckingUpdate || isDownloading}>
-              <RefreshCw size={16} className={isCheckingUpdate ? 'spin' : ''} />
-              {isCheckingUpdate ? '检查中...' : '检查更新'}
-            </button>
+            <Button type="button" onPress={onUpdateNow} isDisabled={isDownloading}>
+              <Download size={16} /> 立即更新
+            </Button>
           )}
         </div>
-      </div>
+      )
+    }
 
-      <div className="about-footer">
-        <div className="github-capsules">
-          <button
-            className="btn btn-secondary github-link-btn"
-            onClick={() => window.electronAPI.shell.openExternal('https://github.com/ILoveBingLu/miyu')}
-          >
-            <Github size={16} />
-            <span>密语 CipherTalk</span>
-          </button>
-          <button
-            className="btn btn-secondary github-link-btn"
-            onClick={() => window.electronAPI.shell.openExternal('https://github.com/hicccc77/WeFlow')}
-          >
-            <Github size={16} />
-            <span>WeFlow</span>
-          </button>
+    return (
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <Typography.Paragraph size="sm" color="muted">
+          当前版本已安装。可以手动检查是否有新的稳定版本。
+        </Typography.Paragraph>
+        <Button
+          type="button"
+          variant="secondary"
+          onPress={onCheckUpdate}
+          isDisabled={isCheckingUpdate || isDownloading}
+        >
+          <RefreshCw size={16} className={isCheckingUpdate ? 'spin' : undefined} />
+          {isCheckingUpdate ? '检查中...' : '检查更新'}
+        </Button>
+      </div>
+    )
+  }
+
+  return (
+    <div className="tab-content space-y-8">
+      <section className="flex flex-col gap-6 pb-6 sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex min-w-0 flex-col items-start gap-5 sm:flex-row sm:items-center">
+          <img
+            src="./About.png"
+            alt="密语 CipherTalk"
+            className="pointer-events-none h-auto w-32 shrink-0 object-contain select-none"
+          />
+          <div className="min-w-0 space-y-3">
+            <div className="flex flex-wrap items-center gap-2">
+              <Typography.Heading level={2} className="text-2xl font-semibold text-foreground">
+                密语 CipherTalk
+              </Typography.Heading>
+              <Chip size="sm" variant="soft">
+                <Chip.Label>v{appVersion || '...'}</Chip.Label>
+              </Chip>
+            </div>
+            <Typography.Paragraph size="sm" color="muted" className="max-w-2xl">
+              本地优先的微信数据浏览、检索与分析工具，面向个人数据归档与回顾场景。
+            </Typography.Paragraph>
+            <div className="flex flex-wrap items-center gap-2">
+              <Chip size="sm" color={updateInfo?.hasUpdate ? 'warning' : 'success'} variant="soft">
+                <Chip.Label>{updateInfo?.hasUpdate ? '有新版本' : '已是当前版本'}</Chip.Label>
+              </Chip>
+              <Chip size="sm" variant="secondary">
+                <Chip.Label>本地数据</Chip.Label>
+              </Chip>
+              <Chip size="sm" variant="secondary">
+                <Chip.Label>免费软件</Chip.Label>
+              </Chip>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <Separator />
+
+      <section className="grid gap-8 lg:grid-cols-[minmax(0,1fr)_280px]">
+        <div className="space-y-4">
+          <div className="space-y-1">
+            <Typography.Heading level={3} className="text-lg font-semibold text-foreground">软件更新</Typography.Heading>
+            <Typography.Paragraph size="sm" color="muted">检查更新、下载新版本，并查看当前更新状态。</Typography.Paragraph>
+          </div>
+          {renderUpdateContent()}
         </div>
 
-        <p className="about-warning">
-          软件为免费，如果有人找你收钱，请骂死他，太贱了，拿别人东西卖钱！
-        </p>
+        <dl className="grid gap-4 sm:grid-cols-3 lg:grid-cols-1">
+          <div className="space-y-1">
+            <dt className="text-xs text-muted">当前版本</dt>
+            <dd className="text-sm font-medium text-foreground">v{appVersion || '...'}</dd>
+          </div>
+          <div className="space-y-1">
+            <dt className="text-xs text-muted">更新通道</dt>
+            <dd className="text-sm font-medium text-foreground">{updateSourceLabel}</dd>
+          </div>
+          <div className="space-y-1">
+            <dt className="text-xs text-muted">策略来源</dt>
+            <dd className="text-sm font-medium text-foreground">{policySourceLabel}</dd>
+          </div>
+        </dl>
+      </section>
 
-        <div className="about-links">
-          <a href="#" onClick={(e) => { e.preventDefault(); window.electronAPI.shell.openExternal('https://miyu.aiqji.com') }}>官网</a>
-          <span>·</span>
-          <a href="#" onClick={(e) => { e.preventDefault(); window.electronAPI.shell.openExternal('https://chatlab.fun') }}>ChatLab</a>
-          <span>·</span>
-          <a href="#" onClick={(e) => { e.preventDefault(); window.electronAPI.window.openAgreementWindow() }}>用户协议</a>
+      <Separator />
+
+      <section className="grid gap-8 lg:grid-cols-2">
+        <div className="space-y-3">
+          <div className="space-y-1">
+            <Typography.Heading level={3} className="text-lg font-semibold text-foreground">开源项目</Typography.Heading>
+            <Typography.Paragraph size="sm" color="muted">项目源码与相关依赖。</Typography.Paragraph>
+          </div>
+          <div className="flex flex-col gap-2">
+            {projectLinks.map(link => (
+              <Button
+                key={link.url}
+                type="button"
+                variant="secondary"
+                className="w-full justify-start"
+                onPress={() => openExternal(link.url)}
+              >
+                <Github size={16} />
+                {link.label}
+                <ExternalLink size={14} className="ml-auto" />
+              </Button>
+            ))}
+          </div>
         </div>
-        <p className="copyright">© {new Date().getFullYear()} 密语-CipherTalk. All rights reserved.</p>
-      </div>
+
+        <div className="space-y-3">
+          <div className="space-y-1">
+            <Typography.Heading level={3} className="text-lg font-semibold text-foreground">相关链接</Typography.Heading>
+            <Typography.Paragraph size="sm" color="muted">官方网站、配套产品与用户协议。</Typography.Paragraph>
+          </div>
+          <div className="flex flex-col gap-2">
+            {relatedLinks.map(link => (
+              <Button
+                key={link.url}
+                type="button"
+                variant="secondary"
+                className="w-full justify-start"
+                onPress={() => openExternal(link.url)}
+              >
+                <ExternalLink size={16} />
+                {link.label}
+              </Button>
+            ))}
+            <Button type="button" variant="outline" className="w-full justify-start" onPress={openAgreement}>
+              <ShieldCheck size={16} />
+              用户协议
+            </Button>
+          </div>
+        </div>
+      </section>
+
+      <section className="space-y-4">
+        <Alert status="warning">
+          <Alert.Indicator />
+          <Alert.Content>
+            <Alert.Title>免费软件声明</Alert.Title>
+            <Alert.Description>
+              本软件免费提供。如发现未经授权的付费售卖或二次分发，请谨慎辨别，并优先从官方渠道获取。
+            </Alert.Description>
+          </Alert.Content>
+        </Alert>
+        <Typography.Paragraph size="xs" color="muted" className="text-center">
+          © {currentYear} 密语-CipherTalk. All rights reserved.
+        </Typography.Paragraph>
+      </section>
     </div>
   )
 }
