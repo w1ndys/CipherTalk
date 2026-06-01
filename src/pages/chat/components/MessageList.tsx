@@ -1,6 +1,7 @@
 import { Check, ChevronDown, Loader2 } from 'lucide-react'
-import { useMemo } from 'react'
+import { useCallback, useRef } from 'react'
 import type { RefObject } from 'react'
+import { useVirtualizer } from '@tanstack/react-virtual'
 import ChatBackground from '../../../components/ChatBackground'
 import type { ChatSession, Message } from '../../../types/models'
 import type { ContextMenuState, QuoteStyle } from '../types'
@@ -46,101 +47,29 @@ export function MessageList({
   showScrollToBottom,
   scrollToBottom
 }: MessageListProps) {
-  const renderedMessages = useMemo(() => messages.map((msg, index) => {
-    const prevMsg = index > 0 ? messages[index - 1] : undefined
-    const showDateDivider = shouldShowDateDivider(msg, prevMsg)
-    const showTime = !prevMsg || (msg.createTime - prevMsg.createTime > 300)
-    const isSent = msg.isSend === 1
-    const isSystem = isSystemMessage(msg)
-    const wrapperClass = isSystem ? 'system' : (isSent ? 'sent' : 'received')
-    const messageDomKey = getMessageDomKey(msg)
-    const isSelectable = selectMode && !isSystem
-    const isSelected = selectedMessages.has(msg.localId)
+  // Keep a stable ref to messages so estimateSize/getItemKey callbacks
+  // don't recreate on every render
+  const messagesRef = useRef(messages)
+  messagesRef.current = messages
 
-    return (
-      <div
-        key={messageDomKey}
-        className={`message-wrapper ${wrapperClass}${isSelectable ? ' selectable' : ''}${isSelectable && isSelected ? ' selected' : ''}`}
-        data-message-key={messageDomKey}
-        onClick={isSelectable ? () => onToggleSelect(msg.localId) : undefined}
-      >
-        {isSelectable && (
-          <div className={`select-checkbox${isSelected ? ' checked' : ''}`}>
-            {isSelected && <Check size={13} strokeWidth={3} />}
-          </div>
-        )}
-        {showDateDivider && (
-          <div className="date-divider">
-            <span>{formatDateDivider(msg.createTime)}</span>
-          </div>
-        )}
-        <MessageBubble
-          message={msg}
-          session={currentSession}
-          showTime={!showDateDivider && showTime}
-          myAvatarUrl={myAvatarUrl}
-          isGroupChat={isGroupChat(currentSession.username)}
-          hasImageKey={hasImageKey === true}
-          quoteStyle={quoteStyle}
-          onContextMenu={(e, message, handlers) => {
-            if (message.localType === 10000) {
-              return
-            }
+  const estimateSize = useCallback((index: number) => {
+    const msg = messagesRef.current[index]
+    if (!msg) return 64
+    // System messages (localType 10000) are compact
+    if (msg.localType === 10000) return 36
+    return 64
+  }, [])
 
-            e.preventDefault()
-            e.stopPropagation()
-
-            const menuWidth = 160
-            let menuItemCount = 1
-            if (message.localType !== 34 && message.localType !== 3 && message.localType !== 43) {
-              menuItemCount += 2
-            }
-            if (message.localType !== 3 && message.localType !== 43) {
-              menuItemCount += 1
-            }
-            if (message.localType === 34) {
-              menuItemCount += 1
-            }
-            if (handlers?.reTranscribe) {
-              menuItemCount += 1
-            }
-            if (handlers?.editStt) {
-              menuItemCount += 1
-            }
-            const menuHeight = menuItemCount * 38 + 12
-            let x = e.clientX
-            let y = e.clientY
-
-            if (x + menuWidth > window.innerWidth) {
-              x = window.innerWidth - menuWidth - 10
-            }
-            if (y + menuHeight > window.innerHeight) {
-              y = window.innerHeight - menuHeight - 10
-            }
-
-            setContextMenu({
-              x,
-              y,
-              message,
-              session: currentSession,
-              handlers
-            })
-          }}
-          isSelected={selectedMessages.has(msg.localId)}
-        />
-      </div>
-    )
-  }), [
-    messages,
-    currentSession,
-    myAvatarUrl,
-    hasImageKey,
-    quoteStyle,
-    selectedMessages,
-    selectMode,
-    onToggleSelect,
-    setContextMenu
-  ])
+  const virtualizer = useVirtualizer({
+    count: messages.length,
+    getScrollElement: () => messageListRef.current,
+    estimateSize,
+    overscan: 10,
+    getItemKey: (index) => {
+      const msg = messagesRef.current[index]
+      return msg ? getMessageDomKey(msg) : `msg-${index}`
+    },
+  })
 
   if (isLoadingMessages && messages.length === 0) {
     return (
@@ -192,7 +121,109 @@ export function MessageList({
         </div>
       )}
 
-      {renderedMessages}
+      <div
+        style={{
+          height: virtualizer.getTotalSize(),
+          position: 'relative',
+          width: '100%',
+        }}
+      >
+        {virtualizer.getVirtualItems().map((virtualItem) => {
+          const msg = messages[virtualItem.index]
+          const prevMsg = virtualItem.index > 0 ? messages[virtualItem.index - 1] : undefined
+          const showDateDivider = shouldShowDateDivider(msg, prevMsg)
+          const showTime = !prevMsg || (msg.createTime - prevMsg.createTime > 300)
+          const isSent = msg.isSend === 1
+          const isSystem = isSystemMessage(msg)
+          const wrapperClass = isSystem ? 'system' : (isSent ? 'sent' : 'received')
+          const messageDomKey = getMessageDomKey(msg)
+          const isSelectable = selectMode && !isSystem
+          const isSelected = selectedMessages.has(msg.localId)
+
+          return (
+            <div
+              key={virtualItem.key}
+              className={`message-wrapper ${wrapperClass}${isSelectable ? ' selectable' : ''}${isSelectable && isSelected ? ' selected' : ''}`}
+              data-message-key={messageDomKey}
+              data-index={virtualItem.index}
+              ref={virtualizer.measureElement}
+              style={{
+                position: 'absolute',
+                top: 0,
+                left: 0,
+                width: '100%',
+                transform: `translateY(${virtualItem.start}px)`,
+              }}
+              onClick={isSelectable ? () => onToggleSelect(msg.localId) : undefined}
+            >
+              {isSelectable && (
+                <div className={`select-checkbox${isSelected ? ' checked' : ''}`}>
+                  {isSelected && <Check size={13} strokeWidth={3} />}
+                </div>
+              )}
+              {showDateDivider && (
+                <div className="date-divider">
+                  <span>{formatDateDivider(msg.createTime)}</span>
+                </div>
+              )}
+              <MessageBubble
+                message={msg}
+                session={currentSession}
+                showTime={!showDateDivider && showTime}
+                myAvatarUrl={myAvatarUrl}
+                isGroupChat={isGroupChat(currentSession.username)}
+                hasImageKey={hasImageKey === true}
+                quoteStyle={quoteStyle}
+                onContextMenu={(e, message, handlers) => {
+                  if (message.localType === 10000) {
+                    return
+                  }
+
+                  e.preventDefault()
+                  e.stopPropagation()
+
+                  const menuWidth = 160
+                  let menuItemCount = 1
+                  if (message.localType !== 34 && message.localType !== 3 && message.localType !== 43) {
+                    menuItemCount += 2
+                  }
+                  if (message.localType !== 3 && message.localType !== 43) {
+                    menuItemCount += 1
+                  }
+                  if (message.localType === 34) {
+                    menuItemCount += 1
+                  }
+                  if (handlers?.reTranscribe) {
+                    menuItemCount += 1
+                  }
+                  if (handlers?.editStt) {
+                    menuItemCount += 1
+                  }
+                  const menuHeight = menuItemCount * 38 + 12
+                  let x = e.clientX
+                  let y = e.clientY
+
+                  if (x + menuWidth > window.innerWidth) {
+                    x = window.innerWidth - menuWidth - 10
+                  }
+                  if (y + menuHeight > window.innerHeight) {
+                    y = window.innerHeight - menuHeight - 10
+                  }
+
+                  setContextMenu({
+                    x,
+                    y,
+                    message,
+                    session: currentSession,
+                    handlers
+                  })
+                }}
+                isSelected={selectedMessages.has(msg.localId)}
+              />
+            </div>
+          )
+        })}
+      </div>
 
       <div className={`scroll-to-bottom ${showScrollToBottom ? 'show' : ''}`} onClick={scrollToBottom}>
         <ChevronDown size={16} />
