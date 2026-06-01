@@ -35,6 +35,11 @@ type ScrollAnchor = {
   scrollTop: number
 }
 
+type PrependVirtualAnchor = {
+  anchorIndex: number
+  prependedCount: number
+}
+
 function getMessageCacheKey(message: Message): string {
   return `${message.serverId}-${message.localId}-${message.createTime}-${message.sortSeq}`
 }
@@ -86,6 +91,7 @@ function ChatPage(_props: ChatPageProps) {
   const scrollToBottomAfterRenderRef = useRef(false)
   const virtualizerRef = useRef<Virtualizer<HTMLDivElement, Element> | null>(null)
   const pendingPrependAnchorRef = useRef<ScrollAnchor | null>(null)
+  const pendingPrependVirtualAnchorRef = useRef<PrependVirtualAnchor | null>(null)
   const currentSessionIdRef = useRef<string | null>(null)
   const messageLoadSeqRef = useRef(0)
   const lastUpdateTimeRef = useRef<number>(0)
@@ -172,6 +178,28 @@ function ChatPage(_props: ChatPageProps) {
     }
   }, [])
 
+  const captureTopVisibleVirtualIndex = useCallback((): number | null => {
+    const virtualizer = virtualizerRef.current
+    if (!virtualizer) return null
+
+    const scrollOffset = virtualizer.scrollOffset ?? 0
+    const virtualItems = virtualizer.getVirtualItems()
+    const topVisibleItem = virtualItems.find(item => item.end > scrollOffset) ?? virtualItems[0]
+
+    return typeof topVisibleItem?.index === 'number' ? topVisibleItem.index : null
+  }, [])
+
+  const queuePrependScrollRestore = useCallback((prependedCount: number) => {
+    const anchorIndex = captureTopVisibleVirtualIndex()
+    if (anchorIndex !== null) {
+      pendingPrependVirtualAnchorRef.current = { anchorIndex, prependedCount }
+      pendingPrependAnchorRef.current = null
+      return
+    }
+
+    pendingPrependAnchorRef.current = captureScrollAnchor()
+  }, [captureScrollAnchor, captureTopVisibleVirtualIndex])
+
   const saveCurrentSessionMessageCache = useCallback((sessionId: string | null = currentSessionIdRef.current) => {
     if (!sessionId || isDateJumpModeRef.current) return
     const cachedMessages = messagesRef.current
@@ -200,6 +228,16 @@ function ChatPage(_props: ChatPageProps) {
   }, [])
 
   useLayoutEffect(() => {
+    const virtualAnchor = pendingPrependVirtualAnchorRef.current
+    if (virtualAnchor) {
+      pendingPrependVirtualAnchorRef.current = null
+      const virtualizer = virtualizerRef.current
+      if (virtualizer) {
+        virtualizer.scrollToIndex(virtualAnchor.prependedCount + virtualAnchor.anchorIndex, { align: 'start' })
+        return
+      }
+    }
+
     const anchor = pendingPrependAnchorRef.current
     if (!anchor) return
     pendingPrependAnchorRef.current = null
@@ -408,7 +446,6 @@ function ChatPage(_props: ChatPageProps) {
   // 加载消息
   const loadMessages = async (sessionId: string, offset = 0) => {
     const loadSeq = ++messageLoadSeqRef.current
-    const anchor = offset > 0 ? captureScrollAnchor() : null
     if (offset === 0) {
       setLoadingMessages(true)
       setMessages([])
@@ -467,7 +504,7 @@ function ChatPage(_props: ChatPageProps) {
           if (msgs.length === 0) {
             setHasMoreMessages(false)
           } else {
-            pendingPrependAnchorRef.current = anchor
+            queuePrependScrollRestore(msgs.length)
             appendMessages(msgs, true)
             setHasMoreMessages(hasMore)
             setCurrentOffset(newOffset)
@@ -592,6 +629,7 @@ function ChatPage(_props: ChatPageProps) {
         .sort((a, b) => a.createTime - b.createTime || a.localId - b.localId)
 
       if (uniqueNewMessages.length === 0) return
+      if (isDateJumpModeRef.current) return
 
       appendMessages(uniqueNewMessages, false)
       const nextOffset = currentOffsetRef.current + uniqueNewMessages.length
@@ -690,8 +728,6 @@ function ChatPage(_props: ChatPageProps) {
   const loadMoreMessagesInDateJumpMode = useCallback(async () => {
     if (!currentSessionId || dateJumpCursorSortSeq === null || isLoadingMoreRef.current || !hasMoreMessages) return
 
-    const anchor = captureScrollAnchor()
-
     isLoadingMoreRef.current = true
     setLoadingMore(true)
     try {
@@ -720,7 +756,7 @@ function ChatPage(_props: ChatPageProps) {
         const oldestCreateTime = uniqueOlderMessages[0]?.createTime
         const oldestLocalId = uniqueOlderMessages[0]?.localId
 
-        pendingPrependAnchorRef.current = anchor
+        queuePrependScrollRestore(uniqueOlderMessages.length)
         appendMessages(uniqueOlderMessages, true)
         if (typeof oldestSortSeq !== 'number' || oldestSortSeq >= dateJumpCursorSortSeq) {
           setHasMoreMessages(false)
@@ -759,8 +795,7 @@ function ChatPage(_props: ChatPageProps) {
     dateJumpCursorLocalId,
     hasMoreMessages,
     appendMessages,
-    captureScrollAnchor,
-    restoreScrollAnchor,
+    queuePrependScrollRestore,
     setHasMoreMessages,
     setLoadingMore
   ])
@@ -930,6 +965,7 @@ function ChatPage(_props: ChatPageProps) {
           .sort((a, b) => a.createTime - b.createTime || a.localId - b.localId)
 
         if (uniqueNewMessages.length === 0) return
+        if (isDateJumpModeRef.current) return
         appendMessages(uniqueNewMessages, false)
         incrementSyncVersion()
         if (isNearBottom) {
@@ -1476,6 +1512,7 @@ function ChatPage(_props: ChatPageProps) {
             uniqueNewMessages.sort((a, b) => a.createTime - b.createTime || a.localId - b.localId)
 
             console.log(`[ChatPage] 自动增长发现 ${uniqueNewMessages.length} 条新消息`)
+            if (isDateJumpModeRef.current) return
             appendMessages(uniqueNewMessages, false)
 
             // 滚动处理：如果用户在底部附近，则自动平滑滚动
@@ -1717,4 +1754,3 @@ function ChatPage(_props: ChatPageProps) {
 }
 
 export default ChatPage
-
