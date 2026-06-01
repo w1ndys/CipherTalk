@@ -1,27 +1,31 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   Alert,
+  AlertDialog,
   Button,
-  Card,
+  ButtonGroup,
   Chip,
   Description,
-  Disclosure,
-  FieldError,
   Input,
   Label,
   ListBox,
   Modal,
+  ScrollShadow,
   Select,
+  Separator,
   Spinner,
+  Surface,
   Switch,
+  Tabs,
   TextArea,
   TextField,
+  Tooltip,
   Toast,
   toast,
+  Typography,
 } from '@heroui/react'
-import { marked } from 'marked'
 import JSZip from 'jszip'
-import { Check, Copy, Download, Save, Plus, Trash2, Eye, Pencil, Plug, Unplug, Upload, FileCode, X, Sparkles } from 'lucide-react'
+import { Copy, Download, Save, Plus, Trash2, Eye, Pencil, Plug, Unplug, Upload, FileCode, X } from 'lucide-react'
 import * as configService from '../services/config'
 
 type McpLaunchConfig = {
@@ -79,15 +83,6 @@ type SkillPanelState = {
 }
 
 type SkillDialogState = SkillPanelState | null
-
-function formatCommandPart(value: string) {
-  if (!value) return value
-  return /[\s"]/.test(value) ? `"${value.replace(/"/g, '\\"')}"` : value
-}
-
-function getPackagedLauncherLabel(command: string) {
-  return command.endsWith('ciphertalk-mcp') ? '`ciphertalk-mcp`' : '`ciphertalk-mcp.cmd`'
-}
 
 function createEmptyServerForm(): ServerFormState {
   return {
@@ -197,10 +192,6 @@ function parseArgs(value: string): string[] | undefined {
   return parts.map(part => part.replace(/^["']|["']$/g, '')).filter(Boolean)
 }
 
-function renderMarkdown(content: string) {
-  return { __html: marked.parse(content || '') as string }
-}
-
 function McpPage() {
   const [topTab, setTopTab] = useState<TopTab>('server')
 
@@ -219,7 +210,6 @@ function McpPage() {
   const [skillDialog, setSkillDialog] = useState<SkillDialogState>(null)
   const [skillContent, setSkillContent] = useState('')
   const [editingSkillContent, setEditingSkillContent] = useState('')
-  const [deleteTarget, setDeleteTarget] = useState<{ type: 'skill' | 'server'; name: string } | null>(null)
   const [serverPanelOpen, setServerPanelOpen] = useState(false)
   const [editingServer, setEditingServer] = useState<string | null>(null)
   const [serverForm, setServerForm] = useState<ServerFormState>(createEmptyServerForm)
@@ -275,10 +265,6 @@ function McpPage() {
     if (topTab === 'integration') void loadIntegrationData()
   }, [topTab, loadIntegrationData])
 
-  const mcpRunCommand = useMemo(() => {
-    return [launchConfig.command, ...launchConfig.args].map(formatCommandPart).join(' ')
-  }, [launchConfig])
-
   const mcpServerJsonTemplate = useMemo(() => JSON.stringify({
     mcpServers: { ciphertalk: { command: launchConfig.command, args: launchConfig.args, cwd: launchConfig.cwd } },
   }, null, 2), [launchConfig])
@@ -331,7 +317,6 @@ function McpPage() {
   const deleteSkill = async (name: string) => {
     const result = await window.electronAPI.skillManager.delete(name)
     toast[result.success ? 'success' : 'danger'](result.success ? `Skill "${name}" 已删除` : (result.error || '删除失败'))
-    setDeleteTarget(null)
     if (result.success) void loadIntegrationData()
   }
 
@@ -488,7 +473,6 @@ function McpPage() {
   const deleteServer = async (name: string) => {
     const result = await window.electronAPI.mcpClient.deleteConfig(name)
     toast[result.success ? 'success' : 'danger'](result.success ? `服务器 "${name}" 已删除` : (result.error || '删除失败'))
-    setDeleteTarget(null)
     if (result.success) void loadIntegrationData()
   }
 
@@ -507,53 +491,76 @@ function McpPage() {
     setServerPanelOpen(false); setEditingServer(null); setServerForm(createEmptyServerForm()); resetJsonPasteState()
   }
 
+  const renderCloseFormButton = () => (
+    <Tooltip delay={0}>
+      <Button isIconOnly variant="tertiary" size="sm" onPress={closeServerPanel}>
+        <X size={16} />
+      </Button>
+      <Tooltip.Content>关闭表单</Tooltip.Content>
+    </Tooltip>
+  )
+
   const renderServerForm = () => (
-    <Card className="border-2 border-accent bg-surface-tertiary">
-      <Card.Header className="flex items-center justify-between">
-        <div className="flex flex-col gap-1">
-          <Card.Title>{editingServer ? `编辑服务器：${editingServer}` : '添加 MCP 服务器'}</Card.Title>
-          <Card.Description>参数会保存到本机 MCP 客户端配置中。</Card.Description>
+    <Surface variant="secondary" className="flex flex-col gap-4">
+      <div className="flex items-center justify-between gap-3">
+        <div>
+          <Typography type="h6">{editingServer ? `编辑服务器：${editingServer}` : '添加 MCP 服务器'}</Typography>
+          <Description>参数会保存到本机 MCP 客户端配置中。</Description>
         </div>
-        <Button isIconOnly variant="tertiary" size="sm" onPress={closeServerPanel}><X size={16} /></Button>
-      </Card.Header>
-      <Card.Content>
-        <div className="flex flex-col gap-4">
-          {!editingServer && (
-            <div className="flex gap-2">
-              <Button variant={serverFormMode === 'fields' ? 'primary' : 'tertiary'} size="sm"
-                onPress={() => setServerFormMode('fields')}>表单填写</Button>
-              <Button variant={serverFormMode === 'json' ? 'primary' : 'tertiary'} size="sm"
-                onPress={() => setServerFormMode('json')}>粘贴 JSON</Button>
-            </div>
-          )}
+        {renderCloseFormButton()}
+      </div>
+      <div className="flex flex-col gap-4">
+        {!editingServer && (
+          <ButtonGroup variant="tertiary" size="sm">
+            <Button
+              variant={serverFormMode === 'fields' ? 'primary' : 'tertiary'}
+              onPress={() => setServerFormMode('fields')}
+            >
+              表单填写
+            </Button>
+            <Button
+              variant={serverFormMode === 'json' ? 'primary' : 'tertiary'}
+              onPress={() => setServerFormMode('json')}
+            >
+              <ButtonGroup.Separator />
+              粘贴 JSON
+            </Button>
+          </ButtonGroup>
+        )}
 
           {serverFormMode === 'json' ? (
             <div className="flex flex-col gap-3">
-              <p className="text-xs text-muted">
-                粘贴来自 Claude Desktop、Cursor 等工具的{' '}
-                <code className="px-1.5 py-0.5 rounded bg-surface text-xs font-mono text-foreground">mcpServers</code>
-                {' '}配置，系统会自动识别并填入表单。
-              </p>
-              <div className="flex flex-col gap-1.5">
-                <span className="text-xs text-foreground font-semibold">JSON 配置</span>
-                <TextArea
-                  value={jsonPasteText}
-                  onChange={(e) => { setJsonPasteText(e.target.value); setJsonPasteError(null) }}
-                  placeholder={'{\n  "mcpServers": {\n    "my-server": {\n      "command": "npx",\n      "args": ["-y", "some-mcp-server"]\n    }\n  }\n}'}
-                  className="min-h-[200px] font-mono text-xs"
-                />
-                <span className={`text-xs ${jsonPasteError ? 'text-danger' : 'text-muted'}`}>
+              <Description>
+                粘贴来自 Claude Desktop、Cursor 等工具的 <Typography.Code>mcpServers</Typography.Code> 配置，系统会自动识别并填入表单。
+              </Description>
+              <TextArea
+                value={jsonPasteText}
+                onChange={(e) => { setJsonPasteText(e.target.value); setJsonPasteError(null) }}
+                placeholder={'{\n  "mcpServers": {\n    "my-server": {\n      "command": "npx",\n      "args": ["-y", "some-mcp-server"]\n    }\n  }\n}'}
+                className="min-h-[200px]"
+              >
+                <Label>JSON 配置</Label>
+                <Description>
                   {jsonPasteError || '支持：完整 mcpServers 对象 / 单条服务器对象 / 直接 command 或 url 配置'}
-                </span>
-              </div>
-              <div className="flex justify-end gap-2">
-                <Button variant="tertiary" onPress={closeServerPanel}>取消</Button>
+                </Description>
+              </TextArea>
+              {jsonPasteError && (
+                <Alert status="danger">
+                  <Alert.Indicator />
+                  <Alert.Content>
+                    <Alert.Description>{jsonPasteError}</Alert.Description>
+                  </Alert.Content>
+                </Alert>
+              )}
+              <ButtonGroup variant="tertiary">
+                <Button onPress={closeServerPanel}>取消</Button>
+                <ButtonGroup.Separator />
                 <Button variant="primary" isDisabled={!jsonPasteText.trim()} onPress={applyJsonPaste}>解析并填入</Button>
-              </div>
+              </ButtonGroup>
             </div>
           ) : (
             <>
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+              <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
                 <TextField value={serverForm.name} onChange={(v) => setServerForm(f => ({ ...f, name: v }))}
                   isDisabled={!!editingServer} className="w-full">
                   <Label>服务器名称</Label>
@@ -593,13 +600,13 @@ function McpPage() {
                     <Label>工作目录 (可选)</Label>
                     <Input placeholder="D:/Workspace/project" />
                   </TextField>
-                  <div className="flex flex-col gap-1 w-full">
-                    <span className="text-xs text-foreground font-semibold">环境变量 (每行 KEY=VALUE)</span>
-                    <TextArea value={serverForm.env}
-                      onChange={(e) => setServerForm(f => ({ ...f, env: e.target.value }))}
-                      placeholder={'API_KEY=...\nNODE_ENV=production'}
-                      className="min-h-[80px] font-mono text-xs" />
-                  </div>
+                  <TextArea value={serverForm.env}
+                    onChange={(e) => setServerForm(f => ({ ...f, env: e.target.value }))}
+                    placeholder={'API_KEY=...\nNODE_ENV=production'}
+                    className="min-h-[80px]">
+                    <Label>环境变量</Label>
+                    <Description>每行 KEY=VALUE。</Description>
+                  </TextArea>
                 </div>
               ) : (
                 <div className="flex flex-col gap-3">
@@ -607,54 +614,227 @@ function McpPage() {
                     <Label>URL</Label>
                     <Input placeholder={serverForm.type === 'sse' ? 'http://localhost:3000/sse' : 'http://localhost:3000/mcp'} />
                   </TextField>
-                  <div className="flex flex-col gap-1 w-full">
-                    <span className="text-xs text-foreground font-semibold">请求头 (每行 KEY=VALUE)</span>
-                    <TextArea value={serverForm.headers}
-                      onChange={(e) => setServerForm(f => ({ ...f, headers: e.target.value }))}
-                      placeholder={'Authorization=Bearer ...\nX-Api-Key=...'}
-                      className="min-h-[80px] font-mono text-xs" />
-                  </div>
+                  <TextArea value={serverForm.headers}
+                    onChange={(e) => setServerForm(f => ({ ...f, headers: e.target.value }))}
+                    placeholder={'Authorization=Bearer ...\nX-Api-Key=...'}
+                    className="min-h-[80px]">
+                    <Label>请求头</Label>
+                    <Description>每行 KEY=VALUE。</Description>
+                  </TextArea>
                 </div>
               )}
 
-              <div className="flex justify-end gap-2">
-                <Button variant="tertiary" onPress={closeServerPanel}>取消</Button>
+              <ButtonGroup variant="tertiary">
+                <Button onPress={closeServerPanel}>取消</Button>
+                <ButtonGroup.Separator />
                 <Button variant="primary" onPress={saveServer}>保存</Button>
-              </div>
+              </ButtonGroup>
             </>
           )}
-        </div>
-      </Card.Content>
-    </Card>
+      </div>
+    </Surface>
   )
 
   const renderToolsContent = (serverName: string) => {
     const tools = serverTools[serverName] || []
     const loadingTools = serverBusy[serverName] === 'tools'
     return (
-      <div className="flex flex-col gap-3 mt-2 max-h-[68vh] overflow-auto">
-        {loadingTools ? (
-          <div className="flex gap-2 items-center py-2">
-            <Spinner size="sm" />
-            <span className="text-xs text-muted">正在读取工具列表...</span>
-          </div>
-        ) : tools.length === 0 ? (
-          <span className="text-xs text-tertiary">暂无工具或服务器尚未返回工具列表。</span>
-        ) : (
-          tools.map(tool => (
-            <div key={tool.name} className="p-3 rounded-xl border border-border bg-surface">
-              <span className="text-sm font-semibold text-foreground">{tool.name}</span>
-              {tool.description && (
-                <p className="mt-1 text-xs text-muted leading-relaxed">{tool.description}</p>
-              )}
-              {tool.inputSchema !== undefined && tool.inputSchema !== null && (
-                <pre className="mt-2 mb-0 p-2 rounded-lg overflow-auto bg-surface-tertiary text-xs text-muted font-mono">
-                  {JSON.stringify(tool.inputSchema, null, 2)}
-                </pre>
-              )}
+      <ScrollShadow hideScrollBar className="max-h-[68vh]" size={40}>
+        <div className="flex flex-col gap-3">
+          {loadingTools ? (
+            <Alert status="default">
+              <Alert.Indicator><Spinner size="sm" /></Alert.Indicator>
+              <Alert.Content>
+                <Alert.Description>正在读取工具列表...</Alert.Description>
+              </Alert.Content>
+            </Alert>
+          ) : tools.length === 0 ? (
+            <Alert status="default">
+              <Alert.Indicator />
+              <Alert.Content>
+                <Alert.Description>暂无工具或服务器尚未返回工具列表。</Alert.Description>
+              </Alert.Content>
+            </Alert>
+          ) : (
+            tools.map(tool => (
+              <Surface key={tool.name} variant="transparent" className="flex flex-col gap-3">
+                <div>
+                  <Typography type="body-sm" weight="semibold">{tool.name}</Typography>
+                  {tool.description && <Description>{tool.description}</Description>}
+                </div>
+                {tool.inputSchema !== undefined && tool.inputSchema !== null && (
+                  <TextArea
+                    readOnly
+                    value={JSON.stringify(tool.inputSchema, null, 2)}
+                    className="min-h-[160px]"
+                  >
+                    <Label>输入 Schema</Label>
+                  </TextArea>
+                )}
+              </Surface>
+            ))
+          )}
+        </div>
+      </ScrollShadow>
+    )
+  }
+
+  const renderDeleteDialog = (type: 'skill' | 'server', name: string, isDisabled = false) => (
+    <AlertDialog>
+      <Button variant="danger" size="sm" isDisabled={isDisabled}>
+        <Trash2 size={14} />
+        删除
+      </Button>
+      <AlertDialog.Backdrop>
+        <AlertDialog.Container size="sm">
+          <AlertDialog.Dialog>
+            <AlertDialog.CloseTrigger />
+            <AlertDialog.Header>
+              <AlertDialog.Icon status="danger" />
+              <AlertDialog.Heading>确认删除</AlertDialog.Heading>
+            </AlertDialog.Header>
+            <AlertDialog.Body>
+              <Typography.Paragraph color="muted" size="sm">
+                确定要删除{type === 'skill' ? ' Skill' : ' MCP 服务器'} "{name}" 吗？此操作不可撤销。
+              </Typography.Paragraph>
+            </AlertDialog.Body>
+            <AlertDialog.Footer>
+              <Button slot="close" variant="tertiary">取消</Button>
+              <Button
+                slot="close"
+                variant="danger"
+                onPress={() => {
+                  if (type === 'skill') void deleteSkill(name)
+                  else void deleteServer(name)
+                }}
+              >
+                删除
+              </Button>
+            </AlertDialog.Footer>
+          </AlertDialog.Dialog>
+        </AlertDialog.Container>
+      </AlertDialog.Backdrop>
+    </AlertDialog>
+  )
+
+  const renderSkillRow = (skill: SkillInfo, variant: 'external' | 'internal') => (
+    <Surface key={skill.name} variant="transparent" className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+      <div className="min-w-0">
+        <div className="flex items-center gap-2">
+          <FileCode size={18} />
+          <Typography type="body-sm" weight="semibold" truncate>{skill.name}</Typography>
+          <Chip variant="secondary" size="sm">v{skill.version}</Chip>
+          {skill.builtin && <Chip color="accent" variant="primary" size="sm">内置</Chip>}
+        </div>
+        <Description>{skill.description}</Description>
+      </div>
+      {variant === 'external' ? (
+        <ButtonGroup variant="tertiary" size="sm">
+          <Button onPress={() => openSkillPanel(skill.name, 'preview')}>
+            <Eye size={14} />
+            预览
+          </Button>
+          <Button
+            isDisabled={exportingSkillZip === skill.name}
+            onPress={() => exportSkillZip(skill.name)}
+          >
+            <ButtonGroup.Separator />
+            <Download size={14} />
+            {exportingSkillZip === skill.name ? '导出中...' : '导出 zip'}
+          </Button>
+        </ButtonGroup>
+      ) : (
+        <div className="flex items-center gap-2">
+          <Button variant="tertiary" size="sm" onPress={() => openSkillPanel(skill.name, 'preview')}>
+            <Eye size={14} />
+            预览
+          </Button>
+          {!skill.builtin && (
+            <Button variant="tertiary" size="sm" onPress={() => openSkillPanel(skill.name, 'edit')}>
+              <Pencil size={14} />
+              编辑
+            </Button>
+          )}
+          <Button
+            variant="tertiary"
+            size="sm"
+            isDisabled={exportingSkillZip === skill.name}
+            onPress={() => exportSkillZip(skill.name)}
+          >
+            <Download size={14} />
+            {exportingSkillZip === skill.name ? '导出中...' : '导出'}
+          </Button>
+          {!skill.builtin && renderDeleteDialog('skill', skill.name)}
+        </div>
+      )}
+    </Surface>
+  )
+
+  const renderServerRow = (srv: McpServerStatus) => {
+    const isBusy = Boolean(serverBusy[srv.name] || srv.status === 'connecting')
+    const isActionBusy = Boolean(serverBusy[srv.name] && serverBusy[srv.name] !== 'tools')
+    const endpoint = srv.config.type === 'stdio'
+      ? `${srv.config.command} ${(srv.config.args || []).join(' ')}`
+      : srv.config.url
+
+    return (
+      <div key={srv.name} className="flex flex-col gap-2">
+        <Surface variant="transparent" className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div className="min-w-0">
+            <div className="flex items-center gap-2">
+              <Plug size={16} />
+              <Typography type="body-sm" weight="semibold" truncate>{srv.name}</Typography>
+              <Chip variant="secondary" size="sm">{srv.config.type.toUpperCase()}</Chip>
+              {renderStatusChip(srv.status)}
+              {srv.config.timeoutMs && <Chip variant="secondary" size="sm">{srv.config.timeoutMs}ms</Chip>}
             </div>
-          ))
-        )}
+            <Description>{endpoint}</Description>
+            {srv.error && (
+              <Alert status="danger">
+                <Alert.Indicator />
+                <Alert.Content>
+                  <Alert.Description>{srv.error}</Alert.Description>
+                </Alert.Content>
+              </Alert>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            {srv.status === 'connected' && (
+              <Button
+                variant="tertiary"
+                size="sm"
+                isDisabled={isActionBusy}
+                onPress={() => openToolsDialog(srv.name)}
+              >
+                {serverBusy[srv.name] === 'tools' ? <Spinner size="sm" color="current" /> : null}
+                预览工具 {srv.toolCount}
+              </Button>
+            )}
+            {srv.status === 'connected' ? (
+              <Tooltip delay={0}>
+                <Button isIconOnly variant="tertiary" size="sm" isDisabled={Boolean(serverBusy[srv.name])} onPress={() => disconnectServer(srv.name)}>
+                  {serverBusy[srv.name] === 'disconnect' ? <Spinner size="sm" color="current" /> : <Unplug size={14} />}
+                </Button>
+                <Tooltip.Content>断开</Tooltip.Content>
+              </Tooltip>
+            ) : (
+              <Tooltip delay={0}>
+                <Button isIconOnly variant="tertiary" size="sm" isDisabled={isBusy} onPress={() => connectServer(srv.name)}>
+                  {serverBusy[srv.name] === 'connect' || srv.status === 'connecting' ? <Spinner size="sm" color="current" /> : <Plug size={14} />}
+                </Button>
+                <Tooltip.Content>连接</Tooltip.Content>
+              </Tooltip>
+            )}
+            <Tooltip delay={0}>
+              <Button isIconOnly variant="tertiary" size="sm" isDisabled={isBusy} onPress={() => openEditServer(srv)}>
+                <Pencil size={14} />
+              </Button>
+              <Tooltip.Content>编辑</Tooltip.Content>
+            </Tooltip>
+            {renderDeleteDialog('server', srv.name, isBusy)}
+          </div>
+        </Surface>
+        {serverPanelOpen && editingServer === srv.name && renderServerForm()}
       </div>
     )
   }
@@ -662,269 +842,159 @@ function McpPage() {
   return (
     <>
       <Toast.Provider placement="top" />
-      <div className="h-full mx-[-0.75rem] mt-[-0.75rem] overflow-y-auto pb-3">
-        <div className="max-w-5xl mx-auto px-4 md:px-8 py-3 md:py-4">
-          <div className="flex flex-col gap-3">
-            {/* ── Top Tabs ── */}
-            <div className="flex gap-2 px-1 pt-1">
-              <Button variant={topTab === 'server' ? 'primary' : 'tertiary'} size="sm"
-                onPress={() => setTopTab('server')}>MCP 服务端</Button>
-              <Button variant={topTab === 'integration' ? 'primary' : 'tertiary'} size="sm"
-                onPress={() => setTopTab('integration')}>集成中心</Button>
-            </div>
+      <ScrollShadow hideScrollBar className="h-full min-h-0 pb-3" size={56}>
+        <Tabs selectedKey={topTab} onSelectionChange={(key) => setTopTab(String(key) as TopTab)}>
+          <Tabs.ListContainer>
+            <Tabs.List aria-label="MCP 页面">
+              <Tabs.Tab id="server">MCP 服务端<Tabs.Indicator /></Tabs.Tab>
+              <Tabs.Tab id="integration">集成中心<Tabs.Indicator /></Tabs.Tab>
+            </Tabs.List>
+          </Tabs.ListContainer>
 
-            {/* ════════ TAB 1: MCP 服务端 ════════ */}
-            {topTab === 'server' && (<>
-              <Card>
-                <Card.Header>
-                  <Card.Title>服务配置</Card.Title>
-                  <Card.Description>CipherTalk 作为 MCP 服务端对外暴露工具</Card.Description>
-                </Card.Header>
-                <Card.Content>
-                  <div className="flex flex-col gap-4">
-                    <Card className="p-3 rounded-xl border border-border bg-surface">
-                      <div className="flex items-center justify-between gap-3">
-                        <div>
-                          <span className="text-sm font-semibold text-foreground">MCP 状态标记</span>
-                          <p className="mt-1 text-xs text-muted">在 health_check / get_status 中暴露配置状态，不阻止宿主调用工具。</p>
-                        </div>
-                        <Switch isSelected={mcpEnabled} onChange={setMcpEnabled}
-                          isDisabled={loading || saving}>
-                          <Switch.Control><Switch.Thumb /></Switch.Control>
-                        </Switch>
-                      </div>
-                    </Card>
-
-                    <Card className="p-3 rounded-xl border border-border bg-surface">
-                      <div className="flex items-center justify-between gap-3">
-                        <div>
-                          <span className="text-sm font-semibold text-foreground">默认解析媒体本地路径</span>
-                          <p className="mt-1 text-xs text-muted">控制 get_messages / search_messages 等工具是否返回图片、视频、语音、文件本地路径。</p>
-                        </div>
-                        <Switch isSelected={mcpExposeMediaPaths} onChange={setMcpExposeMediaPaths}
-                          isDisabled={loading || saving}>
-                          <Switch.Control><Switch.Thumb /></Switch.Control>
-                        </Switch>
-                      </div>
-                    </Card>
-
-                    <div>
-                      <span className="text-sm font-semibold text-foreground">启动命令</span>
-                      <div className="flex flex-col sm:flex-row gap-2 mt-1">
-                        <Input value={mcpRunCommand} readOnly className="flex-1" />
-                        <Button variant="tertiary" onPress={() => copyText(mcpRunCommand, '启动命令')}>
-                          <Copy size={14} /> 复制
-                        </Button>
-                      </div>
-                    </div>
-
-                    <div>
-                      <span className="text-sm font-semibold text-foreground">mcpServers 配置</span>
-                      <TextArea value={mcpServerJsonTemplate} readOnly
-                        className="w-full min-h-[200px] font-mono text-xs" />
-                      <div className="flex flex-col sm:flex-row gap-2 items-start sm:items-center mt-2">
-                        <Button variant="tertiary" onPress={() => copyText(mcpServerJsonTemplate, 'mcpServers 配置')}>
-                          <Copy size={14} /> 复制配置
-                        </Button>
-                        <span className="text-xs text-muted">
-                          {launchConfig.mode === 'packaged'
-                            ? 'Windows 下已自动通过 cmd /c 调用启动器，Claude Desktop、Cursor 等工具可直接使用。'
-                            : 'cwd 已自动使用当前仓库目录。'}
-                        </span>
-                      </div>
-                    </div>
-
-                    <div className="flex items-center justify-between">
-                      <span className="text-xs text-muted">
-                        {launchConfig.mode === 'packaged'
-                          ? `当前为打包版启动器 ${getPackagedLauncherLabel(launchConfig.args.find(a => a.includes('ciphertalk-mcp')) ?? launchConfig.command)}`
-                          : '当前为开发态入口 npm run mcp'}
-                      </span>
-                      <Button variant="primary" isIconOnly isPending={saving}
-                        isDisabled={loading || saving} onPress={handleSave}>
-                        <Save size={16} />
-                      </Button>
-                    </div>
-                  </div>
-                </Card.Content>
-              </Card>
-
-              <Card>
-                <Card.Header>
-                  <Card.Title>外部 Skills</Card.Title>
-                  <Card.Description>导出给外部 Agent 使用（Codex、Claude、Cursor 等）</Card.Description>
-                </Card.Header>
-                <Card.Content>
-                  <div className="flex flex-col gap-3">
-                    {skills.filter(s => s.builtin).map(skill => (
-                      <Card key={skill.name} className="p-3 rounded-xl border border-border bg-surface">
-                        <div className="flex flex-col sm:flex-row sm:items-center gap-3 justify-between">
-                          <div className="min-w-0 flex-1">
-                            <div className="flex gap-2 items-center flex-wrap">
-                              <FileCode size={18} className="text-accent shrink-0" />
-                              <span className="text-sm font-semibold text-foreground truncate">{skill.name}</span>
-                              <Chip variant="secondary" size="sm">v{skill.version}</Chip>
-                              <Chip color="accent" variant="primary" size="sm">内置</Chip>
-                            </div>
-                            <p className="mt-1 text-xs text-muted truncate">{skill.description}</p>
-                          </div>
-                          <Button variant="tertiary" size="sm"
-                            isDisabled={exportingSkillZip === skill.name}
-                            onPress={() => exportSkillZip(skill.name)}>
-                            <Download size={14} />
-                            {exportingSkillZip === skill.name ? '导出中...' : '导出 zip'}
-                          </Button>
-                        </div>
-                      </Card>
-                    ))}
-                    <span className="text-xs text-tertiary">导出 zip 后解压到对应 Agent 的 skills 目录即可使用。</span>
-                  </div>
-                </Card.Content>
-              </Card>
-            </>)}
-
-            {/* ════════ TAB 2: 集成中心 ════════ */}
-            {topTab === 'integration' && (<>
-              <Card>
-                <Card.Header className="flex items-center justify-between">
+          <Tabs.Panel id="server" className="pt-3">
+            <div className="flex flex-col gap-3">
+              <section className="flex flex-col gap-3">
+                <div className="flex items-center justify-between gap-3">
                   <div>
-                    <Card.Title>MCP 客户端</Card.Title>
-                    <Card.Description>连接外部 MCP 服务器并调用其工具</Card.Description>
+                    <Typography type="h5">MCP 服务端</Typography>
+                    <Description>CipherTalk 作为 MCP 服务端对外暴露工具。</Description>
+                  </div>
+                  <Tooltip delay={0}>
+                    <Button variant="primary" isIconOnly isPending={saving} isDisabled={loading || saving} onPress={handleSave}>
+                      <Save size={16} />
+                    </Button>
+                    <Tooltip.Content>保存配置</Tooltip.Content>
+                  </Tooltip>
+                </div>
+                <div className="flex flex-col gap-3">
+                  <Surface variant="transparent" className="flex items-center justify-between gap-3">
+                    <div>
+                      <Typography type="body-sm" weight="semibold">MCP 状态标记</Typography>
+                      <Description>在 health_check / get_status 中暴露配置状态，不阻止宿主调用工具。</Description>
+                    </div>
+                    <Switch isSelected={mcpEnabled} onChange={setMcpEnabled} isDisabled={loading || saving}>
+                      <Switch.Control><Switch.Thumb /></Switch.Control>
+                    </Switch>
+                  </Surface>
+                  <Surface variant="transparent" className="flex items-center justify-between gap-3">
+                    <div>
+                      <Typography type="body-sm" weight="semibold">默认解析媒体本地路径</Typography>
+                      <Description>控制 get_messages / search_messages 等工具是否返回图片、视频、语音、文件本地路径。</Description>
+                    </div>
+                    <Switch isSelected={mcpExposeMediaPaths} onChange={setMcpExposeMediaPaths} isDisabled={loading || saving}>
+                      <Switch.Control><Switch.Thumb /></Switch.Control>
+                    </Switch>
+                  </Surface>
+                </div>
+              </section>
+
+              <Separator variant="tertiary" />
+
+              <section className="flex flex-col gap-3">
+                <div>
+                  <Typography type="h5">接入配置</Typography>
+                  <Description>复制 mcpServers 配置到外部 Agent。</Description>
+                </div>
+                <div className="flex flex-col gap-2">
+                  <Label>mcpServers 配置</Label>
+                  <ScrollShadow hideScrollBar className="w-full max-h-[260px]" size={36}>
+                    <TextArea
+                      value={mcpServerJsonTemplate}
+                      readOnly
+                      fullWidth
+                      rows={10}
+                      className="w-full min-h-[220px]"
+                    />
+                  </ScrollShadow>
+                  <Description>
+                    {launchConfig.mode === 'packaged'
+                      ? 'Windows 下已自动通过 cmd /c 调用启动器，Claude Desktop、Cursor 等工具可直接使用。'
+                      : 'cwd 已自动使用当前仓库目录。'}
+                  </Description>
+                </div>
+                <Button variant="tertiary" onPress={() => copyText(mcpServerJsonTemplate, 'mcpServers 配置')}>
+                  <Copy size={14} />
+                  复制 mcpServers 配置
+                </Button>
+              </section>
+
+              <Separator variant="tertiary" />
+
+              <section className="flex flex-col gap-3">
+                <div>
+                  <Typography type="h5">外部 Skills</Typography>
+                  <Description>导出给外部 Agent 使用（Codex、Claude、Cursor 等）。</Description>
+                </div>
+                {skills.filter(s => s.builtin).length === 0 ? (
+                  <Alert status="default">
+                    <Alert.Indicator />
+                    <Alert.Content>
+                      <Alert.Description>暂无可导出的内置 Skills。</Alert.Description>
+                    </Alert.Content>
+                  </Alert>
+                ) : skills.filter(s => s.builtin).map(skill => renderSkillRow(skill, 'external'))}
+                <Description>导出 zip 后解压到对应 Agent 的 skills 目录即可使用。</Description>
+              </section>
+            </div>
+          </Tabs.Panel>
+
+          <Tabs.Panel id="integration" className="pt-3">
+            <div className="flex flex-col gap-3">
+              <section className="flex flex-col gap-3">
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                  <div>
+                    <Typography type="h5">MCP 客户端</Typography>
+                    <Description>连接外部 MCP 服务器并调用其工具。</Description>
                   </div>
                   <Button variant="tertiary" size="sm" onPress={openAddServer}>
                     {serverPanelOpen && !editingServer ? <><X size={14} /> 收起</> : <><Plus size={14} /> 添加服务器</>}
                   </Button>
-                </Card.Header>
-                <Card.Content>
-                  <div className="flex flex-col gap-3">
-                    {mcpServers.length === 0 && (
-                      <div className="text-center py-6 text-sm text-tertiary">暂无 MCP 服务器配置，点击上方按钮添加</div>
-                    )}
-                    {serverPanelOpen && !editingServer && renderServerForm()}
-                    {mcpServers.map(srv => (
-                      <div key={srv.name} className="flex flex-col gap-2">
-                        <Card className={`p-3 rounded-xl border border-border bg-surface ${(serverBusy[srv.name] && serverBusy[srv.name] !== 'tools') || srv.status === 'connecting' ? 'opacity-60' : ''}`}>
-                          <div className="flex flex-col sm:flex-row sm:items-center gap-2 w-full">
-                            <div className="min-w-0 flex-1">
-                              <div className="flex gap-2 items-center flex-wrap">
-                                <Plug size={16} className={srv.status === 'connected' ? 'text-accent shrink-0' : 'text-tertiary shrink-0'} />
-                                <span className="text-sm font-semibold text-foreground truncate">{srv.name}</span>
-                                <Chip variant="secondary" size="sm">{srv.config.type.toUpperCase()}</Chip>
-                                {renderStatusChip(srv.status)}
-                                {srv.config.timeoutMs && <span className="text-xs text-muted">{srv.config.timeoutMs}ms</span>}
-                              </div>
-                              <p className="mt-1 text-xs text-tertiary truncate">
-                                {srv.config.type === 'stdio' ? `${srv.config.command} ${(srv.config.args || []).join(' ')}` : srv.config.url}
-                              </p>
-                              {srv.error && <p className="mt-1 text-xs text-danger">{srv.error}</p>}
-                            </div>
-                            <div className="flex gap-1 items-center flex-wrap">
-                              {srv.status === 'connected' && (
-                                <Button variant="tertiary" size="sm"
-                                  isDisabled={Boolean(serverBusy[srv.name] && serverBusy[srv.name] !== 'tools')}
-                                  onPress={() => openToolsDialog(srv.name)}>
-                                  {serverBusy[srv.name] === 'tools' ? <Spinner size="sm" color="current" /> : null}
-                                  {srv.toolCount} 工具
-                                </Button>
-                              )}
-                              {srv.status === 'connected' ? (
-                                <Button isIconOnly variant="tertiary" size="sm"
-                                  isDisabled={Boolean(serverBusy[srv.name])}
-                                  onPress={() => disconnectServer(srv.name)}>
-                                  {serverBusy[srv.name] === 'disconnect' ? <Spinner size="sm" color="current" /> : <Unplug size={14} />}
-                                </Button>
-                              ) : (
-                                <Button isIconOnly variant="tertiary" size="sm"
-                                  isDisabled={Boolean(serverBusy[srv.name] || srv.status === 'connecting')}
-                                  onPress={() => connectServer(srv.name)}>
-                                  {serverBusy[srv.name] === 'connect' || srv.status === 'connecting' ? <Spinner size="sm" color="current" /> : <Plug size={14} />}
-                                </Button>
-                              )}
-                              <Button isIconOnly variant="tertiary" size="sm"
-                                isDisabled={Boolean(serverBusy[srv.name] || srv.status === 'connecting')}
-                                onPress={() => openEditServer(srv)}>
-                                <Pencil size={14} />
-                              </Button>
-                              <Button isIconOnly variant="tertiary" size="sm"
-                                isDisabled={Boolean(serverBusy[srv.name] || srv.status === 'connecting')}
-                                onPress={() => setDeleteTarget({ type: 'server', name: srv.name })}>
-                                <Trash2 size={14} />
-                              </Button>
-                            </div>
-                          </div>
-                        </Card>
-                        {serverPanelOpen && editingServer === srv.name && renderServerForm()}
-                      </div>
-                    ))}
-                  </div>
-                </Card.Content>
-              </Card>
+                </div>
+                {mcpServers.length === 0 && (
+                  <Alert status="default">
+                    <Alert.Indicator />
+                    <Alert.Content>
+                      <Alert.Description>暂无 MCP 服务器配置，点击上方按钮添加。</Alert.Description>
+                    </Alert.Content>
+                  </Alert>
+                )}
+                {serverPanelOpen && !editingServer && renderServerForm()}
+                {mcpServers.map(renderServerRow)}
+              </section>
 
-              <Card>
-                <Card.Header className="flex items-center justify-between">
+              <Separator variant="tertiary" />
+
+              <section className="flex flex-col gap-3">
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                   <div>
-                    <Card.Title>内部 Skills</Card.Title>
-                    <Card.Description>管理和配置内部使用的 Skills</Card.Description>
+                    <Typography type="h5">内部 Skills</Typography>
+                    <Description>管理和配置内部使用的 Skills。</Description>
                   </div>
-                  <div className="flex gap-2">
-                    <Button variant="tertiary" size="sm" onPress={downloadSkillTemplate}>
-                      <Download size={14} /> 下载模板
+                  <ButtonGroup variant="tertiary" size="sm">
+                    <Button onPress={downloadSkillTemplate}>
+                      <Download size={14} />
+                      下载模板
                     </Button>
-                    <Button variant="tertiary" size="sm" onPress={importSkill}>
-                      <Upload size={14} /> 导入
+                    <Button onPress={importSkill}>
+                      <ButtonGroup.Separator />
+                      <Upload size={14} />
+                      导入
                     </Button>
-                  </div>
-                </Card.Header>
-                <Card.Content>
-                  <div className="flex flex-col gap-3">
-                    {skills.length === 0 && (
-                      <div className="text-center py-6 text-sm text-tertiary">暂无 Skills，可先下载模板后导入 zip</div>
-                    )}
-                    {skills.map(skill => (
-                      <div key={skill.name} className="flex flex-col gap-2">
-                        <Card className="p-3 rounded-xl border border-border bg-surface">
-                          <div className="flex flex-col sm:flex-row sm:items-center gap-3 w-full">
-                            <div className="min-w-0 flex-1">
-                              <div className="flex gap-2 items-center flex-wrap">
-                                <FileCode size={18} className="text-accent shrink-0" />
-                                <span className="text-sm font-semibold text-foreground truncate">{skill.name}</span>
-                                <Chip variant="secondary" size="sm">v{skill.version}</Chip>
-                                {skill.builtin && <Chip color="accent" variant="primary" size="sm">内置</Chip>}
-                              </div>
-                              <p className="mt-1 text-xs text-muted truncate">{skill.description}</p>
-                            </div>
-                            <div className="flex gap-1 items-center flex-wrap">
-                              <Button isIconOnly variant="tertiary" size="sm" onPress={() => openSkillPanel(skill.name, 'preview')}>
-                                <Eye size={14} />
-                              </Button>
-                              {!skill.builtin && (
-                                <>
-                                  <Button isIconOnly variant="tertiary" size="sm" onPress={() => openSkillPanel(skill.name, 'edit')}>
-                                    <Pencil size={14} />
-                                  </Button>
-                                  <Button isIconOnly variant="tertiary" size="sm" onPress={() => setDeleteTarget({ type: 'skill', name: skill.name })}>
-                                    <Trash2 size={14} />
-                                  </Button>
-                                </>
-                              )}
-                              <Button variant="tertiary" size="sm"
-                                isDisabled={exportingSkillZip === skill.name}
-                                onPress={() => exportSkillZip(skill.name)}>
-                                <Download size={14} />
-                                {exportingSkillZip === skill.name ? '...' : '导出'}
-                              </Button>
-                            </div>
-                          </div>
-                        </Card>
-                      </div>
-                    ))}
-                  </div>
-                </Card.Content>
-              </Card>
-            </>)}
-          </div>
-        </div>
-      </div>
+                  </ButtonGroup>
+                </div>
+                {skills.length === 0 ? (
+                  <Alert status="default">
+                    <Alert.Indicator />
+                    <Alert.Content>
+                      <Alert.Description>暂无 Skills，可先下载模板后导入 zip。</Alert.Description>
+                    </Alert.Content>
+                  </Alert>
+                ) : skills.map(skill => renderSkillRow(skill, 'internal'))}
+              </section>
+            </div>
+          </Tabs.Panel>
+        </Tabs>
+      </ScrollShadow>
 
       {/* ── Tools Modal ── */}
       <Modal isOpen={toolDialogServer !== null}
@@ -934,7 +1004,7 @@ function McpPage() {
             <Modal.Dialog>
               <Modal.CloseTrigger />
               <Modal.Header>
-                <Modal.Icon className="bg-default text-foreground"><Plug className="size-5" /></Modal.Icon>
+                <Modal.Icon><Plug size={20} /></Modal.Icon>
                 <Modal.Heading>工具预览: {toolDialogServer}</Modal.Heading>
               </Modal.Header>
               <Modal.Body>{toolDialogServer && renderToolsContent(toolDialogServer)}</Modal.Body>
@@ -952,17 +1022,16 @@ function McpPage() {
             <Modal.Dialog>
               <Modal.CloseTrigger />
               <Modal.Header>
-                <Modal.Icon className="bg-default text-foreground"><FileCode className="size-5" /></Modal.Icon>
+                <Modal.Icon><FileCode size={20} /></Modal.Icon>
                 <Modal.Heading>{skillDialog?.mode === 'edit' ? '编辑 Skill' : '预览 Skill'}: {skillDialog?.name}</Modal.Heading>
               </Modal.Header>
               <Modal.Body>
                 {skillDialog?.mode === 'edit' ? (
                   <TextArea value={editingSkillContent}
                     onChange={(e) => setEditingSkillContent(e.target.value)}
-                    className="min-h-[400px] font-mono text-xs" />
+                    className="min-h-[400px]" />
                 ) : (
-                  <div className="markdown-body max-h-[68vh] overflow-auto p-4 rounded-xl border border-border bg-surface text-foreground"
-                    dangerouslySetInnerHTML={renderMarkdown(skillContent)} />
+                  <TextArea value={skillContent} readOnly className="min-h-[400px]" />
                 )}
               </Modal.Body>
               <Modal.Footer>
@@ -984,33 +1053,6 @@ function McpPage() {
         </Modal.Backdrop>
       </Modal>
 
-      {/* ── Delete Confirm Modal ── */}
-      <Modal isOpen={deleteTarget !== null}
-        onOpenChange={(open) => { if (!open) setDeleteTarget(null) }}>
-        <Modal.Backdrop>
-          <Modal.Container size="sm">
-            <Modal.Dialog>
-              <Modal.CloseTrigger />
-              <Modal.Header>
-                <Modal.Icon className="bg-danger-soft text-danger-soft-foreground"><Trash2 className="size-5" /></Modal.Icon>
-                <Modal.Heading>确认删除</Modal.Heading>
-              </Modal.Header>
-              <Modal.Body>
-                <p className="text-sm text-muted">
-                  确定要删除{deleteTarget?.type === 'skill' ? ' Skill' : ' MCP 服务器'} "{deleteTarget?.name}" 吗？此操作不可撤销。
-                </p>
-              </Modal.Body>
-              <Modal.Footer>
-                <Button slot="close" variant="tertiary">取消</Button>
-                <Button variant="danger" onPress={() => {
-                  if (deleteTarget?.type === 'skill') void deleteSkill(deleteTarget.name)
-                  else void deleteServer(deleteTarget!.name)
-                }}>删除</Button>
-              </Modal.Footer>
-            </Modal.Dialog>
-          </Modal.Container>
-        </Modal.Backdrop>
-      </Modal>
     </>
   )
 }

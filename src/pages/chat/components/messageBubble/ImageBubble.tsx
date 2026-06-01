@@ -1,8 +1,69 @@
-import { memo, useCallback, useEffect, useRef, useState } from 'react'
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Loader2, RefreshCw, Image as ImageIcon } from 'lucide-react'
 import { LivePhotoIcon } from '../../../../components/LivePhotoIcon'
 import type { ChatSession, Message } from '../../../../types/models'
+import { resolveImageDisplaySize, type ImageDisplaySize } from '../../utils/imageSize'
 import { enqueueDecrypt, imageDataUrlCache } from './mediaState'
+
+type ImageStatusVariant = 'placeholder' | 'loading' | 'unavailable' | 'no-key'
+
+interface ImageStatusCardProps {
+  variant: ImageStatusVariant
+  size: ImageDisplaySize
+  clicked?: boolean
+  containerRef: React.RefObject<HTMLDivElement | null>
+  onClick?: () => void
+  onContextMenu?: (e: React.MouseEvent) => void
+}
+
+/**
+ * 图片非就绪状态的统一卡片：占位 / 解密中 / 未解密 / 未配置密钥。
+ * 四种状态共用与最终图片一致的尺寸（由 size 决定），消除解密前后的高度跳变。
+ */
+function ImageStatusCard({ variant, size, clicked, containerRef, onClick, onContextMenu }: ImageStatusCardProps) {
+  const style = { width: size.width, height: size.height }
+
+  if (variant === 'loading') {
+    return (
+      <div ref={containerRef} className="image-loading" style={style} onContextMenu={onContextMenu}>
+        <Loader2 size={20} className="spin" />
+      </div>
+    )
+  }
+
+  if (variant === 'placeholder') {
+    return (
+      <div ref={containerRef} className="image-placeholder" style={style} onContextMenu={onContextMenu}>
+        <ImageIcon size={24} />
+      </div>
+    )
+  }
+
+  if (variant === 'no-key') {
+    return (
+      <div ref={containerRef} className="image-no-key" style={style} onContextMenu={onContextMenu}>
+        <ImageIcon size={24} />
+        <span>请配置图片解密密钥</span>
+      </div>
+    )
+  }
+
+  return (
+    <div
+      ref={containerRef}
+      className={`image-unavailable ${clicked ? 'clicked' : ''}`}
+      style={style}
+      role="button"
+      tabIndex={0}
+      onClick={onClick}
+      onContextMenu={onContextMenu}
+    >
+      <ImageIcon size={24} />
+      <span>图片未解密</span>
+      <span className="image-action">{clicked ? '已点击…' : '点击解密'}</span>
+    </div>
+  )
+}
 
 interface ImageBubbleProps {
   message: Message
@@ -40,6 +101,9 @@ function ImageBubble({ message, session, hasImageKey, onContextMenu }: ImageBubb
   const imageContainerRef = useRef<HTMLDivElement>(null)
 
   const imageCacheKey = message.imageMd5 || message.imageDatName || `local:${message.localId}`
+
+  // 占位/解密中/未解密/已解密四态共用同一尺寸，消除解密前后高度跳变
+  const displaySize = useMemo(() => resolveImageDisplaySize(message), [message])
 
   const detectImageMimeFromBase64 = useCallback((base64: string): string => {
     try {
@@ -156,9 +220,10 @@ function ImageBubble({ message, session, hasImageKey, onContextMenu }: ImageBubb
   useEffect(() => {
     if (!isVisible) return
 
-    if (imageUpdateCheckedRef.current === imageCacheKey) return
     if (imageLocalPath) return
-    if (imageLoading) return
+    // 守卫：每个 cacheKey 只自动解密一次。解密失败也不自动重试，
+    // 避免失败图片无限重解密（用户可点击手动重试）。
+    if (imageUpdateCheckedRef.current === imageCacheKey) return
 
     imageUpdateCheckedRef.current = imageCacheKey
 
@@ -231,14 +296,13 @@ function ImageBubble({ message, session, hasImageKey, onContextMenu }: ImageBubb
     enqueueDecrypt(doDecrypt)
 
     return () => {
+      // 仅取消在飞的解密；不重置守卫 ref，否则守卫失效会导致无限重解密
       cancelled = true
-      imageUpdateCheckedRef.current = null
     }
   }, [
     isVisible,
     imageCacheKey,
     imageLocalPath,
-    imageLoading,
     message.imageMd5,
     message.imageDatName,
     message.localId,
@@ -396,21 +460,29 @@ function ImageBubble({ message, session, hasImageKey, onContextMenu }: ImageBubb
   // 没有配置密钥时显示提示
   if (hasImageKey === false) {
     return (
-      <div className="image-no-key" ref={imageContainerRef} onContextMenu={onContextMenu ? (e) => onContextMenu(e, message) : undefined}>
-        <ImageIcon size={24} />
-        <span>请配置图片解密密钥</span>
-      </div>
+      <ImageStatusCard
+        variant="no-key"
+        size={displaySize}
+        containerRef={imageContainerRef}
+        onContextMenu={onContextMenu ? (e) => onContextMenu(e, message) : undefined}
+      />
     )
   }
 
   // 已有缓存图片，直接显示
   if (imageLocalPath) {
     return (
-      <div className="image-message-wrapper" ref={imageContainerRef} onContextMenu={onContextMenu ? (e) => onContextMenu(e, message) : undefined}>
+      <div
+        className="image-message-wrapper"
+        ref={imageContainerRef}
+        style={{ width: displaySize.width, height: displaySize.height }}
+        onContextMenu={onContextMenu ? (e) => onContextMenu(e, message) : undefined}
+      >
         <img
           src={imageLocalPath}
           alt="图片"
           className="image-message"
+          style={{ width: '100%', height: '100%' }}
           onClick={() => { void handleOpenImage() }}
           onLoad={() => setImageError(false)}
           onError={() => {
@@ -448,34 +520,36 @@ function ImageBubble({ message, session, hasImageKey, onContextMenu }: ImageBubb
   // 未进入可视区域时显示占位符
   if (!isVisible) {
     return (
-      <div className="image-placeholder" ref={imageContainerRef} onContextMenu={onContextMenu ? (e) => onContextMenu(e, message) : undefined}>
-        <ImageIcon size={24} />
-      </div>
+      <ImageStatusCard
+        variant="placeholder"
+        size={displaySize}
+        containerRef={imageContainerRef}
+        onContextMenu={onContextMenu ? (e) => onContextMenu(e, message) : undefined}
+      />
     )
   }
 
   if (imageLoading) {
     return (
-      <div className="image-loading" ref={imageContainerRef} onContextMenu={onContextMenu ? (e) => onContextMenu(e, message) : undefined}>
-        <Loader2 size={20} className="spin" />
-      </div>
+      <ImageStatusCard
+        variant="loading"
+        size={displaySize}
+        containerRef={imageContainerRef}
+        onContextMenu={onContextMenu ? (e) => onContextMenu(e, message) : undefined}
+      />
     )
   }
 
   // 解密失败或未解密
   return (
-    <button
-      className={`image-unavailable ${imageClicked ? 'clicked' : ''}`}
+    <ImageStatusCard
+      variant="unavailable"
+      size={displaySize}
+      clicked={imageClicked}
+      containerRef={imageContainerRef}
       onClick={handleImageClick}
-      disabled={imageLoading}
-      type="button"
-      ref={imageContainerRef as unknown as React.RefObject<HTMLButtonElement>}
       onContextMenu={onContextMenu ? (e) => onContextMenu(e, message) : undefined}
-    >
-      <ImageIcon size={24} />
-      <span>图片未解密</span>
-      <span className="image-action">{imageClicked ? '已点击…' : '点击解密'}</span>
-    </button>
+    />
   )
 }
 

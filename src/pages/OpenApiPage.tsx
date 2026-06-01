@@ -9,6 +9,7 @@ import {
   FieldError,
   Input,
   Label,
+  ScrollShadow,
   Spinner,
   Switch,
   TextField,
@@ -302,9 +303,8 @@ function OpenApiPage() {
   return (
     <>
       <Toast.Provider placement="top" />
-      <div className="h-full mx-[-0.75rem] mt-[-0.75rem] overflow-y-auto pb-3">
-        <div className="max-w-5xl mx-auto px-4 md:px-8 py-3 md:py-4">
-          <div className="flex flex-col gap-3">
+      <ScrollShadow hideScrollBar className="h-full min-h-0 pb-3" size={56}>
+        <div className="flex flex-col gap-3">
             {/* Header */}
             <div className="flex flex-col md:flex-row md:items-center justify-between gap-2">
               <div className="max-w-xl">
@@ -934,9 +934,8 @@ function OpenApiPage() {
                 </Disclosure>
               </Card.Content>
             </Card>
-          </div>
         </div>
-      </div>
+      </ScrollShadow>
     </>
   )
 }

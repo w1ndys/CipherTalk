@@ -1,5 +1,4 @@
 ﻿import { useState, useEffect, useRef, useCallback, useMemo, useLayoutEffect } from 'react'
-import type { Virtualizer } from '@tanstack/react-virtual'
 import { MessageSquare } from 'lucide-react'
 import { useChatStore, MAX_ACTIVE_MESSAGES } from '../../stores/chatStore'
 import { useUpdateStatusStore } from '../../stores/updateStatusStore'
@@ -33,11 +32,6 @@ interface ChatPageProps {
 type ScrollAnchor = {
   scrollHeight: number
   scrollTop: number
-}
-
-type PrependVirtualAnchor = {
-  anchorIndex: number
-  prependedCount: number
 }
 
 function getMessageCacheKey(message: Message): string {
@@ -89,9 +83,7 @@ function ChatPage(_props: ChatPageProps) {
   const messagesRef = useRef<Message[]>([])
   const isLoadingMoreRef = useRef(false)
   const scrollToBottomAfterRenderRef = useRef(false)
-  const virtualizerRef = useRef<Virtualizer<HTMLDivElement, Element> | null>(null)
   const pendingPrependAnchorRef = useRef<ScrollAnchor | null>(null)
-  const pendingPrependVirtualAnchorRef = useRef<PrependVirtualAnchor | null>(null)
   const currentSessionIdRef = useRef<string | null>(null)
   const messageLoadSeqRef = useRef(0)
   const lastUpdateTimeRef = useRef<number>(0)
@@ -178,27 +170,10 @@ function ChatPage(_props: ChatPageProps) {
     }
   }, [])
 
-  const captureTopVisibleVirtualIndex = useCallback((): number | null => {
-    const virtualizer = virtualizerRef.current
-    if (!virtualizer) return null
-
-    const scrollOffset = virtualizer.scrollOffset ?? 0
-    const virtualItems = virtualizer.getVirtualItems()
-    const topVisibleItem = virtualItems.find(item => item.end > scrollOffset) ?? virtualItems[0]
-
-    return typeof topVisibleItem?.index === 'number' ? topVisibleItem.index : null
-  }, [])
-
-  const queuePrependScrollRestore = useCallback((prependedCount: number) => {
-    const anchorIndex = captureTopVisibleVirtualIndex()
-    if (anchorIndex !== null) {
-      pendingPrependVirtualAnchorRef.current = { anchorIndex, prependedCount }
-      pendingPrependAnchorRef.current = null
-      return
-    }
-
+  const queuePrependScrollRestore = useCallback((_prependedCount: number) => {
+    // 记录 prepend 前的滚动锚点；普通渲染下 scrollHeight 准确，靠高度差恢复位置
     pendingPrependAnchorRef.current = captureScrollAnchor()
-  }, [captureScrollAnchor, captureTopVisibleVirtualIndex])
+  }, [captureScrollAnchor])
 
   const saveCurrentSessionMessageCache = useCallback((sessionId: string | null = currentSessionIdRef.current) => {
     if (!sessionId || isDateJumpModeRef.current) return
@@ -228,16 +203,6 @@ function ChatPage(_props: ChatPageProps) {
   }, [])
 
   useLayoutEffect(() => {
-    const virtualAnchor = pendingPrependVirtualAnchorRef.current
-    if (virtualAnchor) {
-      pendingPrependVirtualAnchorRef.current = null
-      const virtualizer = virtualizerRef.current
-      if (virtualizer) {
-        virtualizer.scrollToIndex(virtualAnchor.prependedCount + virtualAnchor.anchorIndex, { align: 'start' })
-        return
-      }
-    }
-
     const anchor = pendingPrependAnchorRef.current
     if (!anchor) return
     pendingPrependAnchorRef.current = null
@@ -685,6 +650,7 @@ function ChatPage(_props: ChatPageProps) {
     if (cached) {
       const loadSeq = ++messageLoadSeqRef.current
       setCurrentOffset(cached.currentOffset)
+      setHasMoreMessages(cached.hasMoreMessages)
       setIsDateJumpMode(false)
       setDateJumpCursorSortSeq(null)
       setDateJumpCursorCreateTime(null)
@@ -884,12 +850,6 @@ function ChatPage(_props: ChatPageProps) {
   // 滚动到底部
   const scrollToBottom = useCallback((smooth: boolean | React.MouseEvent = true) => {
     const isSmooth = typeof smooth === 'boolean' ? smooth : true;
-    const virtualizer = virtualizerRef.current
-    const count = messagesRef.current.length
-    if (virtualizer && count > 0) {
-      virtualizer.scrollToIndex(count - 1, { align: 'end', behavior: isSmooth ? 'smooth' : 'auto' })
-      return
-    }
     if (messageListRef.current) {
       if (isSmooth) {
         messageListRef.current.scrollTo({ top: messageListRef.current.scrollHeight, behavior: 'smooth' })
@@ -1633,7 +1593,6 @@ function ChatPage(_props: ChatPageProps) {
                 setContextMenu={setContextMenu}
                 showScrollToBottom={showScrollToBottom}
                 scrollToBottom={scrollToBottom}
-                virtualizerRef={virtualizerRef}
               />
             </div>
 
