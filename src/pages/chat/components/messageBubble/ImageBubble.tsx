@@ -1,0 +1,471 @@
+import { memo, useCallback, useEffect, useRef, useState } from 'react'
+import { Loader2, RefreshCw, Image as ImageIcon } from 'lucide-react'
+import { LivePhotoIcon } from '../../../../components/LivePhotoIcon'
+import type { ChatSession, Message } from '../../../../types/models'
+import { enqueueDecrypt, imageDataUrlCache } from './mediaState'
+
+interface ImageBubbleProps {
+  message: Message
+  session: ChatSession
+  hasImageKey?: boolean
+  onContextMenu?: (e: React.MouseEvent, message: Message, handlers?: any) => void
+}
+
+/**
+ * 图片消息气泡（localType === 3）
+ * 支持懒加载、解密、缓存、缩略图升级、实况照片等
+ */
+function ImageBubble({ message, session, hasImageKey, onContextMenu }: ImageBubbleProps) {
+  const syncVersion = useRef(0)
+  // We'll use a ref that gets updated - simplest way to track sync version without full store import
+  // In practice the parent or store passes this
+
+  const [imageLocalPath, setImageLocalPath] = useState<string | undefined>(() => {
+    const cacheKey = message.imageMd5 || message.imageDatName || `local:${message.localId}`
+    return imageDataUrlCache.get(cacheKey)
+  })
+  const [imageLiveVideoPath, setImageLiveVideoPath] = useState<string | undefined>()
+  const [imageError, setImageError] = useState(false)
+  const [imageLoading, setImageLoading] = useState(false)
+  const [imageHasUpdate, setImageHasUpdate] = useState(false)
+  const [imageClicked, setImageClicked] = useState(false)
+  const [isVisible, setIsVisible] = useState(false)
+
+  const imageUpdateCheckedRef = useRef<string | null>(null)
+  const imageClickTimerRef = useRef<number | null>(null)
+  const imageRecoveringRef = useRef(false)
+  const lastRecoverTriedPathRef = useRef<string | null>(null)
+  const imageContainerRef = useRef<HTMLDivElement>(null)
+
+  const imageCacheKey = message.imageMd5 || message.imageDatName || `local:${message.localId}`
+
+  const detectImageMimeFromBase64 = useCallback((base64: string): string => {
+    try {
+      const head = window.atob(base64.slice(0, 48))
+      const bytes = new Uint8Array(head.length)
+      for (let i = 0; i < head.length; i++) {
+        bytes[i] = head.charCodeAt(i)
+      }
+      if (bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4E && bytes[3] === 0x47) return 'image/png'
+      if (bytes[0] === 0xFF && bytes[1] === 0xD8 && bytes[2] === 0xFF) return 'image/jpeg'
+      if (bytes[0] === 0x47 && bytes[1] === 0x49 && bytes[2] === 0x46) return 'image/gif'
+      if (bytes[0] === 0x52 && bytes[1] === 0x49 && bytes[2] === 0x46 && bytes[8] === 0x57 && bytes[9] === 0x45 && bytes[10] === 0x42 && bytes[11] === 0x50) {
+        return 'image/webp'
+      }
+    } catch { }
+    return 'image/jpeg'
+  }, [])
+
+  // 使用 IntersectionObserver 检测图片是否进入可视区域（懒加载）
+  useEffect(() => {
+    if (!imageContainerRef.current) return
+
+    const scrollRoot = imageContainerRef.current.closest('.message-list') as HTMLElement | null
+    const observer = new IntersectionObserver(
+      (entries) => {
+        entries.forEach((entry) => {
+          if (entry.isIntersecting) {
+            setIsVisible(true)
+            observer.disconnect()
+          }
+        })
+      },
+      {
+        root: scrollRoot,
+        rootMargin: '1000px 0px',
+        threshold: 0
+      }
+    )
+
+    observer.observe(imageContainerRef.current)
+
+    return () => observer.disconnect()
+  }, [])
+
+  // 请求图片解密
+  const requestImageDecrypt = useCallback(async (forceUpdate = false) => {
+    if (imageLoading) return
+    setImageLoading(true)
+    setImageError(false)
+
+    try {
+      if (message.imageMd5 || message.imageDatName) {
+        const result = await window.electronAPI.image.decrypt({
+          sessionId: session.username,
+          imageMd5: message.imageMd5 || undefined,
+          imageDatName: message.imageDatName,
+          createTime: message.createTime,
+          force: forceUpdate
+        })
+
+        if (result.success && result.localPath) {
+          imageDataUrlCache.set(imageCacheKey, result.localPath)
+          setImageLocalPath(result.localPath)
+          if ((result as any).liveVideoPath) setImageLiveVideoPath((result as any).liveVideoPath)
+          setImageHasUpdate(Boolean((result as { isThumb?: boolean }).isThumb))
+          return (result as any).liveVideoPath as string | undefined
+        }
+      }
+
+      const fallback = await window.electronAPI.chat.getImageData(session.username, String(message.localId), message.createTime)
+      if (fallback.success && fallback.data) {
+        const dataUrl = `data:${detectImageMimeFromBase64(fallback.data)};base64,${fallback.data}`
+        imageDataUrlCache.set(imageCacheKey, dataUrl)
+        setImageLocalPath(dataUrl)
+        setImageHasUpdate(false)
+        setImageError(false)
+        return
+      }
+
+      setImageError(true)
+    } catch {
+      setImageError(true)
+    } finally {
+      setImageLoading(false)
+    }
+  }, [imageLoading, message.imageMd5, message.imageDatName, message.localId, message.createTime, session.username, imageCacheKey, detectImageMimeFromBase64])
+
+  // 点击图片解密
+  const handleImageClick = useCallback(() => {
+    if (imageClickTimerRef.current) {
+      window.clearTimeout(imageClickTimerRef.current)
+    }
+    setImageClicked(true)
+    imageClickTimerRef.current = window.setTimeout(() => {
+      setImageClicked(false)
+    }, 800)
+    void requestImageDecrypt(true)
+  }, [requestImageDecrypt])
+
+  // 清理定时器
+  useEffect(() => {
+    return () => {
+      if (imageClickTimerRef.current) {
+        window.clearTimeout(imageClickTimerRef.current)
+      }
+    }
+  }, [])
+
+  // 自动尝试从缓存解析图片，如果没有缓存则自动解密（仅在可见时触发）
+  useEffect(() => {
+    if (!isVisible) return
+
+    if (imageUpdateCheckedRef.current === imageCacheKey) return
+    if (imageLocalPath) return
+    if (imageLoading) return
+
+    imageUpdateCheckedRef.current = imageCacheKey
+
+    let cancelled = false
+
+    const doDecrypt = async () => {
+      if (cancelled) return
+      setImageLoading(true)
+
+      try {
+        // 先尝试从缓存获取
+        try {
+          const result = await window.electronAPI.image.resolveCache({
+            sessionId: session.username,
+            imageMd5: message.imageMd5 || undefined,
+            imageDatName: message.imageDatName,
+            createTime: message.createTime
+          })
+          if (cancelled) return
+          if (result.success && result.localPath) {
+            imageDataUrlCache.set(imageCacheKey, result.localPath)
+            setImageLocalPath(result.localPath)
+            if ((result as any).liveVideoPath) setImageLiveVideoPath((result as any).liveVideoPath)
+            setImageHasUpdate(Boolean(result.hasUpdate))
+            setImageError(false)
+            return
+          }
+        } catch { /* continue */ }
+
+        // 缓存中没有，自动尝试解密
+        try {
+          const decryptResult = await window.electronAPI.image.decrypt({
+            sessionId: session.username,
+            imageMd5: message.imageMd5 || undefined,
+            imageDatName: message.imageDatName,
+            createTime: message.createTime,
+            force: false
+          })
+          if (cancelled) return
+          if (decryptResult.success && decryptResult.localPath) {
+            imageDataUrlCache.set(imageCacheKey, decryptResult.localPath)
+            setImageLocalPath(decryptResult.localPath)
+            if ((decryptResult as any).liveVideoPath) setImageLiveVideoPath((decryptResult as any).liveVideoPath)
+            setImageHasUpdate(false)
+            setImageError(false)
+            return
+          }
+        } catch { /* continue */ }
+
+        // 兜底：从数据库获取原始图片数据
+        try {
+          const fallback = await window.electronAPI.chat.getImageData(session.username, String(message.localId), message.createTime)
+          if (cancelled) return
+          if (fallback.success && fallback.data) {
+            const dataUrl = `data:${detectImageMimeFromBase64(fallback.data)};base64,${fallback.data}`
+            imageDataUrlCache.set(imageCacheKey, dataUrl)
+            setImageLocalPath(dataUrl)
+            setImageHasUpdate(false)
+            setImageError(false)
+            return
+          }
+        } catch { /* continue */ }
+
+        setImageError(true)
+      } finally {
+        setImageLoading(false)
+      }
+    }
+
+    enqueueDecrypt(doDecrypt)
+
+    return () => {
+      cancelled = true
+    }
+  }, [
+    isVisible,
+    imageCacheKey,
+    imageLocalPath,
+    imageLoading,
+    message.imageMd5,
+    message.imageDatName,
+    message.localId,
+    message.createTime,
+    session.username,
+    detectImageMimeFromBase64
+  ])
+
+  // 若已显示缩略图且检测到高清图可用，循环尝试升级
+  useEffect(() => {
+    if (!isVisible) return
+    if (!imageLocalPath) return
+    if (!imageLocalPath.toLowerCase().includes('_thumb')) return
+    if (!imageHasUpdate) return
+
+    const timer = window.setInterval(() => {
+      if (!imageLoading) {
+        void requestImageDecrypt(true)
+      }
+    }, 6000)
+
+    if (!imageLoading) {
+      void requestImageDecrypt(true)
+    }
+
+    return () => {
+      window.clearInterval(timer)
+    }
+  }, [isVisible, imageLocalPath, imageHasUpdate, imageLoading, requestImageDecrypt])
+
+  const handleOpenImage = useCallback(() => {
+    if (!imageLocalPath) return
+    void window.electronAPI.window.openImageViewerWindow(imageLocalPath, imageLiveVideoPath).catch((error) => {
+      console.error('[ChatPage] 打开图片查看器失败:', error)
+    })
+  }, [imageLocalPath, imageLiveVideoPath])
+
+  const recoverBrokenImagePath = useCallback(async () => {
+    if (!session.username) return
+    if (imageRecoveringRef.current) return
+
+    const failedPath = imageLocalPath || '__empty__'
+    if (lastRecoverTriedPathRef.current === failedPath && !imageHasUpdate) return
+    lastRecoverTriedPathRef.current = failedPath
+    imageRecoveringRef.current = true
+    setImageLoading(true)
+
+    try {
+      const payload = {
+        sessionId: session.username,
+        imageMd5: message.imageMd5 || undefined,
+        imageDatName: message.imageDatName,
+        createTime: message.createTime
+      }
+
+      try {
+        const cached = await window.electronAPI.image.resolveCache(payload)
+        if (cached.success && cached.localPath && cached.localPath !== imageLocalPath) {
+          imageDataUrlCache.set(imageCacheKey, cached.localPath)
+          setImageLocalPath(cached.localPath)
+          setImageHasUpdate(cached.localPath.toLowerCase().includes('_thumb'))
+          setImageError(false)
+          return
+        }
+      } catch { /* continue */ }
+
+      try {
+        const refreshed = await window.electronAPI.image.decrypt({ ...payload, force: true })
+        if (refreshed.success && refreshed.localPath) {
+          imageDataUrlCache.set(imageCacheKey, refreshed.localPath)
+          setImageLocalPath(refreshed.localPath)
+          setImageHasUpdate(Boolean((refreshed as { isThumb?: boolean }).isThumb))
+          if ((refreshed as any).liveVideoPath) setImageLiveVideoPath((refreshed as any).liveVideoPath)
+          setImageError(false)
+          return
+        }
+      } catch { /* continue */ }
+
+      try {
+        const fallback = await window.electronAPI.chat.getImageData(session.username, String(message.localId), message.createTime)
+        if (fallback.success && fallback.data) {
+          const dataUrl = `data:${detectImageMimeFromBase64(fallback.data)};base64,${fallback.data}`
+          imageDataUrlCache.set(imageCacheKey, dataUrl)
+          setImageLocalPath(dataUrl)
+          setImageHasUpdate(false)
+          setImageError(false)
+          return
+        }
+      } catch { /* continue */ }
+
+      setImageError(true)
+    } finally {
+      setImageLoading(false)
+      imageRecoveringRef.current = false
+    }
+  }, [
+    message.imageMd5,
+    message.imageDatName,
+    message.localId,
+    message.createTime,
+    session.username,
+    imageLocalPath,
+    imageHasUpdate,
+    imageCacheKey,
+    detectImageMimeFromBase64
+  ])
+
+  // 监听图片更新事件
+  useEffect(() => {
+    const unsubscribe = window.electronAPI.image.onUpdateAvailable((payload) => {
+      const matchesCacheKey =
+        payload.cacheKey === message.imageMd5 ||
+        payload.cacheKey === message.imageDatName ||
+        (payload.imageMd5 && payload.imageMd5 === message.imageMd5) ||
+        (payload.imageDatName && payload.imageDatName === message.imageDatName)
+      if (matchesCacheKey) {
+        setImageHasUpdate(true)
+      }
+    })
+    return () => {
+      unsubscribe?.()
+    }
+  }, [message.imageDatName, message.imageMd5])
+
+  // 监听缓存解析事件
+  useEffect(() => {
+    const unsubscribe = window.electronAPI.image.onCacheResolved((payload) => {
+      const matchesCacheKey =
+        payload.cacheKey === message.imageMd5 ||
+        payload.cacheKey === message.imageDatName ||
+        (payload.imageMd5 && payload.imageMd5 === message.imageMd5) ||
+        (payload.imageDatName && payload.imageDatName === message.imageDatName)
+      if (matchesCacheKey) {
+        imageDataUrlCache.set(imageCacheKey, payload.localPath)
+        setImageLocalPath(payload.localPath)
+        setImageHasUpdate(payload.localPath.toLowerCase().includes('_thumb'))
+        setImageError(false)
+      }
+    })
+    return () => {
+      unsubscribe?.()
+    }
+  }, [imageCacheKey, message.imageDatName, message.imageMd5])
+
+  // 没有配置密钥时显示提示
+  if (hasImageKey === false) {
+    return (
+      <div className="image-no-key" ref={imageContainerRef} onContextMenu={onContextMenu ? (e) => onContextMenu(e, message) : undefined}>
+        <ImageIcon size={24} />
+        <span>请配置图片解密密钥</span>
+      </div>
+    )
+  }
+
+  // 已有缓存图片，直接显示
+  if (imageLocalPath) {
+    return (
+      <div className="image-message-wrapper" ref={imageContainerRef} onContextMenu={onContextMenu ? (e) => onContextMenu(e, message) : undefined}>
+        <img
+          src={imageLocalPath}
+          alt="图片"
+          className="image-message"
+          onClick={() => { void handleOpenImage() }}
+          onLoad={() => setImageError(false)}
+          onError={() => {
+            setImageError(true)
+            void recoverBrokenImagePath()
+          }}
+        />
+        {imageHasUpdate && (
+          <button
+            type="button"
+            className="image-update-button"
+            title="检测到高清图，点击更新"
+            onClick={(e) => {
+              e.stopPropagation()
+              void requestImageDecrypt(true)
+            }}
+          >
+            <RefreshCw size={14} />
+          </button>
+        )}
+        {imageLiveVideoPath && (
+          <div className="media-badge live">
+            <LivePhotoIcon size={14} />
+          </div>
+        )}
+        {imageLoading && (
+          <div className="image-loading-overlay">
+            <Loader2 size={20} className="spin" />
+          </div>
+        )}
+      </div>
+    )
+  }
+
+  // 未进入可视区域时显示占位符
+  if (!isVisible) {
+    return (
+      <div className="image-placeholder" ref={imageContainerRef} onContextMenu={onContextMenu ? (e) => onContextMenu(e, message) : undefined}>
+        <ImageIcon size={24} />
+      </div>
+    )
+  }
+
+  if (imageLoading) {
+    return (
+      <div className="image-loading" ref={imageContainerRef} onContextMenu={onContextMenu ? (e) => onContextMenu(e, message) : undefined}>
+        <Loader2 size={20} className="spin" />
+      </div>
+    )
+  }
+
+  // 解密失败或未解密
+  return (
+    <button
+      className={`image-unavailable ${imageClicked ? 'clicked' : ''}`}
+      onClick={handleImageClick}
+      disabled={imageLoading}
+      type="button"
+      ref={imageContainerRef as unknown as React.RefObject<HTMLButtonElement>}
+      onContextMenu={onContextMenu ? (e) => onContextMenu(e, message) : undefined}
+    >
+      <ImageIcon size={24} />
+      <span>图片未解密</span>
+      <span className="image-action">{imageClicked ? '已点击…' : '点击解密'}</span>
+    </button>
+  )
+}
+
+function areImageBubblePropsEqual(prev: ImageBubbleProps, next: ImageBubbleProps) {
+  return prev.message === next.message &&
+    prev.session === next.session &&
+    prev.hasImageKey === next.hasImageKey
+}
+
+export default memo(ImageBubble, areImageBubblePropsEqual)
