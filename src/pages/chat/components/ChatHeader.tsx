@@ -1,5 +1,5 @@
 import { Aperture, Image as ImageIcon, Loader2, Mic, RefreshCw } from 'lucide-react'
-import AppDatePicker from '../../../components/AppDatePicker'
+import { DateJumpPicker } from './DateJumpPicker'
 import type { ChatSession } from '../../../types/models'
 import { isGroupChat } from '../utils/messageGuards'
 import { SessionAvatar } from './SessionSidebar'
@@ -80,21 +80,12 @@ export function ChatHeader({
             <Aperture size={18} />
           </button>
         )}
-        <AppDatePicker
-          mode="single"
-          className="date-picker-wrapper"
-          triggerClassName="icon-btn date-jump-btn"
-          triggerVariant="icon"
-          align="right"
+        <DateJumpPicker
           value={selectedDate}
           onChange={onSelectedDateChange}
-          onCommit={onJumpToDate}
-          placeholder="跳转到日期"
-          confirmLabel="跳转"
-          ariaLabel="跳转到日期"
+          onJump={onJumpToDate}
           disabled={!currentSessionId || isJumpingToDate}
           loading={isJumpingToDate}
-          showClear={false}
         />
         <button
           className="icon-btn batch-transcribe-btn"

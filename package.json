@@ -49,9 +49,9 @@
     "@ai-sdk/openai-compatible": "^2.0.48",
     "@heroui/react": "^3.1.0",
     "@heroui/styles": "^3.1.0",
+    "@internationalized/date": "^3.12.2",
     "@modelcontextprotocol/sdk": "^1.27.1",
     "@radix-ui/react-slot": "^1.2.4",
-    "@tanstack/react-virtual": "^3.13.26",
     "ai": "^6.0.193",
     "better-sqlite3": "^12.5.0",
     "class-variance-authority": "^0.7.1",
@@ -67,6 +67,7 @@
     "sherpa-onnx-node": "^1.12.23",
     "silk-wasm": "^3.7.1",
     "tailwind-merge": "^3.6.0",
+    "virtua": "^0.49.1",
     "zod": "^4.1.12"
   },
   "devDependencies": {

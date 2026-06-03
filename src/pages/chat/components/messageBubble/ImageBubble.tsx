@@ -142,7 +142,8 @@ function ImageBubble({ message, session, hasImageKey, onContextMenu }: ImageBubb
       },
       {
         root: scrollRoot,
-        rootMargin: '1000px 0px',
+        // 预加载约 2 屏（原 1000px 会让快速滚动时一次性解码过多图片造成卡顿）
+        rootMargin: '400px 0px',
         threshold: 0
       }
     )

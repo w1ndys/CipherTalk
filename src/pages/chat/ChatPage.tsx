@@ -1,4 +1,4 @@
-﻿import { useState, useEffect, useRef, useCallback, useMemo, useLayoutEffect } from 'react'
+﻿import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { MessageSquare } from 'lucide-react'
 import { useChatStore, MAX_ACTIVE_MESSAGES } from '../../stores/chatStore'
 import { useUpdateStatusStore } from '../../stores/updateStatusStore'
@@ -9,7 +9,7 @@ import type { ChatSession, Message } from '../../types/models'
 import { BatchDecryptModal } from './components/BatchDecryptModal'
 import { BatchTranscribeModal } from './components/BatchTranscribeModal'
 import { ChatHeader } from './components/ChatHeader'
-import { MessageList } from './components/MessageList'
+import { MessageListVirtual } from './components/MessageListVirtual'
 import { SessionSidebar } from './components/SessionSidebar'
 import { SharePosterModal } from './components/SharePosterModal'
 import { ContextMenuPortal } from './components/portals/ContextMenuPortal'
@@ -24,15 +24,9 @@ import { useTopToast } from './hooks/useTopToast'
 import type { BatchImageMessage } from './types'
 import { checkOnlineSttConfigReady } from './utils/sttConfig'
 import { formatSessionTime } from './utils/time'
-import { installJankMonitor, jankMark, jankReport } from '../../utils/jankMonitor'
 
 interface ChatPageProps {
   // 保留接口以备将来扩展
-}
-
-type ScrollAnchor = {
-  scrollHeight: number
-  scrollTop: number
 }
 
 function getMessageCacheKey(message: Message): string {
@@ -49,11 +43,6 @@ function ChatPage(_props: ChatPageProps) {
 
   useEffect(() => {
     getQuoteStyle().then(setQuoteStyle).catch(console.error)
-  }, [])
-
-  // 卡顿检测：监听主线程长任务并关联业务事件，定位卡顿来源
-  useEffect(() => {
-    installJankMonitor()
   }, [])
 
   const {
@@ -94,7 +83,9 @@ function ChatPage(_props: ChatPageProps) {
   const messagesRef = useRef<Message[]>([])
   const isLoadingMoreRef = useRef(false)
   const scrollToBottomAfterRenderRef = useRef(false)
-  const pendingPrependAnchorRef = useRef<ScrollAnchor | null>(null)
+  // 虚拟列表滚动信号：ChatPage 表达"该置底/置顶"的意图，递增令 MessageListVirtual 用 scrollToIndex 落点
+  const [vlistBottomSignal, setVlistBottomSignal] = useState(0)
+  const [vlistTopSignal, setVlistTopSignal] = useState(0)
   const currentSessionIdRef = useRef<string | null>(null)
   const messageLoadSeqRef = useRef(0)
   const lastUpdateTimeRef = useRef<number>(0)
@@ -165,27 +156,6 @@ function ChatPage(_props: ChatPageProps) {
     isLoadingMoreRef.current = isLoadingMore
   }, [isLoadingMore])
 
-  const captureScrollAnchor = useCallback((): ScrollAnchor | null => {
-    const listEl = messageListRef.current
-    if (!listEl) return null
-    return { scrollHeight: listEl.scrollHeight, scrollTop: listEl.scrollTop }
-  }, [])
-
-  const restoreScrollAnchor = useCallback((anchor: ScrollAnchor | null) => {
-    if (!anchor) return
-    const listEl = messageListRef.current
-    if (!listEl) return
-    const delta = listEl.scrollHeight - anchor.scrollHeight
-    if (delta !== 0) {
-      listEl.scrollTop = anchor.scrollTop + delta
-    }
-  }, [])
-
-  const queuePrependScrollRestore = useCallback((_prependedCount: number) => {
-    // 记录 prepend 前的滚动锚点；普通渲染下 scrollHeight 准确，靠高度差恢复位置
-    pendingPrependAnchorRef.current = captureScrollAnchor()
-  }, [captureScrollAnchor])
-
   const saveCurrentSessionMessageCache = useCallback((sessionId: string | null = currentSessionIdRef.current) => {
     if (!sessionId || isDateJumpModeRef.current) return
     const cachedMessages = messagesRef.current
@@ -200,25 +170,6 @@ function ChatPage(_props: ChatPageProps) {
       scrollHeight: listEl?.scrollHeight
     })
   }, [saveSessionMessageCache])
-
-  const restoreCachedSessionScroll = useCallback((scrollTop?: number, scrollHeight?: number) => {
-    requestAnimationFrame(() => {
-      const listEl = messageListRef.current
-      if (!listEl || typeof scrollTop !== 'number') return
-      if (typeof scrollHeight === 'number') {
-        listEl.scrollTop = Math.max(0, scrollTop + listEl.scrollHeight - scrollHeight)
-      } else {
-        listEl.scrollTop = Math.max(0, scrollTop)
-      }
-    })
-  }, [])
-
-  useLayoutEffect(() => {
-    const anchor = pendingPrependAnchorRef.current
-    if (!anchor) return
-    pendingPrependAnchorRef.current = null
-    restoreScrollAnchor(anchor)
-  }, [messages.length, restoreScrollAnchor])
 
   const enterSelectMode = useCallback((localId: number) => {
     setSelectMode(true)
@@ -456,7 +407,6 @@ function ChatPage(_props: ChatPageProps) {
       const oldestLoadedMessage = messagesRef.current[0]
       const oldestSortSeq = Number(oldestLoadedMessage?.sortSeq || 0)
       const useCursorPagination = offset > 0 && oldestLoadedMessage !== undefined && Number.isFinite(oldestSortSeq) && oldestSortSeq > 0
-      const fetchStartedAt = performance.now()
       const result = useCursorPagination
         ? await window.electronAPI.chat.getMessagesBefore(
           sessionId,
@@ -466,7 +416,6 @@ function ChatPage(_props: ChatPageProps) {
           typeof oldestLoadedMessage.localId === 'number' ? oldestLoadedMessage.localId : undefined
         )
         : await window.electronAPI.chat.getMessages(sessionId, offset, INITIAL_PAGE_SIZE)
-      jankReport(`history:fetch ${offset === 0 ? 'init' : 'more'} (${result?.messages?.length ?? 0} 条)`, performance.now() - fetchStartedAt, 200)
 
       if (currentSessionIdRef.current !== sessionId || loadSeq !== messageLoadSeqRef.current) {
         return
@@ -483,8 +432,6 @@ function ChatPage(_props: ChatPageProps) {
           if (msgs.length === 0) {
             setHasMoreMessages(false)
           } else {
-            jankMark(`history:render prepend +${msgs.length} 条`)
-            queuePrependScrollRestore(msgs.length)
             appendMessages(msgs, true)
             setHasMoreMessages(hasMore)
             setCurrentOffset(newOffset)
@@ -627,11 +574,7 @@ function ChatPage(_props: ChatPageProps) {
       })
 
       if (isNearBottom) {
-        requestAnimationFrame(() => {
-          if (messageListRef.current) {
-            messageListRef.current.scrollTo({ top: messageListRef.current.scrollHeight, behavior: 'smooth' })
-          }
-        })
+        setVlistBottomSignal(s => s + 1)
       }
     } catch (e) {
       console.error('[ChatPage] 缓存会话增量同步失败:', e)
@@ -674,7 +617,7 @@ function ChatPage(_props: ChatPageProps) {
       setDateJumpCursorCreateTimeEnd(null)
       setDateJumpCursorLocalIdEnd(null)
       setHasMoreMessagesAfter(false)
-      restoreCachedSessionScroll(cached.scrollTop, cached.scrollHeight)
+      // 重进会话由 MessageListVirtual 初始置底接管（virtua），不做裸 DOM 滚动恢复
       void syncCachedSessionMessages(session.username, loadSeq)
       return
     }
@@ -712,7 +655,6 @@ function ChatPage(_props: ChatPageProps) {
     isLoadingMoreRef.current = true
     setLoadingMore(true)
     try {
-      const fetchStartedAt = performance.now()
       const result = await window.electronAPI.chat.getMessagesBefore(
         currentSessionId,
         dateJumpCursorSortSeq,
@@ -720,7 +662,6 @@ function ChatPage(_props: ChatPageProps) {
         dateJumpCursorCreateTime ?? undefined,
         dateJumpCursorLocalId ?? undefined
       )
-      jankReport(`history:fetch before (${result?.messages?.length ?? 0} 条)`, performance.now() - fetchStartedAt, 200)
 
       if (result.success && result.messages) {
         const existingKeys = new Set(
@@ -739,8 +680,6 @@ function ChatPage(_props: ChatPageProps) {
         const oldestCreateTime = uniqueOlderMessages[0]?.createTime
         const oldestLocalId = uniqueOlderMessages[0]?.localId
 
-        jankMark(`history:render prepend +${uniqueOlderMessages.length} 条`)
-        queuePrependScrollRestore(uniqueOlderMessages.length)
         appendMessages(uniqueOlderMessages, true)
         if (typeof oldestSortSeq !== 'number' || oldestSortSeq >= dateJumpCursorSortSeq) {
           setHasMoreMessages(false)
@@ -779,7 +718,6 @@ function ChatPage(_props: ChatPageProps) {
     dateJumpCursorLocalId,
     hasMoreMessages,
     appendMessages,
-    queuePrependScrollRestore,
     setHasMoreMessages,
     setLoadingMore
   ])
@@ -788,17 +726,9 @@ function ChatPage(_props: ChatPageProps) {
   const loadMoreMessagesAfterInDateJumpMode = useCallback(async () => {
     if (!currentSessionId || dateJumpCursorSortSeqEnd === null || isLoadingMoreRef.current || !hasMoreMessagesAfter) return
 
-    const listEl = messageListRef.current
-    if (!listEl) return
-
-    // 记录当前滚动位置和高度
-    const oldScrollHeight = listEl.scrollHeight
-    const oldScrollTop = listEl.scrollTop
-
     isLoadingMoreRef.current = true
     setLoadingMore(true)
     try {
-      const fetchStartedAt = performance.now()
       const result = await window.electronAPI.chat.getMessagesAfter(
         currentSessionId,
         dateJumpCursorSortSeqEnd,
@@ -806,7 +736,6 @@ function ChatPage(_props: ChatPageProps) {
         dateJumpCursorCreateTimeEnd ?? undefined,
         dateJumpCursorLocalIdEnd ?? undefined
       )
-      jankReport(`history:fetch after (${result?.messages?.length ?? 0} 条)`, performance.now() - fetchStartedAt, 200)
 
       if (result.success && result.messages) {
         const existingKeys = new Set(
@@ -822,7 +751,6 @@ function ChatPage(_props: ChatPageProps) {
         }
 
         // 追加到消息列表末尾
-        jankMark(`history:render append +${uniqueNewerMessages.length} 条`)
         appendMessages(uniqueNewerMessages, false)
 
         // 更新向下滑动游标
@@ -840,11 +768,7 @@ function ChatPage(_props: ChatPageProps) {
           setHasMoreMessagesAfter(result.hasMore ?? false)
         }
 
-        // 保持滚动位置（向下加载时保持在原位置）
-        requestAnimationFrame(() => {
-          const newScrollHeight = listEl.scrollHeight
-          listEl.scrollTop = oldScrollTop + (newScrollHeight - oldScrollHeight)
-        })
+        // 追加在末尾不移动视口，由 virtua 处理，无需手动保持滚动位置
       } else {
         setHasMoreMessagesAfter(false)
       }
@@ -868,16 +792,9 @@ function ChatPage(_props: ChatPageProps) {
     { hasMoreMessages, hasMoreMessagesAfter, currentOffset, isDateJumpMode, loadMessages, loadMoreMessagesInDateJumpMode, loadMoreMessagesAfterInDateJumpMode }
   )
 
-  // 滚动到底部
-  const scrollToBottom = useCallback((smooth: boolean | React.MouseEvent = true) => {
-    const isSmooth = typeof smooth === 'boolean' ? smooth : true;
-    if (messageListRef.current) {
-      if (isSmooth) {
-        messageListRef.current.scrollTo({ top: messageListRef.current.scrollHeight, behavior: 'smooth' })
-      } else {
-        messageListRef.current.scrollTop = messageListRef.current.scrollHeight
-      }
-    }
+  // 滚动到底部：走置底信号，由 MessageListVirtual 用 scrollToIndex 落点（不碰裸 DOM）
+  const scrollToBottom = useCallback((_smooth: boolean | React.MouseEvent = true) => {
+    setVlistBottomSignal(s => s + 1)
   }, [])
 
   // WeFlow 风格实时更新：wcdb 变化事件只做触发器，实际数据通过会话/消息接口增量读取
@@ -978,15 +895,12 @@ function ChatPage(_props: ChatPageProps) {
     }
   }, [appendMessages, incrementSyncVersion, scrollToBottom, setSessions])
 
-  // Scroll to bottom after initial message render
+  // 初始/刷新置底：由 MessageListVirtual 用 scrollToIndex 置底。把"该置底"意图转成置底信号
+  // （覆盖"同会话刷新"——sid 不变、会话级 guard 不触发的情况）。
   useEffect(() => {
     if (scrollToBottomAfterRenderRef.current) {
       scrollToBottomAfterRenderRef.current = false
-      requestAnimationFrame(() => {
-        if (messageListRef.current) {
-          messageListRef.current.scrollTop = messageListRef.current.scrollHeight
-        }
-      })
+      setVlistBottomSignal(s => s + 1)
     }
   }, [messages])
 
@@ -1024,12 +938,8 @@ function ChatPage(_props: ChatPageProps) {
         setDateJumpCursorLocalIdEnd(lastMsg?.localId ?? null)
         setHasMoreMessagesAfter(true)
 
-        // 滚动到顶部显示目标日期的消息
-        requestAnimationFrame(() => {
-          if (messageListRef.current) {
-            messageListRef.current.scrollTop = 0
-          }
-        })
+        // 滚动到顶部显示目标日期的消息（置顶信号，由 MessageListVirtual 用 scrollToIndex(0)）
+        setVlistTopSignal(s => s + 1)
       } else {
         // 没有找到消息，可能日期太新
         console.log('未找到该日期或之后的消息')
@@ -1597,7 +1507,7 @@ function ChatPage(_props: ChatPageProps) {
             />
 
             <div className="message-content-wrapper">
-              <MessageList
+              <MessageListVirtual
                 currentSession={currentSession}
                 isLoadingMessages={isLoadingMessages}
                 messages={messages}
@@ -1614,6 +1524,8 @@ function ChatPage(_props: ChatPageProps) {
                 setContextMenu={setContextMenu}
                 showScrollToBottom={showScrollToBottom}
                 scrollToBottom={scrollToBottom}
+                bottomSignal={vlistBottomSignal}
+                topSignal={vlistTopSignal}
               />
             </div>
 
