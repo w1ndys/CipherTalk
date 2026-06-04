@@ -1,7 +1,7 @@
 import { useState, type ReactElement, type CSSProperties, type Key } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { Avatar, Button, ScrollShadow, Separator, Tabs, Tooltip } from '@heroui/react'
-import { Home, MessageSquare, BarChart3, Users, FileText, Database, Settings, SquareChevronLeft, SquareChevronRight, Download, Aperture, Network, FileAudio } from 'lucide-react'
+import { Home, MessageSquare, BarChart3, Users, FileText, Database, Settings, SquareChevronLeft, SquareChevronRight, Download, Aperture, Network, FileAudio, Bot } from 'lucide-react'
 import { MCP } from '@lobehub/icons'
 import packageJson from '../../package.json'
 import { useAppStore } from '../stores/appStore'
@@ -67,6 +67,7 @@ function Sidebar() {
 
   const navItems: NavItemConfig[] = [
     { key: 'home', label: '首页', icon: <Home size={NAV_ICON_SIZE} />, type: 'route', path: '/home' },
+    { key: 'agent', label: 'AI 助手', icon: <Bot size={NAV_ICON_SIZE} />, type: 'route', path: '/agent' },
     { key: 'chat', label: '聊天查看', icon: <MessageSquare size={NAV_ICON_SIZE} />, type: 'action', onClick: openChatWindow },
     { key: 'moments', label: '朋友圈', icon: <Aperture size={NAV_ICON_SIZE} />, type: 'action', onClick: openMomentsWindow },
     { key: 'analytics', label: '私聊分析', icon: <BarChart3 size={NAV_ICON_SIZE} />, type: 'route', path: '/analytics' },

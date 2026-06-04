@@ -66,6 +66,20 @@ contextBridge.exposeInMainWorld('electronAPI', {
     listStatuses: () => ipcRenderer.invoke('mcpClient:listStatuses') as Promise<Array<{ name: string; config: any; status: string; toolCount: number; error?: string }>>,
   },
 
+  // AI Agent（主进程 broker → AI 子进程；流式 chunk 经 agent:chunk 推回）
+  agent: {
+    run: (runId: string, messages: unknown[], scope?: unknown) =>
+      ipcRenderer.invoke('agent:run', { runId, messages, scope }) as Promise<{ success: boolean; error?: string }>,
+    abort: (runId: string) => ipcRenderer.invoke('agent:abort', runId) as Promise<{ success: boolean }>,
+    onChunk: (runId: string, callback: (chunk: unknown) => void): (() => void) => {
+      const listener = (_e: unknown, data: { runId: string; chunk: unknown }) => {
+        if (data?.runId === runId) callback(data.chunk)
+      }
+      ipcRenderer.on('agent:chunk', listener)
+      return () => ipcRenderer.removeListener('agent:chunk', listener)
+    },
+  },
+
   // 数据库操作
   db: {
     open: (dbPath: string, key?: string) => ipcRenderer.invoke('db:open', dbPath, key),

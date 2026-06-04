@@ -18,6 +18,7 @@ import DataManagementPage from './pages/DataManagementPage'
 import SettingsPage from './pages/SettingsPage'
 import OpenApiPage from './pages/OpenApiPage'
 import McpPage from './pages/McpPage'
+import AgentPage from './pages/agent/AgentPage'
 import ExportPage from './pages/ExportPage'
 import TranscriptionAssistantPage from './pages/TranscriptionAssistantPage'
 import ActivationPage from './pages/ActivationPage'
@@ -700,6 +701,7 @@ function App() {
               <Route path="/settings" element={<SettingsPage />} />
               <Route path="/open-api" element={<OpenApiPage />} />
               <Route path="/mcp" element={<McpPage />} />
+              <Route path="/agent" element={<AgentPage />} />
               <Route path="/export" element={<ExportPage />} />
               <Route path="/transcription-assistant" element={<TranscriptionAssistantPage />} />
               <Route path="/chat-history/:sessionId/:messageId" element={<ChatHistoryPage />} />

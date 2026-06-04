@@ -1,0 +1,62 @@
+/**
+ * AI Agent Utility Process —— 在 Electron 隔离子进程中跑 ToolLoopAgent。
+ * 主进程通过 postMessage({ id, type, payload }) 下发请求，本进程回复 { id, result } / { id, error }，
+ * 流式 UI 消息块以 { id: -1, type: 'chunk', payload: { runId, chunk } } 上行。
+ *
+ * 约定：id === 0 && type === 'ready' 为启动就绪信号。
+ * 隔离收益：AI 崩溃（如 sqlite-vec 原生 fatal）只终止本子进程，主进程会重启，不拖垮 UI。
+ */
+import { runAgent } from './services/agent/engine'
+import type { AgentRunInput } from './services/agent/types'
+
+const parentPort = process.parentPort
+
+if (!parentPort) {
+  throw new Error('aiAgentUtilityProcess 必须在 Electron utilityProcess 中运行')
+}
+
+const aborters = new Map<string, AbortController>()
+
+parentPort.on('message', (event: Electron.MessageEvent) => {
+  void handleMessage(event.data)
+})
+
+async function handleMessage(msg: any): Promise<void> {
+  const { id, type, payload } = msg || {}
+  try {
+    switch (type) {
+      case 'ping':
+        parentPort!.postMessage({ id, result: 'pong' })
+        break
+
+      case 'run': {
+        const { runId, ...input } = payload as { runId: string } & AgentRunInput
+        const aborter = new AbortController()
+        aborters.set(runId, aborter)
+        try {
+          await runAgent(
+            input,
+            (chunk) => parentPort!.postMessage({ id: -1, type: 'chunk', payload: { runId, chunk } }),
+            aborter.signal,
+          )
+          parentPort!.postMessage({ id, result: { done: true } })
+        } finally {
+          aborters.delete(runId)
+        }
+        break
+      }
+
+      case 'abort':
+        aborters.get(payload?.runId)?.abort()
+        parentPort!.postMessage({ id, result: { aborted: true } })
+        break
+
+      default:
+        parentPort!.postMessage({ id, error: `unknown type: ${type}` })
+    }
+  } catch (e: any) {
+    parentPort!.postMessage({ id, error: e?.message || String(e) })
+  }
+}
+
+parentPort.postMessage({ id: 0, type: 'ready' })
