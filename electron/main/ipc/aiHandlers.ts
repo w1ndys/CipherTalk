@@ -3,14 +3,19 @@ import { existsSync, readFileSync } from 'fs'
 import { join } from 'path'
 import type { UIMessage } from 'ai'
 import type { MainProcessContext } from '../context'
-import type { AgentScope } from '../../services/agent/types'
+import type { AgentProviderConfigOverride, AgentScope } from '../../services/agent/types'
 
 /** 进行中的 agent 运行：runId → AbortController，用于取消。 */
 const agentAborters = new Map<string, AbortController>()
 
 export function registerAiHandlers(_ctx: MainProcessContext): void {
   // ========= AI Agent（跑在独立 utilityProcess 子进程，主进程仅做 broker）=========
-  ipcMain.handle('agent:run', async (event, payload: { runId: string; messages: UIMessage[]; scope?: AgentScope }) => {
+  ipcMain.handle('agent:run', async (event, payload: {
+    runId: string
+    messages: UIMessage[]
+    scope?: AgentScope
+    modelConfig?: AgentProviderConfigOverride | null
+  }) => {
     const sender = event.sender
     const { runId } = payload
     const send = (chunk: unknown) => { if (!sender.isDestroyed()) sender.send('agent:chunk', { runId, chunk }) }
@@ -20,8 +25,8 @@ export function registerAiHandlers(_ctx: MainProcessContext): void {
       const { agentProcessService } = await import('../../services/agent/agentProcessService')
       const { resolveProviderConfig } = await import('../../services/agent/resolveProviderConfig')
       const { convertToModelMessages } = await import('ai')
-      const providerConfig = resolveProviderConfig()
-      const messages = convertToModelMessages(payload.messages)
+      const providerConfig = resolveProviderConfig(payload.modelConfig)
+      const messages = await convertToModelMessages(payload.messages)
       await agentProcessService.run(
         { messages, providerConfig, scope: payload.scope ?? { kind: 'global' } },
         (chunk) => send(chunk),

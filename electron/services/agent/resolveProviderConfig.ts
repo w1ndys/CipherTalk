@@ -4,25 +4,26 @@
  */
 import { ConfigService } from '../config'
 import { getProviderDefinition, normalizeProviderId } from '../ai/providers/catalog'
-import type { AgentProviderConfig } from './types'
+import type { AgentProviderConfig, AgentProviderConfigOverride } from './types'
 
-export function resolveProviderConfig(): AgentProviderConfig {
+export function resolveProviderConfig(override?: AgentProviderConfigOverride | null): AgentProviderConfig {
   const config = new ConfigService()
   try {
-    const name = normalizeProviderId(config.getAICurrentProvider() || 'deepseek')
+    const name = normalizeProviderId(override?.provider || config.getAICurrentProvider() || 'deepseek')
     const def = getProviderDefinition(name)
-    const providerConfig = config.getAIProviderConfig(name)
+    if (!def) throw new Error(`不支持的 AI 服务商: ${name}`)
 
+    const providerConfig = override || config.getAIProviderConfig(name)
     const apiKey = providerConfig?.apiKey || ''
-    const model = providerConfig?.model || def?.models?.[0] || ''
+    const model = providerConfig?.model || def.models?.[0] || ''
     if (!apiKey) throw new Error('未配置 AI 服务商的 API Key，请先在设置中配置')
     if (!model) throw new Error('未选择模型，请先在设置中选择模型')
 
     return {
-      providerKind: providerConfig?.protocol || def?.protocol || 'openai-compatible',
+      providerKind: providerConfig?.protocol || def.protocol || 'openai-compatible',
       name,
       apiKey,
-      baseURL: providerConfig?.baseURL || def?.baseURL || '',
+      baseURL: providerConfig?.baseURL || def.baseURL || '',
       model,
     }
   } finally {
