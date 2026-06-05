@@ -6,9 +6,16 @@
 import type { ChatTransport, UIMessage, UIMessageChunk } from 'ai'
 
 type AgentScope = { kind: 'global' } | { kind: 'session'; sessionId: string }
+export type AgentModelConfig = {
+  provider: string
+  apiKey: string
+  model: string
+  baseURL?: string
+  protocol?: 'openai-responses' | 'openai-compatible' | 'anthropic' | 'google'
+}
 
 interface AgentBridge {
-  run: (runId: string, messages: unknown[], scope?: unknown) => Promise<{ success: boolean; error?: string }>
+  run: (runId: string, messages: unknown[], scope?: unknown, modelConfig?: AgentModelConfig | null) => Promise<{ success: boolean; error?: string }>
   abort: (runId: string) => Promise<{ success: boolean }>
   onChunk: (runId: string, callback: (chunk: unknown) => void) => () => void
 }
@@ -25,7 +32,10 @@ function randomRunId(): string {
 }
 
 export class IpcChatTransport<UI_MESSAGE extends UIMessage = UIMessage> implements ChatTransport<UI_MESSAGE> {
-  constructor(private readonly scope: AgentScope = { kind: 'global' }) {}
+  constructor(
+    private readonly scope: AgentScope = { kind: 'global' },
+    private readonly getModelConfig?: () => AgentModelConfig | null
+  ) {}
 
   async sendMessages(options: {
     messages: UI_MESSAGE[]
@@ -35,6 +45,7 @@ export class IpcChatTransport<UI_MESSAGE extends UIMessage = UIMessage> implemen
     const runId = randomRunId()
     const scope = this.scope
     const messages = options.messages as unknown[]
+    const modelConfig = this.getModelConfig?.() ?? null
 
     options.abortSignal?.addEventListener('abort', () => { void bridge.abort(runId) })
 
@@ -49,7 +60,7 @@ export class IpcChatTransport<UI_MESSAGE extends UIMessage = UIMessage> implemen
           controller.enqueue(chunk as UIMessageChunk)
         })
         // 触发主进程运行；run resolve 即代表本次结束（chunk 已通过 onChunk 推完，[DONE] 关流）
-        void bridge.run(runId, messages, scope).catch((error: unknown) => {
+        void bridge.run(runId, messages, scope, modelConfig).catch((error: unknown) => {
           try {
             controller.enqueue({ type: 'error', errorText: error instanceof Error ? error.message : String(error) } as UIMessageChunk)
             controller.close()

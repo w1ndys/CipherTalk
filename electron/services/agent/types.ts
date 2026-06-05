@@ -17,6 +17,14 @@ export interface AgentProviderConfig {
   headers?: Record<string, string>
 }
 
+export interface AgentProviderConfigOverride {
+  provider: string
+  apiKey: string
+  model: string
+  baseURL?: string
+  protocol?: ProviderKind
+}
+
 /** 提问范围：全局 / 限定单个会话。 */
 export type AgentScope =
   | { kind: 'global' }

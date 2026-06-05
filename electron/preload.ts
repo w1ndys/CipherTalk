@@ -68,8 +68,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   // AI Agent（主进程 broker → AI 子进程；流式 chunk 经 agent:chunk 推回）
   agent: {
-    run: (runId: string, messages: unknown[], scope?: unknown) =>
-      ipcRenderer.invoke('agent:run', { runId, messages, scope }) as Promise<{ success: boolean; error?: string }>,
+    run: (runId: string, messages: unknown[], scope?: unknown, modelConfig?: unknown) =>
+      ipcRenderer.invoke('agent:run', { runId, messages, scope, modelConfig }) as Promise<{ success: boolean; error?: string }>,
     abort: (runId: string) => ipcRenderer.invoke('agent:abort', runId) as Promise<{ success: boolean }>,
     onChunk: (runId: string, callback: (chunk: unknown) => void): (() => void) => {
       const listener = (_e: unknown, data: { runId: string; chunk: unknown }) => {

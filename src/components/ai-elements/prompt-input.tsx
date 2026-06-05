@@ -1112,11 +1112,13 @@ export type PromptInputSpeechButtonProps = ComponentProps<
   typeof PromptInputButton
 > & {
   textareaRef?: RefObject<HTMLTextAreaElement | null>;
+  language?: string;
   onTranscriptionChange?: (text: string) => void;
 };
 
 export const PromptInputSpeechButton = ({
   className,
+  language = "en-US",
   textareaRef,
   onTranscriptionChange,
   ...props
@@ -1125,7 +1127,10 @@ export const PromptInputSpeechButton = ({
   const [recognition, setRecognition] = useState<SpeechRecognition | null>(
     null
   );
+  const controller = useOptionalPromptInputController();
+  const controllerRef = useRef(controller);
   const recognitionRef = useRef<SpeechRecognition | null>(null);
+  controllerRef.current = controller;
 
   useEffect(() => {
     if (
@@ -1138,7 +1143,7 @@ export const PromptInputSpeechButton = ({
 
       speechRecognition.continuous = true;
       speechRecognition.interimResults = true;
-      speechRecognition.lang = "en-US";
+      speechRecognition.lang = language;
 
       speechRecognition.onstart = () => {
         setIsListening(true);
@@ -1167,6 +1172,13 @@ export const PromptInputSpeechButton = ({
           textarea.value = newValue;
           textarea.dispatchEvent(new Event("input", { bubbles: true }));
           onTranscriptionChange?.(newValue);
+        } else if (finalTranscript && controllerRef.current) {
+          const currentValue = controllerRef.current.textInput.value;
+          const newValue =
+            currentValue + (currentValue ? " " : "") + finalTranscript;
+
+          controllerRef.current.textInput.setInput(newValue);
+          onTranscriptionChange?.(newValue);
         }
       };
 
@@ -1184,7 +1196,7 @@ export const PromptInputSpeechButton = ({
         recognitionRef.current.stop();
       }
     };
-  }, [textareaRef, onTranscriptionChange]);
+  }, [textareaRef, onTranscriptionChange, language]);
 
   const toggleListening = useCallback(() => {
     if (!recognition) {
