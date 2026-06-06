@@ -419,7 +419,20 @@ export class WcdbService extends EventEmitter {
     })
   }
 
+  /**
+   * 供 AI agent 子进程经代理通道复用本进程已打开的 wcdb 连接（仅在主进程侧执行）。
+   * 子进程把 callWithAutoOpen 转发过来，主进程原样走一遍。
+   */
+  runProxiedCall<T extends { success?: boolean; error?: string }>(type: string, payload: any): Promise<T> {
+    return this.callWithAutoOpen<T>(type, payload)
+  }
+
   private async callWithAutoOpen<T extends { success?: boolean; error?: string }>(type: string, payload: any): Promise<T> {
+    // AI agent 子进程：不直连原微信库，转发给主进程已打开的连接（见 agent/wcdbProxyClient.ts）。
+    if (process.env.CT_AGENT_WCDB_PROXY === '1') {
+      const { proxyWcdbCall } = await import('./agent/wcdbProxyClient')
+      return proxyWcdbCall<T>(type, payload)
+    }
     let result = await this.call<T>(type, payload)
     if (!this.isUninitializedResult(result)) return result
 

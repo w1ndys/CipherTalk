@@ -1,5 +1,6 @@
 "use client";
 
+import { ScrollShadow } from "@heroui/react";
 import { Button } from "@/components/ui/aie-button";
 import { cn } from "@/lib/utils";
 import { ArrowDownIcon } from "lucide-react";
@@ -25,13 +26,29 @@ export type ConversationContentProps = ComponentProps<
 
 export const ConversationContent = ({
   className,
+  children,
+  scrollClassName,
   ...props
-}: ConversationContentProps) => (
-  <StickToBottom.Content
-    className={cn("flex flex-col gap-8 p-4", className)}
-    {...props}
-  />
-);
+}: ConversationContentProps) => {
+  const context = useStickToBottomContext();
+
+  return (
+    <ScrollShadow
+      className={cn("h-full min-h-0 w-full", scrollClassName)}
+      ref={(node) => context.scrollRef(node)}
+      size={56}
+      style={{ scrollbarGutter: "stable both-edges" }}
+    >
+      <div
+        className={cn("flex flex-col gap-8 p-4", className)}
+        ref={(node) => context.contentRef(node)}
+        {...props}
+      >
+        {typeof children === "function" ? children(context) : children}
+      </div>
+    </ScrollShadow>
+  );
+};
 
 export type ConversationEmptyStateProps = ComponentProps<"div"> & {
   title?: string;

@@ -86,6 +86,7 @@ export class AgentProcessService {
         worker = utilityProcess.fork(utilityPath, [], {
           serviceName: 'CipherTalk AI Agent',
           stdio: 'pipe',
+          env: { ...process.env, CT_AGENT_WCDB_PROXY: '1' },
         })
       } catch (e: any) {
         this.initPromise = null
@@ -113,6 +114,10 @@ export class AgentProcessService {
       })
 
       worker.on('message', (msg: any) => {
+        if (msg?.type === 'wcdb:call') {
+          void this.handleWcdbCall(worker, msg.payload)
+          return
+        }
         if (msg?.id === 0 && msg.type === 'ready') {
           if (!readyFired) { readyFired = true; resolve() }
           return
@@ -178,6 +183,24 @@ export class AgentProcessService {
       try { reject(err) } catch { /* ignore */ }
     }
     this.pending.clear()
+  }
+
+  /**
+   * 处理子进程发来的 wcdb 代理请求：用主进程已打开的 wcdbService 执行后回传。
+   * 子进程的数据层（dbAdapter / chatService / contactNameResolver 等）由此复用原微信库连接。
+   */
+  private async handleWcdbCall(
+    worker: UtilityProcess,
+    payload: { reqId: number; method: string; payload: any },
+  ): Promise<void> {
+    const reqId = payload?.reqId
+    try {
+      const { wcdbService } = await import('../wcdbService')
+      const result = await wcdbService.runProxiedCall(payload.method, payload.payload)
+      worker.postMessage({ type: 'wcdb:result', payload: { reqId, result } })
+    } catch (e: any) {
+      worker.postMessage({ type: 'wcdb:result', payload: { reqId, error: e?.message || String(e) } })
+    }
   }
 
   private async call<T = any>(type: string, payload: any): Promise<T> {
