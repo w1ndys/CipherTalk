@@ -29,10 +29,10 @@ export interface AgentProviderConfigOverride {
   reasoningEffort?: AgentReasoningEffort
 }
 
-/** 提问范围：全局 / 限定单个会话。 */
+/** 提问范围：全局 / 限定单个会话（@ 某联系人或群时收窄）。 */
 export type AgentScope =
   | { kind: 'global' }
-  | { kind: 'session'; sessionId: string }
+  | { kind: 'session'; sessionId: string; displayName?: string }
 
 /** 一次 agent 运行的输入。 */
 export interface AgentRunInput {

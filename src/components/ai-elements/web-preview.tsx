@@ -78,7 +78,7 @@ export const WebPreview = ({
     <WebPreviewContext.Provider value={contextValue}>
       <div
         className={cn(
-          "flex size-full flex-col rounded-[var(--agent-radius,12px)] border bg-card",
+          "flex size-full flex-col rounded-(--agent-radius,12px) border bg-card",
           className
         )}
         {...props}

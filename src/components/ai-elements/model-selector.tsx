@@ -40,9 +40,9 @@ export const ModelSelectorContent = ({
   title = "Model Selector",
   ...props
 }: ModelSelectorContentProps) => (
-  <DialogContent className={cn("rounded-[var(--agent-radius,12px)] p-0", className)} {...props}>
+  <DialogContent className={cn("rounded-(--agent-radius,12px) p-0", className)} {...props}>
     <DialogTitle className="sr-only">{title}</DialogTitle>
-    <Command className="rounded-[var(--agent-radius,12px)] **:data-[slot=command-input-wrapper]:h-auto">
+    <Command className="rounded-(--agent-radius,12px) **:data-[slot=command-input-wrapper]:h-auto">
       {children}
     </Command>
   </DialogContent>
@@ -84,7 +84,7 @@ export const ModelSelectorGroup = (props: ModelSelectorGroupProps) => (
 export type ModelSelectorItemProps = ComponentProps<typeof CommandItem>;
 
 export const ModelSelectorItem = ({ className, ...props }: ModelSelectorItemProps) => (
-  <CommandItem className={cn("rounded-[var(--agent-radius,12px)]", className)} {...props} />
+  <CommandItem className={cn("rounded-(--agent-radius,12px)", className)} {...props} />
 );
 
 export type ModelSelectorShortcutProps = ComponentProps<typeof CommandShortcut>;
@@ -188,7 +188,7 @@ export const ModelSelectorLogoGroup = ({
 }: ModelSelectorLogoGroupProps) => (
   <div
     className={cn(
-      "-space-x-1 flex shrink-0 items-center [&>img]:rounded-[var(--agent-radius,12px)] [&>img]:bg-background [&>img]:p-px [&>img]:ring-1 dark:[&>img]:bg-foreground",
+      "-space-x-1 flex shrink-0 items-center [&>img]:rounded-(--agent-radius,12px) [&>img]:bg-background [&>img]:p-px [&>img]:ring-1 dark:[&>img]:bg-foreground",
       className
     )}
     {...props}

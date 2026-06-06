@@ -40,7 +40,7 @@ export const ConversationContent = ({
       style={{ scrollbarGutter: "stable both-edges" }}
     >
       <div
-        className={cn("flex flex-col gap-8 p-4", className)}
+        className={cn("flex flex-col gap-8", className)}
         ref={(node) => context.contentRef(node)}
         {...props}
       >
@@ -101,7 +101,7 @@ export const ConversationScrollButton = ({
     !isAtBottom && (
       <Button
         className={cn(
-          "absolute bottom-4 left-[50%] translate-x-[-50%] rounded-[var(--agent-radius,12px)]",
+          "absolute bottom-4 left-[50%] translate-x-[-50%] rounded-(--agent-radius,12px)",
           className
         )}
         onClick={handleScrollToBottom}

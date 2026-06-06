@@ -301,14 +301,14 @@ export function PromptInputAttachment({
       <HoverCardTrigger asChild>
         <div
           className={cn(
-            "group relative flex h-8 cursor-pointer select-none items-center gap-1.5 rounded-[var(--agent-radius,12px)] border border-border px-1.5 font-medium text-sm transition-all hover:bg-accent hover:text-accent-foreground dark:hover:bg-accent/50",
+            "group relative flex h-8 cursor-pointer select-none items-center gap-1.5 rounded-(--agent-radius,12px) border border-border px-1.5 font-medium text-sm transition-all hover:bg-accent hover:text-accent-foreground dark:hover:bg-accent/50",
             className
           )}
           key={data.id}
           {...props}
         >
           <div className="relative size-5 shrink-0">
-            <div className="absolute inset-0 flex size-5 items-center justify-center overflow-hidden rounded-[var(--agent-radius,12px)] bg-background transition-opacity group-hover:opacity-0">
+            <div className="absolute inset-0 flex size-5 items-center justify-center overflow-hidden rounded-(--agent-radius,12px) bg-background transition-opacity group-hover:opacity-0">
               {isImage ? (
                 <img
                   alt={filename || "attachment"}
@@ -325,7 +325,7 @@ export function PromptInputAttachment({
             </div>
             <Button
               aria-label="Remove attachment"
-              className="absolute inset-0 size-5 cursor-pointer rounded-[var(--agent-radius,12px)] p-0 opacity-0 transition-opacity group-hover:pointer-events-auto group-hover:opacity-100 [&>svg]:size-2.5"
+              className="absolute inset-0 size-5 cursor-pointer rounded-(--agent-radius,12px) p-0 opacity-0 transition-opacity group-hover:pointer-events-auto group-hover:opacity-100 [&>svg]:size-2.5"
               onClick={(e) => {
                 e.stopPropagation();
                 attachments.remove(data.id);
@@ -344,7 +344,7 @@ export function PromptInputAttachment({
       <PromptInputHoverCardContent className="w-auto p-2">
         <div className="w-auto space-y-3">
           {isImage && (
-            <div className="flex max-h-96 w-96 items-center justify-center overflow-hidden rounded-[var(--agent-radius,12px)] border">
+            <div className="flex max-h-96 w-96 items-center justify-center overflow-hidden rounded-(--agent-radius,12px) border">
               <img
                 alt={filename || "attachment preview"}
                 className="max-h-full max-w-full object-contain"
@@ -967,7 +967,7 @@ export const PromptInputButton = ({
 
   return (
     <InputGroupButton
-      className={cn("rounded-[var(--agent-radius,12px)]", className)}
+      className={cn("rounded-(--agent-radius,12px)", className)}
       size={newSize}
       type="button"
       variant={variant}
@@ -1002,7 +1002,7 @@ export const PromptInputActionMenuContent = ({
   className,
   ...props
 }: PromptInputActionMenuContentProps) => (
-  <DropdownMenuContent align="start" className={cn("rounded-[var(--agent-radius,12px)]", className)} {...props} />
+  <DropdownMenuContent align="start" className={cn("rounded-(--agent-radius,12px)", className)} {...props} />
 );
 
 export type PromptInputActionMenuItemProps = ComponentProps<
@@ -1012,7 +1012,7 @@ export const PromptInputActionMenuItem = ({
   className,
   ...props
 }: PromptInputActionMenuItemProps) => (
-  <DropdownMenuItem className={cn("rounded-[var(--agent-radius,12px)]", className)} {...props} />
+  <DropdownMenuItem className={cn("rounded-(--agent-radius,12px)", className)} {...props} />
 );
 
 // Note: Actions that perform side-effects (like opening a file dialog)
@@ -1549,7 +1549,7 @@ export const PromptInputSelectTrigger = ({
 }: PromptInputSelectTriggerProps) => (
   <SelectTrigger
     className={cn(
-      "rounded-[var(--agent-radius,12px)] border-none bg-transparent font-medium text-muted-foreground shadow-none transition-colors",
+      "rounded-(--agent-radius,12px) border-none bg-transparent font-medium text-muted-foreground shadow-none transition-colors",
       "hover:bg-accent hover:text-foreground aria-expanded:bg-accent aria-expanded:text-foreground",
       className
     )}
@@ -1565,7 +1565,7 @@ export const PromptInputSelectContent = ({
   className,
   ...props
 }: PromptInputSelectContentProps) => (
-  <SelectContent className={cn("rounded-[var(--agent-radius,12px)]", className)} {...props} />
+  <SelectContent className={cn("rounded-(--agent-radius,12px)", className)} {...props} />
 );
 
 export type PromptInputSelectItemProps = ComponentProps<typeof SelectItem>;
@@ -1574,7 +1574,7 @@ export const PromptInputSelectItem = ({
   className,
   ...props
 }: PromptInputSelectItemProps) => (
-  <SelectItem className={cn("rounded-[var(--agent-radius,12px)]", className)} {...props} />
+  <SelectItem className={cn("rounded-(--agent-radius,12px)", className)} {...props} />
 );
 
 export type PromptInputSelectValueProps = ComponentProps<typeof SelectValue>;
@@ -1613,7 +1613,7 @@ export const PromptInputHoverCardContent = ({
   className,
   ...props
 }: PromptInputHoverCardContentProps) => (
-  <HoverCardContent align={align} className={cn("rounded-[var(--agent-radius,12px)]", className)} {...props} />
+  <HoverCardContent align={align} className={cn("rounded-(--agent-radius,12px)", className)} {...props} />
 );
 
 export type PromptInputTabsListProps = HTMLAttributes<HTMLDivElement>;

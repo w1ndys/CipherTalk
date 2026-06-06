@@ -587,6 +587,8 @@ function App() {
   const disableContentOverflow = ['/data-management', '/settings', '/open-api', '/mcp'].includes(location.pathname)
   const fullPageRoutes = ['/home']
   const isFullPage = fullPageRoutes.includes(location.pathname)
+  const edgeToEdgeRoutes = ['/agent']
+  const isEdgeToEdge = edgeToEdgeRoutes.includes(location.pathname)
 
   return (
     <div className={`app-container${navLayout === 'sidebar' ? ' app-container--sidebar' : ''}`}>
@@ -664,8 +666,8 @@ function App() {
 
       <div className="flex flex-1 min-h-0 overflow-hidden">
         <main
-          className={`flex-1 min-w-0 ${(disableContentOverflow || isFullPage) ? 'overflow-hidden' : 'overflow-auto'} ${navLayout === 'sidebar' ? 'bg-[var(--bg-primary)] rounded-xl mr-3 mb-3' : ''}`}
-          style={{ paddingLeft: isFullPage ? 0 : 24, paddingRight: isFullPage ? 0 : 24, paddingTop: isFullPage ? 0 : 24 }}
+          className={`flex-1 min-w-0 ${(disableContentOverflow || isFullPage || isEdgeToEdge) ? 'overflow-hidden' : 'overflow-auto'} ${navLayout === 'sidebar' && !isEdgeToEdge ? 'bg-[var(--bg-primary)] rounded-xl mr-3 mb-3' : ''}`}
+          style={{ paddingLeft: (isFullPage || isEdgeToEdge) ? 0 : 24, paddingRight: (isFullPage || isEdgeToEdge) ? 0 : 24, paddingTop: (isFullPage || isEdgeToEdge) ? 0 : 24 }}
         >
           <RouteGuard>
             <Routes>

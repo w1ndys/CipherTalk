@@ -24,7 +24,7 @@ export type ToolProps = ComponentProps<typeof Collapsible>;
 
 export const Tool = ({ className, ...props }: ToolProps) => (
   <Collapsible
-    className={cn("not-prose mb-4 w-full rounded-[var(--agent-radius,12px)] border", className)}
+    className={cn("not-prose mb-4 w-full rounded-(--agent-radius,12px) border", className)}
     {...props}
   />
 );
@@ -58,7 +58,7 @@ const getStatusBadge = (status: ToolUIPart["state"]) => {
   };
 
   return (
-    <Badge className="gap-1.5 rounded-[var(--agent-radius,12px)] text-xs" variant="secondary">
+    <Badge className="gap-1.5 rounded-(--agent-radius,12px) text-xs" variant="secondary">
       {icons[status]}
       {labels[status]}
     </Badge>
@@ -111,7 +111,7 @@ export const ToolInput = ({ className, input, ...props }: ToolInputProps) => (
     <h4 className="font-medium text-muted-foreground text-xs uppercase tracking-wide">
       Parameters
     </h4>
-    <div className="rounded-[var(--agent-radius,12px)] bg-muted/50">
+    <div className="rounded-(--agent-radius,12px) bg-muted/50">
       <CodeBlock code={JSON.stringify(input, null, 2)} language="json" />
     </div>
   </div>
@@ -149,7 +149,7 @@ export const ToolOutput = ({
       </h4>
       <div
         className={cn(
-          "overflow-x-auto rounded-[var(--agent-radius,12px)] text-xs [&_table]:w-full",
+          "overflow-x-auto rounded-(--agent-radius,12px) text-xs [&_table]:w-full",
           errorText
             ? "bg-destructive/10 text-destructive"
             : "bg-muted/50 text-foreground"

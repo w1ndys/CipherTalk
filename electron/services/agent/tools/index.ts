@@ -10,6 +10,10 @@ import { semanticSearch } from './semanticSearch'
 import { getContext } from './getContext'
 import { getTimeline } from './getTimeline'
 import { chatStats } from './chatStats'
+import { listGroups } from './listGroups'
+import { groupMembers } from './groupMembers'
+import { groupMemberRanking } from './groupMemberRanking'
+import { querySql } from './querySql'
 
 export function buildTools(_scope: AgentScope): ToolSet {
   return {
@@ -19,5 +23,9 @@ export function buildTools(_scope: AgentScope): ToolSet {
     get_context: getContext,
     get_timeline: getTimeline,
     chat_stats: chatStats,
+    list_groups: listGroups,
+    group_members: groupMembers,
+    group_member_ranking: groupMemberRanking,
+    query_sql: querySql,
   }
 }

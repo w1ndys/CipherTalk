@@ -5,7 +5,7 @@
  */
 import type { ChatTransport, UIMessage, UIMessageChunk } from 'ai'
 
-type AgentScope = { kind: 'global' } | { kind: 'session'; sessionId: string }
+export type AgentScope = { kind: 'global' } | { kind: 'session'; sessionId: string; displayName?: string }
 export type AgentReasoningEffort = 'auto' | 'minimal' | 'low' | 'medium' | 'high'
 export type AgentModelConfig = {
   provider?: string
@@ -35,7 +35,7 @@ function randomRunId(): string {
 
 export class IpcChatTransport<UI_MESSAGE extends UIMessage = UIMessage> implements ChatTransport<UI_MESSAGE> {
   constructor(
-    private readonly scope: AgentScope = { kind: 'global' },
+    private readonly getScope?: () => AgentScope,
     private readonly getModelConfig?: () => AgentModelConfig | null
   ) {}
 
@@ -45,7 +45,7 @@ export class IpcChatTransport<UI_MESSAGE extends UIMessage = UIMessage> implemen
   }): Promise<ReadableStream<UIMessageChunk>> {
     const bridge = getAgentBridge()
     const runId = randomRunId()
-    const scope = this.scope
+    const scope = this.getScope?.() ?? { kind: 'global' }
     const messages = options.messages as unknown[]
     const modelConfig = this.getModelConfig?.() ?? null
 

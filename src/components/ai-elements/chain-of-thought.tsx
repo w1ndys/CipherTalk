@@ -195,7 +195,7 @@ export type ChainOfThoughtSearchResultProps = ComponentProps<typeof Badge>;
 export const ChainOfThoughtSearchResult = memo(
   ({ className, children, ...props }: ChainOfThoughtSearchResultProps) => (
     <Badge
-      className={cn("max-w-full gap-1 rounded-[var(--agent-radius,12px)] px-2 py-0.5 font-normal text-xs", className)}
+      className={cn("max-w-full gap-1 rounded-(--agent-radius,12px) px-2 py-0.5 font-normal text-xs", className)}
       variant="secondary"
       {...props}
     >
@@ -236,7 +236,7 @@ export type ChainOfThoughtImageProps = ComponentProps<"div"> & {
 export const ChainOfThoughtImage = memo(
   ({ className, children, caption, ...props }: ChainOfThoughtImageProps) => (
     <div className={cn("mt-2 space-y-2", className)} {...props}>
-      <div className="relative flex max-h-[22rem] items-center justify-center overflow-hidden rounded-[var(--agent-radius,12px)] bg-muted p-3">
+      <div className="relative flex max-h-[22rem] items-center justify-center overflow-hidden rounded-(--agent-radius,12px) bg-muted p-3">
         {children}
       </div>
       {caption && <p className="text-muted-foreground text-xs">{caption}</p>}

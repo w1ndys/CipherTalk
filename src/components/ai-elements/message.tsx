@@ -70,7 +70,7 @@ export const MessageContent = ({
   <div
     className={cn(
       "is-user:dark flex w-fit max-w-full min-w-0 flex-col gap-2 overflow-hidden text-sm",
-      "group-[.is-user]:ml-auto group-[.is-user]:rounded-[var(--agent-radius,12px)] group-[.is-user]:bg-secondary group-[.is-user]:px-4 group-[.is-user]:py-3 group-[.is-user]:text-foreground",
+      "group-[.is-user]:ml-auto group-[.is-user]:rounded-(--agent-radius,12px) group-[.is-user]:bg-secondary group-[.is-user]:px-4 group-[.is-user]:py-3 group-[.is-user]:text-foreground",
       "group-[.is-assistant]:text-foreground",
       className
     )}
@@ -251,7 +251,7 @@ export const MessageBranchSelector = ({
 
   return (
     <ButtonGroup
-      className="[&>*:not(:first-child)]:rounded-l-[var(--agent-radius,12px)] [&>*:not(:last-child)]:rounded-r-[var(--agent-radius,12px)]"
+      className="[&>*:not(:first-child)]:rounded-l-(--agent-radius,12px) [&>*:not(:last-child)]:rounded-r-(--agent-radius,12px)"
       orientation="horizontal"
       {...props}
     />
@@ -391,7 +391,7 @@ const MessageCode = ({ children, className, ...props }: MessageCodeProps) => {
   const isBlock = "data-block" in props;
   if (!isBlock) {
     return (
-      <code className={cn(className, "rounded-[var(--agent-radius,12px)] bg-muted px-1 py-0.5 font-mono text-[0.85em] text-foreground")}>
+      <code className={cn(className, "rounded-(--agent-radius,12px) bg-muted px-1 py-0.5 font-mono text-[0.85em] text-foreground")}>
         {children}
       </code>
     );
@@ -492,7 +492,7 @@ export function MessageAttachment({
   return (
     <div
       className={cn(
-        "group relative size-24 overflow-hidden rounded-[var(--agent-radius,12px)]",
+        "group relative size-24 overflow-hidden rounded-(--agent-radius,12px)",
         className
       )}
       {...props}
@@ -509,7 +509,7 @@ export function MessageAttachment({
           {onRemove && (
             <Button
               aria-label="Remove attachment"
-              className="absolute top-2 right-2 size-6 rounded-[var(--agent-radius,12px)] bg-background/80 p-0 opacity-0 backdrop-blur-sm transition-opacity hover:bg-background group-hover:opacity-100 [&>svg]:size-3"
+              className="absolute top-2 right-2 size-6 rounded-(--agent-radius,12px) bg-background/80 p-0 opacity-0 backdrop-blur-sm transition-opacity hover:bg-background group-hover:opacity-100 [&>svg]:size-3"
               onClick={(e) => {
                 e.stopPropagation();
                 onRemove();
@@ -526,7 +526,7 @@ export function MessageAttachment({
         <>
           <Tooltip>
             <TooltipTrigger asChild>
-              <div className="flex size-full shrink-0 items-center justify-center rounded-[var(--agent-radius,12px)] bg-muted text-muted-foreground">
+              <div className="flex size-full shrink-0 items-center justify-center rounded-(--agent-radius,12px) bg-muted text-muted-foreground">
                 <PaperclipIcon className="size-4" />
               </div>
             </TooltipTrigger>
@@ -537,7 +537,7 @@ export function MessageAttachment({
           {onRemove && (
             <Button
               aria-label="Remove attachment"
-              className="size-6 shrink-0 rounded-[var(--agent-radius,12px)] p-0 opacity-0 transition-opacity hover:bg-accent group-hover:opacity-100 [&>svg]:size-3"
+              className="size-6 shrink-0 rounded-(--agent-radius,12px) p-0 opacity-0 transition-opacity hover:bg-accent group-hover:opacity-100 [&>svg]:size-3"
               onClick={(e) => {
                 e.stopPropagation();
                 onRemove();
