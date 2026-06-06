@@ -28,11 +28,12 @@ export type AgentProgressEvent = {
   indexedCount?: number
   sessionsScanned?: number
   coverage?: string
+  depth?: number
   at: number
 }
 
 interface AgentBridge {
-  run: (runId: string, messages: unknown[], scope?: unknown, modelConfig?: AgentModelConfig | null) => Promise<{ success: boolean; error?: string }>
+  run: (runId: string, messages: unknown[], scope?: unknown, modelConfig?: AgentModelConfig | null, conversationId?: number | null) => Promise<{ success: boolean; error?: string }>
   abort: (runId: string) => Promise<{ success: boolean }>
   onChunk: (runId: string, callback: (chunk: unknown) => void) => () => void
   onProgress: (runId: string, callback: (progress: unknown) => void) => () => void
@@ -53,6 +54,7 @@ export class IpcChatTransport<UI_MESSAGE extends UIMessage = UIMessage> implemen
   constructor(
     private readonly getScope?: () => AgentScope,
     private readonly getModelConfig?: () => AgentModelConfig | null,
+    private readonly getConversationId?: () => number | null,
     private readonly onProgress?: (progress: AgentProgressEvent) => void
   ) {}
 
@@ -65,6 +67,7 @@ export class IpcChatTransport<UI_MESSAGE extends UIMessage = UIMessage> implemen
     const scope = this.getScope?.() ?? { kind: 'global' }
     const messages = options.messages as unknown[]
     const modelConfig = this.getModelConfig?.() ?? null
+    const conversationId = this.getConversationId?.() ?? null
     const progressHandler = this.onProgress
 
     options.abortSignal?.addEventListener('abort', () => { void bridge.abort(runId) })
@@ -85,7 +88,7 @@ export class IpcChatTransport<UI_MESSAGE extends UIMessage = UIMessage> implemen
           }
         })
         // 触发主进程运行；run resolve 即代表本次结束（chunk 已通过 onChunk 推完，[DONE] 关流）
-        void bridge.run(runId, messages, scope, modelConfig).catch((error: unknown) => {
+        void bridge.run(runId, messages, scope, modelConfig, conversationId).catch((error: unknown) => {
           try {
             controller.enqueue({ type: 'error', errorText: error instanceof Error ? error.message : String(error) } as UIMessageChunk)
             controller.close()

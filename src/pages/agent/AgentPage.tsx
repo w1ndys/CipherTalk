@@ -170,6 +170,7 @@ function MessageChainOfThought({ active, children }: { active: boolean; children
 }
 
 function formatToolName(toolName: string) {
+  if (toolName === 'delegate_analysis') return '委托子助手'
   return toolName.replace(/[_-]+/g, ' ')
 }
 
@@ -603,12 +604,130 @@ function modelConfigId(config: AgentModelConfig | null): string {
 
 function progressLine(progress: AgentProgressEvent | null): string {
   if (!progress) return ''
-  const parts = [progress.title]
+  const title = progress.toolName === 'delegate_analysis' ? '委托子助手分析' : progress.title
+  const parts = [title]
   if (progress.detail) parts.push(progress.detail)
   if (progress.sessionsScanned) parts.push(`已扫 ${progress.sessionsScanned} 个会话`)
   if (progress.indexedCount) parts.push(`索引 ${progress.indexedCount} 条`)
   if (progress.elapsedMs) parts.push(`${Math.round(progress.elapsedMs / 100) / 10}s`)
-  return parts.filter(Boolean).join(' · ')
+  const line = parts.filter(Boolean).join(' · ')
+  // 子 Agent（委托）内的工具进度加前缀，和主 Agent 区分
+  return progress.depth && progress.depth > 0 ? `↳ 子助手 · ${line}` : line
+}
+
+type AgentUsage = {
+  inputTokens?: number
+  inputTokenDetails?: {
+    noCacheTokens?: number
+    cacheReadTokens?: number
+    cacheWriteTokens?: number
+  }
+  outputTokens?: number
+  outputTokenDetails?: {
+    textTokens?: number
+    reasoningTokens?: number
+  }
+  totalTokens?: number
+}
+
+type AgentMessageMetadata = {
+  usage?: AgentUsage
+  finishReason?: string
+  rawFinishReason?: string
+  modelProvider?: string
+  modelId?: string
+}
+
+function finiteNumber(value: unknown): number | undefined {
+  const n = Number(value)
+  return Number.isFinite(n) ? n : undefined
+}
+
+function parseAgentMessageMetadata(metadata: unknown): AgentMessageMetadata | null {
+  if (!metadata || typeof metadata !== 'object') return null
+  const value = metadata as AgentMessageMetadata
+  return value.usage && typeof value.usage === 'object' ? value : null
+}
+
+function formatTokenCount(value: number): string {
+  return Math.round(value).toLocaleString('zh-CN')
+}
+
+function formatEstimatedCost(value: number): string {
+  if (value <= 0) return '$0.0000'
+  return `$${value < 0.01 ? value.toFixed(4) : value.toFixed(3)}`
+}
+
+function estimateUsageCost(metadata: AgentMessageMetadata, modelInfoByKey: Map<string, AIModelInfo>): number | null {
+  const usage = metadata.usage
+  if (!usage) return null
+  const modelInfo = metadata.modelProvider && metadata.modelId
+    ? modelInfoByKey.get(`${metadata.modelProvider}::${metadata.modelId}`) || modelInfoByKey.get(metadata.modelId)
+    : metadata.modelId
+      ? modelInfoByKey.get(metadata.modelId)
+      : undefined
+  const cost = modelInfo?.cost
+  if (!cost) return null
+
+  const inputTokens = finiteNumber(usage.inputTokens)
+  const cacheReadTokens = finiteNumber(usage.inputTokenDetails?.cacheReadTokens)
+  const cacheWriteTokens = finiteNumber(usage.inputTokenDetails?.cacheWriteTokens)
+  const noCacheTokens = finiteNumber(usage.inputTokenDetails?.noCacheTokens)
+    ?? (inputTokens !== undefined
+      ? Math.max(0, inputTokens - (cacheReadTokens || 0) - (cacheWriteTokens || 0))
+      : undefined)
+  const outputTokens = finiteNumber(usage.outputTokens)
+
+  let total = 0
+  let priced = false
+  const add = (tokens: number | undefined, pricePerMillion: number | undefined) => {
+    if (tokens === undefined || pricePerMillion === undefined) return
+    total += (tokens / 1_000_000) * pricePerMillion
+    priced = true
+  }
+
+  add(noCacheTokens, cost.input)
+  add(cacheReadTokens, cost.cacheRead ?? cost.input)
+  add(cacheWriteTokens, cost.cacheWrite ?? cost.input)
+  add(outputTokens, cost.output)
+  return priced ? total : null
+}
+
+function MessageUsageStats({ metadata, modelInfoByKey }: { metadata: unknown; modelInfoByKey: Map<string, AIModelInfo> }) {
+  const parsed = parseAgentMessageMetadata(metadata)
+  const usage = parsed?.usage
+  if (!parsed || !usage) return null
+
+  const items: Array<[string, string]> = []
+  const addTokens = (label: string, value: unknown) => {
+    const n = finiteNumber(value)
+    if (n !== undefined) items.push([label, formatTokenCount(n)])
+  }
+
+  addTokens('输入', usage.inputTokens)
+  addTokens('输出', usage.outputTokens)
+  addTokens('缓存命中', usage.inputTokenDetails?.cacheReadTokens)
+  addTokens('缓存写入', usage.inputTokenDetails?.cacheWriteTokens)
+  addTokens('推理', usage.outputTokenDetails?.reasoningTokens)
+  addTokens('总计', usage.totalTokens)
+
+  const estimatedCost = estimateUsageCost(parsed, modelInfoByKey)
+  if (estimatedCost !== null) items.push(['估算', formatEstimatedCost(estimatedCost)])
+  if (parsed.finishReason) items.push(['结束', parsed.finishReason])
+  if (items.length === 0) return null
+
+  return (
+    <div className="mt-3 border-border/60 border-t pt-2 text-[11px] leading-5 text-muted-foreground">
+      <div className="flex flex-wrap gap-x-3 gap-y-1">
+        {items.map(([label, value]) => (
+          <span key={label} className="whitespace-nowrap">
+            <span className="text-muted-foreground/75">{label}</span>
+            <span className="ml-1 font-medium text-muted-foreground">{value}</span>
+          </span>
+        ))}
+      </div>
+    </div>
+  )
 }
 
 export default function AgentPage() {
@@ -718,8 +837,16 @@ export default function AgentPage() {
       }))
     }
   }, [])
+  const [conversationId, setConversationId] = useState<number | null>(null)
+  const conversationIdRef = useRef(conversationId)
+  conversationIdRef.current = conversationId
   const transport = useMemo(
-    () => new IpcChatTransport(() => submitScopeRef.current ?? scopeRef.current, () => selectedModelConfigRef.current, handleAgentProgress),
+    () => new IpcChatTransport(
+      () => submitScopeRef.current ?? scopeRef.current,
+      () => selectedModelConfigRef.current,
+      () => conversationIdRef.current,
+      handleAgentProgress,
+    ),
     [handleAgentProgress]
   )
   const { messages, sendMessage, setMessages, status, stop } = useChat({ transport })
@@ -731,9 +858,6 @@ export default function AgentPage() {
     && agentProgress.stage !== 'run_finished'
     ? agentProgress
     : null
-  const [conversationId, setConversationId] = useState<number | null>(null)
-  const conversationIdRef = useRef(conversationId)
-  conversationIdRef.current = conversationId
   const [conversationTitle, setConversationTitle] = useState('新对话')
   const [titleLoading, setTitleLoading] = useState(false)
   const titleRequestSeqRef = useRef(0)
@@ -1170,6 +1294,9 @@ export default function AgentPage() {
                     })}
                     {message.role === 'assistant' && (
                       <MessageSources items={extractSources(message.parts)} nameOf={sessionNameOf} onOpen={openInChat} />
+                    )}
+                    {message.role === 'assistant' && (
+                      <MessageUsageStats metadata={message.metadata} modelInfoByKey={modelInfoByKey} />
                     )}
                   </MessageContent>
                 </Message>

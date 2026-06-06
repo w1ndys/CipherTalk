@@ -30,6 +30,16 @@ export interface AgentConversationLoaded extends AgentConversationRecord {
   messages: UIMessage[]
 }
 
+interface AppendRawResponseInput {
+  conversationId?: number | null
+  runId: string
+  chunkIndex: number
+  chunk: unknown
+  scope?: AgentScope
+  modelProvider?: string
+  modelId?: string
+}
+
 interface CreateConversationInput {
   scope?: AgentScope
   title?: string
@@ -151,10 +161,30 @@ export class AgentConversationStore {
         FOREIGN KEY(conversation_id) REFERENCES agent_conversations(id) ON DELETE CASCADE
       );
 
+      CREATE TABLE IF NOT EXISTS agent_raw_responses (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        account_id TEXT NOT NULL,
+        conversation_id INTEGER,
+        run_id TEXT NOT NULL,
+        chunk_index INTEGER NOT NULL,
+        chunk_type TEXT NOT NULL DEFAULT '',
+        raw_json TEXT NOT NULL,
+        scope_kind TEXT NOT NULL DEFAULT 'global',
+        session_id TEXT,
+        model_provider TEXT NOT NULL DEFAULT '',
+        model_id TEXT NOT NULL DEFAULT '',
+        created_at INTEGER NOT NULL,
+        FOREIGN KEY(conversation_id) REFERENCES agent_conversations(id) ON DELETE SET NULL
+      );
+
       CREATE INDEX IF NOT EXISTS idx_agent_conv_account_scope
         ON agent_conversations(account_id, scope_kind, session_id, updated_at DESC);
       CREATE INDEX IF NOT EXISTS idx_agent_msg_conv
         ON agent_messages(conversation_id, created_at ASC, id ASC);
+      CREATE INDEX IF NOT EXISTS idx_agent_raw_conv
+        ON agent_raw_responses(conversation_id, created_at ASC, id ASC);
+      CREATE INDEX IF NOT EXISTS idx_agent_raw_run
+        ON agent_raw_responses(run_id, chunk_index ASC);
     `)
   }
 
@@ -250,6 +280,7 @@ export class AgentConversationStore {
   remove(id: number): { success: boolean } {
     const db = this.getDb()
     const tx = db.transaction((conversationId: number) => {
+      db.prepare('DELETE FROM agent_raw_responses WHERE conversation_id = ?').run(conversationId)
       db.prepare('DELETE FROM agent_messages WHERE conversation_id = ?').run(conversationId)
       db.prepare('DELETE FROM agent_conversations WHERE id = ?').run(conversationId)
     })
@@ -320,6 +351,41 @@ export class AgentConversationStore {
     })
     tx(messages)
     return this.loadMeta(id)
+  }
+
+  appendRawResponse(input: AppendRawResponseInput): void {
+    const db = this.getDb()
+    const accountId = this.getAccountId()
+    const scope = scopeColumns(input.scope)
+    let rawJson = ''
+    try {
+      rawJson = JSON.stringify(input.chunk)
+    } catch {
+      rawJson = JSON.stringify({ unserializable: String(input.chunk) })
+    }
+    if (rawJson === undefined) rawJson = JSON.stringify({ value: String(input.chunk) })
+    const chunkType = input.chunk && typeof input.chunk === 'object' && 'type' in input.chunk
+      ? String((input.chunk as { type?: unknown }).type || '')
+      : typeof input.chunk
+
+    db.prepare(`
+      INSERT INTO agent_raw_responses (
+        account_id, conversation_id, run_id, chunk_index, chunk_type,
+        raw_json, scope_kind, session_id, model_provider, model_id, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      accountId,
+      input.conversationId ?? null,
+      input.runId,
+      input.chunkIndex,
+      chunkType,
+      rawJson,
+      scope.kind,
+      scope.sessionId,
+      String(input.modelProvider || ''),
+      String(input.modelId || ''),
+      Date.now(),
+    )
   }
 
   getLast(scope?: AgentScope): AgentConversationRecord | null {

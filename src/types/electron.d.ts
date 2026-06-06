@@ -926,7 +926,7 @@ export interface ElectronAPI {
     }) => void) => () => void
   }
   agent: {
-    run: (runId: string, messages: unknown[], scope?: unknown, modelConfig?: unknown) => Promise<{ success: boolean; error?: string }>
+    run: (runId: string, messages: unknown[], scope?: unknown, modelConfig?: unknown, conversationId?: number | null) => Promise<{ success: boolean; error?: string }>
     abort: (runId: string) => Promise<{ success: boolean }>
     generateTitle: (firstMessage: string, modelConfig?: unknown) => Promise<{ success: boolean; title?: string; error?: string }>
     onChunk: (runId: string, callback: (chunk: unknown) => void) => () => void

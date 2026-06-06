@@ -54,7 +54,18 @@ export async function runAgent(
     })
 
     const result = await agent.stream({ messages: input.messages, abortSignal: signal })
-    for await (const chunk of result.toUIMessageStream()) {
+    for await (const chunk of result.toUIMessageStream({
+      messageMetadata: ({ part }) => {
+        if (part.type !== 'finish') return undefined
+        return {
+          usage: part.totalUsage,
+          finishReason: part.finishReason,
+          rawFinishReason: part.rawFinishReason,
+          modelProvider: input.providerConfig.name,
+          modelId: input.providerConfig.model,
+        }
+      },
+    })) {
       onChunk(chunk)
     }
     reportAgentProgress({ stage: 'run_finished', title: '回答生成完成' })

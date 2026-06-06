@@ -16,6 +16,8 @@ export interface AgentProviderConfig {
   model: string
   headers?: Record<string, string>
   reasoningEffort?: AgentReasoningEffort
+  /** 主进程注入的系统代理 URL（子进程无 session 探测不了）；空/无则直连。 */
+  proxyUrl?: string
 }
 
 export type AgentReasoningEffort = 'auto' | 'minimal' | 'low' | 'medium' | 'high'
@@ -55,6 +57,8 @@ export interface AgentProgressEvent {
   indexedCount?: number
   sessionsScanned?: number
   coverage?: string
+  /** 进度深度：0=主 Agent，≥1=子 Agent（委托）；前端据此区分展示。 */
+  depth?: number
   at: number
 }
 

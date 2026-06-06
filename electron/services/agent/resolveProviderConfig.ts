@@ -4,6 +4,7 @@
  */
 import { ConfigService } from '../config'
 import { getProviderDefinition, normalizeProviderId } from '../ai/providers/catalog'
+import { getResolvedProxyUrl } from '../ai/proxyFetch'
 import type { AgentProviderConfig, AgentProviderConfigOverride } from './types'
 
 export function resolveProviderConfig(override?: AgentProviderConfigOverride | null): AgentProviderConfig {
@@ -29,6 +30,7 @@ export function resolveProviderConfig(override?: AgentProviderConfigOverride | n
       baseURL: providerConfig?.baseURL || def.baseURL || '',
       model,
       reasoningEffort: providerConfig?.reasoningEffort,
+      proxyUrl: getResolvedProxyUrl() || undefined,
     }
   } finally {
     config.close()

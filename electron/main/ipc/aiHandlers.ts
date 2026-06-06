@@ -15,6 +15,7 @@ export function registerAiHandlers(_ctx: MainProcessContext): void {
     messages: UIMessage[]
     scope?: AgentScope
     modelConfig?: AgentProviderConfigOverride | null
+    conversationId?: number | null
   }) => {
     const sender = event.sender
     const { runId } = payload
@@ -24,13 +25,33 @@ export function registerAiHandlers(_ctx: MainProcessContext): void {
     agentAborters.set(runId, aborter)
     try {
       const { agentProcessService } = await import('../../services/agent/agentProcessService')
+      const { agentConversationStore } = await import('../../services/agent/conversationStore')
       const { resolveProviderConfig } = await import('../../services/agent/resolveProviderConfig')
+      const { refreshResolvedProxyUrl } = await import('../../services/ai/proxyFetch')
       const { convertToModelMessages } = await import('ai')
+      await refreshResolvedProxyUrl() // 主进程探测系统代理并持久化，供子进程 agent/嵌入读取
       const providerConfig = resolveProviderConfig(payload.modelConfig)
       const messages = await convertToModelMessages(payload.messages)
+      const conversationId = Number(payload.conversationId || 0) || null
+      let chunkIndex = 0
       await agentProcessService.run(
         { messages, providerConfig, scope: payload.scope ?? { kind: 'global' } },
-        (chunk) => send(chunk),
+        (chunk) => {
+          try {
+            agentConversationStore.appendRawResponse({
+              conversationId,
+              runId,
+              chunkIndex: chunkIndex++,
+              chunk,
+              scope: payload.scope ?? { kind: 'global' },
+              modelProvider: providerConfig.name,
+              modelId: providerConfig.model,
+            })
+          } catch (error) {
+            console.warn('[AI] 保存原始响应 chunk 失败:', error)
+          }
+          send(chunk)
+        },
         (progress) => sendProgress(progress),
         aborter.signal,
       )
@@ -160,6 +181,8 @@ export function registerAiHandlers(_ctx: MainProcessContext): void {
   ipcMain.handle('embedding:test', async (_e, cfg: any) => {
     try {
       const { testEmbeddingConfig } = await import('../../services/ai/embeddingService')
+      const { refreshResolvedProxyUrl } = await import('../../services/ai/proxyFetch')
+      await refreshResolvedProxyUrl() // 测试也走代理，保证"测试通过=实际可用"
       return await testEmbeddingConfig(cfg)
     } catch (e) {
       return { success: false, error: e instanceof Error ? e.message : String(e) }
@@ -173,6 +196,8 @@ export function registerAiHandlers(_ctx: MainProcessContext): void {
     try {
       const { agentProcessService } = await import('../../services/agent/agentProcessService')
       const { resolveProviderConfig } = await import('../../services/agent/resolveProviderConfig')
+      const { refreshResolvedProxyUrl } = await import('../../services/ai/proxyFetch')
+      await refreshResolvedProxyUrl()
       const providerConfig = resolveProviderConfig(payload.modelConfig)
       const title = await agentProcessService.generateTitle({
         firstMessage: payload.firstMessage,
@@ -241,6 +266,8 @@ export function registerAiHandlers(_ctx: MainProcessContext): void {
   ipcMain.handle('ai:testConnection', async (_, provider: string, apiKey: string, baseURL?: string, protocol?: 'openai-responses' | 'openai-compatible' | 'anthropic' | 'google') => {
     try {
       const { aiService } = await import('../../services/ai/aiService')
+      const { refreshResolvedProxyUrl } = await import('../../services/ai/proxyFetch')
+      await refreshResolvedProxyUrl() // 测试连接也走代理，保证"测试通过=实际可用"
       return await aiService.testConnection(provider, apiKey, baseURL, protocol)
     } catch (e) {
       return { success: false, error: String(e) }

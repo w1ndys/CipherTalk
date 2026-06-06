@@ -11,6 +11,7 @@ import { z } from 'zod'
 import { createLanguageModel } from '../provider'
 import { buildSystemPrompt } from '../prompts'
 import { loopGuardCondition } from '../guards'
+import { withSubAgentScope } from '../progress'
 import type { AgentEvidenceItem } from './shared'
 import type { AgentProviderConfig, AgentScope } from '../types'
 
@@ -66,7 +67,7 @@ export function createDelegateAnalysis(opts: {
           tools: opts.buildSubTools(),
           stopWhen: [stepCountIs(SUB_AGENT_MAX_STEPS), loopGuardCondition()],
         })
-        const result = await subAgent.generate({ prompt: task, abortSignal })
+        const result = await withSubAgentScope(() => subAgent.generate({ prompt: task, abortSignal }))
         const conclusion = result.text.trim()
         return {
           conclusion: conclusion || '（子助手未得出结论，可能任务过大或数据不足，建议缩小范围重试）',

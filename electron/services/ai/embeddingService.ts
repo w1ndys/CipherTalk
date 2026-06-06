@@ -7,6 +7,7 @@ import { embed, embedMany } from 'ai'
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible'
 import { createOpenAI } from '@ai-sdk/openai'
 import { ConfigService } from '../config'
+import { createProxyFetch, getResolvedProxyUrl } from './proxyFetch'
 
 export interface EmbeddingConfig {
   enabled: boolean
@@ -43,10 +44,11 @@ export function saveEmbeddingConfig(patch: Partial<EmbeddingConfig>): EmbeddingC
 function buildEmbeddingModel(cfg: EmbeddingConfig) {
   if (!cfg.apiKey) throw new Error('未配置嵌入模型 API Key')
   if (!cfg.model) throw new Error('未配置嵌入模型')
+  const fetch = createProxyFetch(getResolvedProxyUrl())
   if (cfg.protocol === 'openai') {
-    return createOpenAI({ apiKey: cfg.apiKey, baseURL: cfg.baseURL || undefined, name: 'embedding' }).textEmbeddingModel(cfg.model)
+    return createOpenAI({ apiKey: cfg.apiKey, baseURL: cfg.baseURL || undefined, name: 'embedding', fetch }).textEmbeddingModel(cfg.model)
   }
-  return createOpenAICompatible({ name: 'embedding', apiKey: cfg.apiKey, baseURL: cfg.baseURL }).textEmbeddingModel(cfg.model)
+  return createOpenAICompatible({ name: 'embedding', apiKey: cfg.apiKey, baseURL: cfg.baseURL, fetch }).textEmbeddingModel(cfg.model)
 }
 
 /** 批量嵌入（建索引用）。 */

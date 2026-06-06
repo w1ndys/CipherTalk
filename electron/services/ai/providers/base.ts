@@ -3,6 +3,7 @@ import { createAnthropic } from '@ai-sdk/anthropic'
 import { createGoogleGenerativeAI } from '@ai-sdk/google'
 import { createOpenAI } from '@ai-sdk/openai'
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible'
+import { createProxyFetch, getResolvedProxyUrl } from '../proxyFetch'
 
 export namespace OpenAI {
   export namespace Chat {
@@ -365,12 +366,14 @@ export abstract class BaseAIProvider implements AIProvider {
 
   protected getModelProvider(model: string): LanguageModel {
     const headers = this.getDefaultHeaders()
+    const fetch = createProxyFetch(getResolvedProxyUrl()) // 无代理时为 undefined → 默认直连，国内零影响
     if (this.providerKind === 'anthropic') {
       return createAnthropic({
         apiKey: this.apiKey,
         baseURL: this.baseURL || undefined,
         name: this.name,
-        headers
+        headers,
+        fetch
       })(model as any)
     }
     if (this.providerKind === 'google') {
@@ -378,7 +381,8 @@ export abstract class BaseAIProvider implements AIProvider {
         apiKey: this.apiKey,
         baseURL: this.baseURL || undefined,
         name: this.name,
-        headers
+        headers,
+        fetch
       })(model as any)
     }
     if (this.providerKind === 'openai-responses') {
@@ -386,7 +390,8 @@ export abstract class BaseAIProvider implements AIProvider {
         apiKey: this.apiKey,
         baseURL: this.baseURL || undefined,
         name: this.name,
-        headers
+        headers,
+        fetch
       }).responses(model as any)
     }
 
@@ -395,7 +400,8 @@ export abstract class BaseAIProvider implements AIProvider {
       apiKey: this.apiKey,
       baseURL: this.baseURL,
       headers,
-      includeUsage: true
+      includeUsage: true,
+      fetch
     }).chatModel(model)
   }
 

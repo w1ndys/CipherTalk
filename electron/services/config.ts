@@ -126,6 +126,8 @@ interface ConfigSchema {
     model: string
     dimension: number  // 0 = 未探测；测试连接成功后回填模型实际维度
   }
+  // 主进程探测到的系统代理 URL（写入后供 AI 子进程/嵌入跨进程读取；子进程无 session API 探测不了）
+  aiResolvedProxyUrl: string
   mcpEnabled: boolean
   mcpExposeMediaPaths: boolean
   mcpProxyPort: number
@@ -196,6 +198,7 @@ const defaults: ConfigSchema = {
     model: 'BAAI/bge-m3',
     dimension: 0,
   },
+  aiResolvedProxyUrl: '',
   mcpEnabled: false,
   mcpExposeMediaPaths: true,
   mcpProxyPort: 5032,

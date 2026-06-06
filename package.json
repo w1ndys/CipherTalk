@@ -78,6 +78,7 @@
     "silk-wasm": "^3.7.1",
     "streamdown": "^2.5.0",
     "tailwind-merge": "^3.6.0",
+    "undici": "^8.4.0",
     "use-stick-to-bottom": "^1.1.4",
     "virtua": "^0.49.1",
     "zod": "^4.1.12"
