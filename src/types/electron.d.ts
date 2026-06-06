@@ -1,6 +1,6 @@
 import type { ChatSession, Message, Contact, ContactInfo } from './models'
 import type { AccountProfile } from './account'
-import type { AIModelInfo } from './ai'
+import type { AIModelInfo, AIProviderInfo } from './ai'
 
 export interface EmbeddingConfig {
   enabled: boolean
@@ -938,26 +938,7 @@ export interface ElectronAPI {
   }
   // AI 接入
   ai: {
-    getProviders: () => Promise<Array<{
-      id: string
-      name: string
-      displayName: string
-      description: string
-      baseURL?: string
-      models: string[]
-      modelDetails?: AIModelInfo[]
-      pricing: string
-      pricingDetail: {
-        input: number
-        output: number
-      }
-      website?: string
-      logo?: string
-      protocol?: 'openai-responses' | 'openai-compatible' | 'anthropic' | 'google'
-      protocolOptions?: Array<'openai-responses' | 'openai-compatible' | 'anthropic' | 'google'>
-      allowCustomBaseURL?: boolean
-      optionalApiKey?: boolean
-    }>>
+    getProviders: () => Promise<AIProviderInfo[]>
     getProxyStatus: () => Promise<{
       success: boolean
       hasProxy?: boolean

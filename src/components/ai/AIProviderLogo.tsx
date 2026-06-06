@@ -23,6 +23,10 @@ const SUPPORTED_PROVIDER_IDS = new Set([
   'tencent'
 ])
 
+function iconClassName(className?: string) {
+  return ['text-muted-foreground', className].filter(Boolean).join(' ')
+}
+
 function normalizeProviderId(providerId?: string) {
   if (!providerId) return ''
   if (providerId === 'custom-responses') return 'openai'
@@ -34,69 +38,85 @@ function normalizeProviderId(providerId?: string) {
 
 export default function AIProviderLogo({ providerId, logo, alt, className, size = 24 }: AIProviderLogoProps) {
   const normalizedProviderId = normalizeProviderId(providerId)
+  const imageLogo = logo || (normalizedProviderId ? `https://models.dev/logos/${normalizedProviderId}.svg` : '')
+  const unifiedClassName = iconClassName(className)
 
   if (normalizedProviderId === 'custom') {
-    return <Clipdrop size={size} className={className} />
+    return <Clipdrop size={size} className={unifiedClassName} color="currentColor" />
   }
 
   if (normalizedProviderId === 'gemini') {
-    return <Gemini size={size} className={className} />
+    return <Gemini size={size} className={unifiedClassName} color="currentColor" />
   }
 
   if (normalizedProviderId === 'kimi') {
-    return <Kimi size={size} className={className} />
+    return <Kimi size={size} className={unifiedClassName} color="currentColor" />
   }
 
   if (normalizedProviderId === 'siliconcloud') {
-    return <SiliconCloud size={size} className={className} />
+    return <SiliconCloud size={size} className={unifiedClassName} color="currentColor" />
   }
 
   if (normalizedProviderId === 'xiaomimimo') {
-    return <XiaomiMiMo size={size} className={className} />
+    return <XiaomiMiMo size={size} className={unifiedClassName} color="currentColor" />
   }
 
   if (normalizedProviderId === 'tencent') {
-    return <Yuanbao size={size} className={className} />
+    return <Yuanbao size={size} className={unifiedClassName} color="currentColor" />
   }
 
   if (normalizedProviderId === 'openai') {
-    return <OpenAI size={size} className={className} />
+    return <OpenAI size={size} className={unifiedClassName} color="currentColor" />
   }
 
   if (normalizedProviderId === 'anthropic') {
-    return <Anthropic size={size} className={className} />
+    return <Anthropic size={size} className={unifiedClassName} color="currentColor" />
   }
 
   if (normalizedProviderId === 'qwen') {
-    return <Qwen size={size} className={className} />
+    return <Qwen size={size} className={unifiedClassName} color="currentColor" />
   }
 
   if (normalizedProviderId === 'zhipu') {
-    return <Zhipu size={size} className={className} />
+    return <Zhipu size={size} className={unifiedClassName} color="currentColor" />
   }
 
   if (normalizedProviderId === 'deepseek') {
-    return <DeepSeek size={size} className={className} />
+    return <DeepSeek size={size} className={unifiedClassName} color="currentColor" />
   }
 
   if (normalizedProviderId === 'doubao') {
-    return <Doubao size={size} className={className} />
+    return <Doubao size={size} className={unifiedClassName} color="currentColor" />
   }
 
   if (normalizedProviderId === 'ollama') {
-    return <Ollama size={size} className={className} />
+    return <Ollama size={size} className={unifiedClassName} color="currentColor" />
   }
 
   if (normalizedProviderId === 'xai') {
-    return <XAI size={size} className={className} />
+    return <XAI size={size} className={unifiedClassName} color="currentColor" />
   }
 
   if (normalizedProviderId && SUPPORTED_PROVIDER_IDS.has(normalizedProviderId)) {
-    return <ProviderIcon provider={normalizedProviderId} type="color" size={size} className={className} />
+    return <ProviderIcon provider={normalizedProviderId} type="mono" forceMono size={size} className={unifiedClassName} />
   }
 
-  if (logo) {
-    return <img src={logo} alt={alt} className={className} />
+  if (imageLogo) {
+    return (
+      <span
+        aria-label={alt}
+        className={unifiedClassName}
+        role="img"
+        style={{
+          backgroundColor: 'currentColor',
+          display: 'inline-block',
+          height: size,
+          mask: `url("${imageLogo}") center / contain no-repeat`,
+          WebkitMask: `url("${imageLogo}") center / contain no-repeat`,
+          width: size
+        }}
+      />
+    )
   }
 
   return null
