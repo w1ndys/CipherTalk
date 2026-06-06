@@ -6,7 +6,7 @@
  * 约定：id === 0 && type === 'ready' 为启动就绪信号。
  * 隔离收益：AI 崩溃（如 sqlite-vec 原生 fatal）只终止本子进程，主进程会重启，不拖垮 UI。
  */
-import { runAgent } from './services/agent/engine'
+import { generateConversationTitle, runAgent } from './services/agent/engine'
 import type { AgentRunInput } from './services/agent/types'
 
 const parentPort = process.parentPort
@@ -57,6 +57,17 @@ async function handleMessage(msg: any): Promise<void> {
         aborters.get(payload?.runId)?.abort()
         parentPort!.postMessage({ id, result: { aborted: true } })
         break
+
+      case 'generateTitle': {
+        const aborter = new AbortController()
+        try {
+          const title = await generateConversationTitle(payload, aborter.signal)
+          parentPort!.postMessage({ id, result: { title } })
+        } finally {
+          aborter.abort()
+        }
+        break
+      }
 
       default:
         parentPort!.postMessage({ id, error: `unknown type: ${type}` })

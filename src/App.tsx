@@ -667,7 +667,7 @@ function App() {
 
       <div className="flex flex-1 min-h-0 overflow-hidden">
         <main
-          className={`flex-1 min-w-0 ${(disableContentOverflow || isFullPage || isEdgeToEdge) ? 'overflow-hidden' : 'overflow-auto'} ${navLayout === 'sidebar' && !isEdgeToEdge ? 'bg-[var(--bg-primary)] rounded-xl mr-3 mb-3' : ''}`}
+          className={`flex-1 min-w-0 ${(disableContentOverflow || isFullPage || isEdgeToEdge) ? 'overflow-hidden' : 'overflow-auto'} ${navLayout === 'sidebar' && !isEdgeToEdge ? 'bg-(--bg-primary) rounded-xl mr-3 mb-3' : ''}`}
           style={{ paddingLeft: (isFullPage || isEdgeToEdge || isAgentPage) ? 0 : 24, paddingRight: (isFullPage || isEdgeToEdge || isAgentPage) ? 0 : 24, paddingTop: (isFullPage || isEdgeToEdge || isAgentPage) ? 0 : 24 }}
         >
           <RouteGuard>

@@ -9,7 +9,7 @@ import { existsSync } from 'fs'
 import { join } from 'path'
 import type { UIMessageChunk } from 'ai'
 import { getAppPath, isElectronPackaged } from '../runtimePaths'
-import type { AgentRunInput } from './types'
+import type { AgentProviderConfig, AgentRunInput } from './types'
 
 const UTILITY_FILE = 'aiAgentUtilityProcess.js'
 const RESTART_DELAY_MS = 2000
@@ -49,6 +49,11 @@ export class AgentProcessService {
     } finally {
       this.chunkHandlers.delete(runId)
     }
+  }
+
+  async generateTitle(input: { firstMessage: string; providerConfig: AgentProviderConfig }): Promise<string> {
+    const result = await this.call<{ title: string }>('generateTitle', input)
+    return result.title
   }
 
   shutdown(): void {

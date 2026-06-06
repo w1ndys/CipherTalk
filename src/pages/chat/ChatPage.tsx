@@ -591,6 +591,10 @@ function ChatPage(_props: ChatPageProps) {
 
   // 选择会话
   const handleSelectSession = (session: ChatSession) => {
+    if (session.isFoldGroup || session.isOfficialFolder) {
+      return
+    }
+
     if (session.username === currentSessionId) {
       // 如果是当前会话，重新加载消息（用于刷新）
       clearSessionMessageCache(session.username)
@@ -1360,6 +1364,7 @@ function ChatPage(_props: ChatPageProps) {
       // 2. 检查当前会话是否有新消息
       const currentSession = newSessions.find(s => s.username === currentId)
       if (!currentSession) return // 当前会话可能被删除了？
+      if (currentSession.isFoldGroup || currentSession.isOfficialFolder) return
 
       // 简单判断：如果当前会话的 lastTimestamp 变了，或者有新消息
       // 这里我们采取积极策略：只要有更新事件，就尝试拉取最新消息

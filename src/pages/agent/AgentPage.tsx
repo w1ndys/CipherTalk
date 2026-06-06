@@ -4,12 +4,13 @@
  */
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode, type UIEvent } from 'react'
 import { useChat } from '@ai-sdk/react'
-import { isToolUIPart, type ChatStatus } from 'ai'
+import { isToolUIPart, type ChatStatus, type UIMessage } from 'ai'
 import { Surface } from '@heroui/react'
-import { AtSign, BarChart3, Braces, Brain, CheckIcon, Clock3, FileText, Image as ImageIcon, Quote, Search, Users, Wrench, X } from 'lucide-react'
+import { AtSign, BarChart3, Braces, Brain, CheckIcon, Clock3, FileText, History, Image as ImageIcon, Quote, Search, SquarePen, Users, Wrench, X } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 import { useChatStore } from '@/stores/chatStore'
 import { Sources, SourcesContent, SourcesTrigger } from '@/components/ai-elements/sources'
+import { HoverCard, HoverCardContent, HoverCardTrigger } from '@/components/ui/hover-card'
 import {
   Conversation,
   ConversationContent,
@@ -227,6 +228,21 @@ function toMentionTarget(username: string, displayName?: string, avatarUrl?: str
 function getAvatarLetter(name: string): string {
   const text = name.trim()
   return text ? text.slice(0, 1).toUpperCase() : '?'
+}
+
+function buildFallbackConversationTitle(text: string): string {
+  const normalized = text
+    .replace(/@\S+\[[^\]]+\]/g, '')
+    .replace(/[？?。！!，,、：:\s]+/g, ' ')
+    .trim()
+  return (normalized || '新对话').slice(0, 18)
+}
+
+type AgentConversationRecord = {
+  id: string
+  title: string
+  messages: UIMessage[]
+  updatedAt: number
 }
 
 function MentionAvatar({ target, className = 'size-7' }: { target: MentionTarget; className?: string }) {
@@ -489,20 +505,28 @@ function MessageSources({
         <Quote className="size-3.5" />
         <span className="font-medium">出处 {items.length} 条</span>
       </SourcesTrigger>
-      <SourcesContent className="w-full">
-        {items.map((it) => (
-          <button
-            className="w-full rounded-md border border-border/60 bg-card/50 px-2.5 py-1.5 text-left hover:bg-accent/50"
-            key={it.id}
-            onClick={() => onOpen(it.sessionId)}
-            title="在聊天中打开该会话"
-            type="button"
-          >
-            <div className="text-muted-foreground text-[11px]">
-              {[nameOf(it.sessionId), it.sender, it.time].filter(Boolean).join(' · ')}
-            </div>
-            <div className="line-clamp-2 text-foreground text-xs">{it.text}</div>
-          </button>
+      <SourcesContent className="w-full flex-row flex-wrap gap-1.5">
+        {items.map((it, index) => (
+          <HoverCard closeDelay={80} key={it.id} openDelay={120}>
+            <HoverCardTrigger asChild>
+              <button
+                className="inline-flex max-w-40 items-center gap-1 rounded-full border border-border/60 bg-card/60 px-2 py-0.5 text-[11px] text-muted-foreground hover:bg-accent/60 hover:text-foreground"
+                onClick={() => onOpen(it.sessionId)}
+                type="button"
+              >
+                <Quote className="size-3 shrink-0 opacity-70" />
+                <span className="shrink-0">{index + 1}</span>
+                <span className="truncate">{nameOf(it.sessionId)}</span>
+              </button>
+            </HoverCardTrigger>
+            <HoverCardContent align="start" className="w-80 text-xs" side="top">
+              <div className="mb-1 font-medium text-[11px] text-muted-foreground">
+                {[nameOf(it.sessionId), it.sender, it.time].filter(Boolean).join(' · ')}
+              </div>
+              <div className="max-h-40 overflow-auto whitespace-pre-wrap text-foreground">{it.text}</div>
+              <div className="mt-1.5 text-[10px] text-muted-foreground">点击打开该会话</div>
+            </HoverCardContent>
+          </HoverCard>
         ))}
       </SourcesContent>
     </Sources>
@@ -584,9 +608,17 @@ export default function AgentPage() {
     () => new IpcChatTransport(() => submitScopeRef.current ?? scopeRef.current, () => selectedModelConfigRef.current),
     []
   )
-  const { messages, sendMessage, status, stop } = useChat({ transport })
+  const { messages, sendMessage, setMessages, status, stop } = useChat({ transport })
   const [modelOpen, setModelOpen] = useState(false)
   const busy = status === 'submitted' || status === 'streaming'
+  const [conversationId, setConversationId] = useState(() => `agent-${Date.now()}`)
+  const conversationIdRef = useRef(conversationId)
+  conversationIdRef.current = conversationId
+  const [conversationTitle, setConversationTitle] = useState('新对话')
+  const [titleLoading, setTitleLoading] = useState(false)
+  const titleRequestSeqRef = useRef(0)
+  const [recordsOpen, setRecordsOpen] = useState(false)
+  const [conversationRecords, setConversationRecords] = useState<AgentConversationRecord[]>([])
 
   const appendMentionTargets = useCallback((items: MentionTarget[]) => {
     if (items.length === 0) return
@@ -638,6 +670,63 @@ export default function AgentPage() {
     }
   }, [appendMentionTargets, updateMentionHasMore])
 
+  const saveCurrentConversation = useCallback(() => {
+    if (messages.length === 0) return
+    const record: AgentConversationRecord = {
+      id: conversationIdRef.current,
+      title: conversationTitle || '新对话',
+      messages,
+      updatedAt: Date.now(),
+    }
+    setConversationRecords((prev) => {
+      const rest = prev.filter((item) => item.id !== record.id)
+      return [record, ...rest].slice(0, 20)
+    })
+  }, [conversationTitle, messages])
+
+  const generateTitleFromFirstMessage = useCallback((firstMessage: string) => {
+    const fallback = buildFallbackConversationTitle(firstMessage)
+    setConversationTitle(fallback)
+    setTitleLoading(true)
+    const requestSeq = ++titleRequestSeqRef.current
+    const targetConversationId = conversationIdRef.current
+    void window.electronAPI.agent
+      .generateTitle(firstMessage, selectedModelConfigRef.current)
+      .then((result) => {
+        if (requestSeq !== titleRequestSeqRef.current || targetConversationId !== conversationIdRef.current) return
+        if (result.success && result.title?.trim()) {
+          setConversationTitle(result.title.trim().slice(0, 24))
+        }
+      })
+      .finally(() => {
+        if (requestSeq === titleRequestSeqRef.current && targetConversationId === conversationIdRef.current) {
+          setTitleLoading(false)
+        }
+      })
+  }, [])
+
+  const handleNewConversation = useCallback(() => {
+    if (busy) void stop()
+    saveCurrentConversation()
+    setMessages([])
+    setMentions([])
+    setConversationTitle('新对话')
+    setTitleLoading(false)
+    titleRequestSeqRef.current += 1
+    setConversationId(`agent-${Date.now()}`)
+    setRecordsOpen(false)
+  }, [busy, saveCurrentConversation, setMessages, stop])
+
+  const handleOpenRecord = useCallback((record: AgentConversationRecord) => {
+    saveCurrentConversation()
+    setMessages(record.messages)
+    setConversationId(record.id)
+    setConversationTitle(record.title)
+    setTitleLoading(false)
+    titleRequestSeqRef.current += 1
+    setRecordsOpen(false)
+  }, [saveCurrentConversation, setMessages])
+
   useEffect(() => {
     let cancelled = false
     void configService.getAiConfigPresets().then((items) => {
@@ -661,6 +750,8 @@ export default function AgentPage() {
       void stop()
       return
     }
+    const isFirstUserMessage = messages.length === 0
+    const firstMessageForTitle = message.text.trim()
     let text = message.text.trim()
     const currentMentions = mentions
     if (currentMentions.length > 0) {
@@ -668,6 +759,7 @@ export default function AgentPage() {
       text = text ? `${mentionLine}\n${text}` : mentionLine
     }
     if (!text && message.files.length === 0) return
+    if (isFirstUserMessage) generateTitleFromFirstMessage(firstMessageForTitle || text)
     submitScopeRef.current =
       currentMentions.length === 1
         ? { kind: 'session', sessionId: currentMentions[0].username, displayName: currentMentions[0].displayName }
@@ -703,6 +795,56 @@ export default function AgentPage() {
       style={{ '--agent-radius': '12px' } as CSSProperties}
       variant="transparent"
     >
+      <div className="flex h-12 shrink-0 items-center justify-between border-b border-border/60 px-4">
+        <div className="min-w-0">
+          <h2 className="truncate font-medium text-sm text-foreground">
+            {titleLoading ? '生成标题中...' : conversationTitle}
+          </h2>
+        </div>
+        <div className="relative flex items-center gap-1">
+          <Button
+            aria-label="对话记录"
+            className="size-8 rounded-(--agent-radius,12px) p-0"
+            onClick={() => setRecordsOpen((open) => !open)}
+            title="对话记录"
+            type="button"
+            variant="ghost"
+          >
+            <History className="size-4" />
+          </Button>
+          <Button
+            aria-label="新建对话"
+            className="size-8 rounded-(--agent-radius,12px) p-0"
+            onClick={handleNewConversation}
+            title="新建对话"
+            type="button"
+            variant="ghost"
+          >
+            <SquarePen className="size-4" />
+          </Button>
+          {recordsOpen && (
+            <div className="absolute right-0 top-10 z-50 w-72 overflow-hidden rounded-(--agent-radius,12px) border border-border bg-popover p-1 shadow-lg">
+              {conversationRecords.length > 0 ? (
+                conversationRecords.map((record) => (
+                  <button
+                    className="flex w-full flex-col rounded-(--agent-radius,12px) px-2 py-1.5 text-left hover:bg-accent"
+                    key={record.id}
+                    onClick={() => handleOpenRecord(record)}
+                    type="button"
+                  >
+                    <span className="w-full truncate text-sm text-foreground">{record.title}</span>
+                    <span className="text-muted-foreground text-xs">
+                      {new Date(record.updatedAt).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })}
+                    </span>
+                  </button>
+                ))
+              ) : (
+                <div className="px-2 py-3 text-center text-muted-foreground text-xs">暂无对话记录</div>
+              )}
+            </div>
+          )}
+        </div>
+      </div>
       <Conversation className="min-h-0 flex-1">
         <ConversationContent className="mx-auto w-full min-w-80 max-w-[82%] py-4">
           {messages.length === 0 ? (

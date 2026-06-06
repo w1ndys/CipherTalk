@@ -49,6 +49,24 @@ export function registerAiHandlers(_ctx: MainProcessContext): void {
     return { success: true }
   })
 
+  ipcMain.handle('agent:generateTitle', async (_event, payload: {
+    firstMessage: string
+    modelConfig?: AgentProviderConfigOverride | null
+  }) => {
+    try {
+      const { agentProcessService } = await import('../../services/agent/agentProcessService')
+      const { resolveProviderConfig } = await import('../../services/agent/resolveProviderConfig')
+      const providerConfig = resolveProviderConfig(payload.modelConfig)
+      const title = await agentProcessService.generateTitle({
+        firstMessage: payload.firstMessage,
+        providerConfig,
+      })
+      return { success: true, title }
+    } catch (e) {
+      return { success: false, error: e instanceof Error ? e.message : String(e) }
+    }
+  })
+
 
   ipcMain.handle('ai:getProviders', async () => {
     try {

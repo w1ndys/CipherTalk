@@ -71,6 +71,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     run: (runId: string, messages: unknown[], scope?: unknown, modelConfig?: unknown) =>
       ipcRenderer.invoke('agent:run', { runId, messages, scope, modelConfig }) as Promise<{ success: boolean; error?: string }>,
     abort: (runId: string) => ipcRenderer.invoke('agent:abort', runId) as Promise<{ success: boolean }>,
+    generateTitle: (firstMessage: string, modelConfig?: unknown) =>
+      ipcRenderer.invoke('agent:generateTitle', { firstMessage, modelConfig }) as Promise<{ success: boolean; title?: string; error?: string }>,
     onChunk: (runId: string, callback: (chunk: unknown) => void): (() => void) => {
       const listener = (_e: unknown, data: { runId: string; chunk: unknown }) => {
         if (data?.runId === runId) callback(data.chunk)

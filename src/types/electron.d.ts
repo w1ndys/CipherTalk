@@ -916,6 +916,12 @@ export interface ElectronAPI {
       totalFiles: number
     }) => void) => () => void
   }
+  agent: {
+    run: (runId: string, messages: unknown[], scope?: unknown, modelConfig?: unknown) => Promise<{ success: boolean; error?: string }>
+    abort: (runId: string) => Promise<{ success: boolean }>
+    generateTitle: (firstMessage: string, modelConfig?: unknown) => Promise<{ success: boolean; title?: string; error?: string }>
+    onChunk: (runId: string, callback: (chunk: unknown) => void) => () => void
+  }
   // AI 接入
   ai: {
     getProviders: () => Promise<Array<{
