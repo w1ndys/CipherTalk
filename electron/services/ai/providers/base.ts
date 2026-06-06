@@ -368,7 +368,7 @@ export abstract class BaseAIProvider implements AIProvider {
     if (this.providerKind === 'anthropic') {
       return createAnthropic({
         apiKey: this.apiKey,
-        baseURL: this.baseURL,
+        baseURL: this.baseURL || undefined,
         name: this.name,
         headers
       })(model as any)
@@ -376,7 +376,7 @@ export abstract class BaseAIProvider implements AIProvider {
     if (this.providerKind === 'google') {
       return createGoogleGenerativeAI({
         apiKey: this.apiKey,
-        baseURL: this.baseURL,
+        baseURL: this.baseURL || undefined,
         name: this.name,
         headers
       })(model as any)
@@ -384,7 +384,7 @@ export abstract class BaseAIProvider implements AIProvider {
     if (this.providerKind === 'openai-responses') {
       return createOpenAI({
         apiKey: this.apiKey,
-        baseURL: this.baseURL,
+        baseURL: this.baseURL || undefined,
         name: this.name,
         headers
       }).responses(model as any)
@@ -482,6 +482,10 @@ export abstract class BaseAIProvider implements AIProvider {
   }
 
   async listModels(): Promise<string[]> {
+    if (!this.baseURL) {
+      return this.models
+    }
+
     const client = await this.getClient()
     const timeoutPromise = new Promise<never>((_, reject) => {
       setTimeout(() => reject(new Error('MODEL_LIST_TIMEOUT')), 15000)

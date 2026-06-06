@@ -36,11 +36,6 @@ class AIService {
 
     const providerConfig = this.configService.getAIProviderConfig(name)
       || (rawName !== name ? this.configService.getAIProviderConfig(rawName) : null)
-    const protocol = protocolOverride || providerConfig?.protocol
-    if (name === 'custom' && protocol && definition.protocolOptions?.includes(protocol)) {
-      return { name, definition: { ...definition, protocol }, providerConfig }
-    }
-
     return { name, definition, providerConfig }
   }
 
@@ -174,9 +169,7 @@ class AIService {
     try {
       const providerId = normalizeProviderId(options.provider)
       const onlineDefinition = await getProviderDefinitionOnline(providerId)
-      const definition = providerId === 'custom' && options.protocol && onlineDefinition?.protocolOptions?.includes(options.protocol)
-        ? { ...onlineDefinition, protocol: options.protocol }
-        : onlineDefinition
+      const definition = onlineDefinition
       if (!definition) {
         throw new Error(`不支持的提供商: ${providerId}`)
       }

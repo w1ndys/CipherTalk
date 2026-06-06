@@ -66,8 +66,13 @@ const DEEPSEEK_LEGACY_MODEL_MAP: Record<string, string> = {
 }
 
 const LEGACY_CUSTOM_PROVIDER_MAP: Record<string, string> = {
-  'openai-compatible': 'custom',
-  'custom-responses': 'custom'
+  gemini: 'google',
+  qwen: 'alibaba-cn',
+  kimi: 'moonshotai-cn',
+  siliconflow: 'siliconflow-cn',
+  zhipu: 'zhipuai',
+  tencent: 'tencent-tokenhub',
+  'custom-responses': 'openai'
 }
 
 const CUSTOM_PROTOCOL_OPTIONS: Array<{ value: AiProviderProtocol; label: string }> = [
@@ -116,7 +121,12 @@ function formatTokenLimit(value?: number) {
 
 function formatModelCost(modelDetail?: AIModelInfo) {
   if (modelDetail?.cost?.input === undefined || modelDetail.cost.output === undefined) return ''
+  if (modelDetail.cost.input === 0 && modelDetail.cost.output === 0) return '免费'
   return `$${modelDetail.cost.input}/$${modelDetail.cost.output}`
+}
+
+function isFreeModelCost(modelDetail?: AIModelInfo) {
+  return modelDetail?.cost?.input === 0 && modelDetail.cost.output === 0
 }
 
 function maskSecret(value: string) {
@@ -130,16 +140,51 @@ function formatProtocolLabel(protocol?: AiProviderProtocol) {
   return protocol ? PROTOCOL_LABELS[protocol] || protocol : '未选择'
 }
 
+function formatModelStatus(status?: string) {
+  const value = String(status || '').trim()
+  if (!value) return null
+  const lower = value.toLowerCase()
+  if (isDeprecatedModelStatus(value)) {
+    return { label: '已淘汰', color: 'danger' as const, tooltip: `models.dev 状态：${value}` }
+  }
+  if (['beta', 'preview', 'experimental'].some(item => lower.includes(item))) {
+    return { label: value, color: 'warning' as const, tooltip: `models.dev 状态：${value}` }
+  }
+  return { label: value, color: 'default' as const, tooltip: `models.dev 状态：${value}` }
+}
+
+function isDeprecatedModelStatus(status?: string) {
+  const lower = String(status || '').trim().toLowerCase()
+  if (!lower) return false
+  return ['deprecated', 'retired', 'disabled', 'legacy', 'sunset', 'removed'].some(item => lower.includes(item))
+}
+
+function isDeprecatedModel(modelDetail?: AIModelInfo) {
+  return isDeprecatedModelStatus(modelDetail?.status)
+}
+
 function ModelCapabilityStrip({ modelDetail, compact = false }: { modelDetail?: AIModelInfo; compact?: boolean }) {
   if (!modelDetail) return null
 
   const context = formatTokenLimit(modelDetail.limits.context)
   const output = formatTokenLimit(modelDetail.limits.output)
   const price = formatModelCost(modelDetail)
+  const isFree = isFreeModelCost(modelDetail)
+  const status = formatModelStatus(modelDetail.status)
   const metrics = [
     { key: 'context', label: '上下文', value: context || '--', active: !!context, icon: Gauge, tooltip: context ? `上下文 ${context}` : '上下文未知' },
     { key: 'output', label: '输出', value: output || '--', active: !!output, icon: ArrowUpRight, tooltip: output ? `最大输出 ${output}` : '最大输出未知' },
-    { key: 'price', label: '价格', value: price || '--', active: !!price, icon: Coins, tooltip: price ? `${modelDetail.cost?.input}/1M input, ${modelDetail.cost?.output}/1M output` : '价格未知' }
+    {
+      key: 'price',
+      label: '价格',
+      value: price || '--',
+      active: !!price,
+      color: isFree ? 'success' as const : undefined,
+      icon: Coins,
+      tooltip: price
+        ? (isFree ? '免费模型：输入和输出价格均为 0' : `${modelDetail.cost?.input}/1M input, ${modelDetail.cost?.output}/1M output`)
+        : '价格未知'
+    }
   ]
   const capabilities = [
     { key: 'reasoning', label: '推理', enabled: modelDetail.capabilities.reasoning, icon: Brain },
@@ -151,11 +196,19 @@ function ModelCapabilityStrip({ modelDetail, compact = false }: { modelDetail?: 
 
   return (
     <span className={cn('flex flex-wrap items-center', compact ? 'gap-1' : 'gap-1.5')}>
+      {status && (
+        <Tooltip delay={0}>
+          <Chip size="md" variant="soft" color={status.color}>
+            <Chip.Label>{status.label}</Chip.Label>
+          </Chip>
+          <Tooltip.Content>{status.tooltip}</Tooltip.Content>
+        </Tooltip>
+      )}
       {metrics.map(item => {
         const Icon = item.icon
         return (
           <Tooltip key={item.key} delay={0}>
-            <Chip size="md" variant="soft" color={item.active ? 'accent' : 'default'} className={cn(!item.active && 'opacity-60')}>
+            <Chip size="md" variant="soft" color={item.color || (item.active ? 'accent' : 'default')} className={cn(!item.active && 'opacity-60')}>
               <Icon size={12} />
               <Chip.Label>{item.value}</Chip.Label>
             </Chip>
@@ -180,9 +233,23 @@ function ModelCapabilityStrip({ modelDetail, compact = false }: { modelDetail?: 
 }
 
 function ModelOptionContent({ modelId, modelDetail }: { modelId: string; modelDetail?: AIModelInfo }) {
+  const status = formatModelStatus(modelDetail?.status)
+  const isFree = isFreeModelCost(modelDetail)
   return (
     <span className="flex min-w-0 flex-col gap-1">
-      <span className="truncate text-sm text-foreground">{modelDetail?.name || modelId}</span>
+      <span className="flex min-w-0 items-center gap-1.5">
+        <span className="truncate text-sm text-foreground">{modelDetail?.name || modelId}</span>
+        {isFree && (
+          <Chip size="sm" variant="soft" color="success" className="shrink-0">
+            <Chip.Label>免费</Chip.Label>
+          </Chip>
+        )}
+        {status?.color === 'danger' && (
+          <Chip size="sm" variant="soft" color="danger" className="shrink-0">
+            <Chip.Label>已淘汰</Chip.Label>
+          </Chip>
+        )}
+      </span>
       <ModelCapabilityStrip modelDetail={modelDetail} compact />
     </span>
   )
@@ -192,7 +259,10 @@ function ProviderOptionContent({ providerInfo }: { providerInfo: AIProviderInfo 
   return (
     <span className="flex min-w-0 items-center gap-2.5">
       <AIProviderLogo providerId={providerInfo.id} logo={providerInfo.logo} alt={providerInfo.displayName} className="shrink-0" size={18} />
-      <strong className="truncate text-sm font-medium text-foreground">{providerInfo.displayName}</strong>
+      <span className="flex min-w-0 flex-col">
+        <strong className="truncate text-sm font-medium text-foreground">{providerInfo.displayName}</strong>
+        <span className="truncate text-xs text-muted-foreground">{providerInfo.id}</span>
+      </span>
     </span>
   )
 }
@@ -270,24 +340,24 @@ function AISummarySettings({ showMessage }: AISummarySettingsProps) {
   })
 
   const currentProvider = providers.find(p => p.id === provider)
-  const currentProtocol: AiProviderProtocol = provider === 'custom'
-    ? customProtocol
-    : (currentProvider?.protocol || 'openai-responses')
+  const currentProtocol: AiProviderProtocol = currentProvider?.protocol || 'openai-responses'
   const modelDetails = remoteModelDetails.length > 0 ? remoteModelDetails : (currentProvider?.modelDetails || [])
   const modelDetailById = useMemo(() => new Map(modelDetails.map(item => [item.id, item])), [modelDetails])
   const currentModelDetail = modelDetailById.get(model)
   const modelOptions = useMemo<SelectOption[]>(() => {
     const models = remoteModels.length > 0 ? remoteModels : (currentProvider?.models || [])
-    return models.map(item => ({
-      value: item,
-      label: item,
-      content: <ModelOptionContent modelId={item} modelDetail={modelDetailById.get(item)} />
-    }))
+    return models
+      .filter(item => !isDeprecatedModel(modelDetailById.get(item)))
+      .map(item => ({
+        value: item,
+        label: item,
+        content: <ModelOptionContent modelId={item} modelDetail={modelDetailById.get(item)} />
+      }))
   }, [currentProvider?.models, modelDetailById, remoteModels])
   const providerOptions = useMemo<SelectOption[]>(() => providers.map(item => ({
     value: item.id,
     label: item.displayName,
-    description: item.description,
+    description: [item.id, item.description, item.protocol].filter(Boolean).join(' '),
     content: <ProviderOptionContent providerInfo={item} />
   })), [providers])
   const protocolOptions = useMemo<SelectOption[]>(() => (
@@ -305,23 +375,22 @@ function AISummarySettings({ showMessage }: AISummarySettingsProps) {
     return new Map((presetDraftProvider?.modelDetails || []).map(item => [item.id, item]))
   }, [presetDraftProvider?.modelDetails])
   const presetDraftModelOptions = useMemo<SelectOption[]>(() => {
-    return (presetDraftProvider?.models || []).map(item => ({
-      value: item,
-      label: item,
-      content: <ModelOptionContent modelId={item} modelDetail={presetDraftModelDetailById.get(item)} />
-    }))
+    return (presetDraftProvider?.models || [])
+      .filter(item => !isDeprecatedModel(presetDraftModelDetailById.get(item)))
+      .map(item => ({
+        value: item,
+        label: item,
+        content: <ModelOptionContent modelId={item} modelDetail={presetDraftModelDetailById.get(item)} />
+      }))
   }, [presetDraftModelDetailById, presetDraftProvider?.models])
   const presetDraftCurrentModelDetail = presetDraftModelDetailById.get(presetDraft.model)
   const currentBaseURLLabel = currentProvider?.allowCustomBaseURL
     ? (baseURL || '未填写')
     : (currentProvider?.baseURL || '固定服务地址')
-  const currentProviderOption = providerOptions.find(option => option.value === provider)
   const currentProtocolOption = protocolOptions.find(option => option.value === customProtocol)
   const currentModelSelectedKey = modelOptions.some(option => option.value === model) ? model : null
-  const presetProviderOption = providerOptions.find(option => option.value === presetDraft.provider)
   const presetProtocolOption = presetDraftProtocolOptions.find(option => option.value === presetDraft.protocol)
   const presetModelSelectedKey = presetDraftModelOptions.some(option => option.value === presetDraft.model) ? presetDraft.model : null
-
   useEffect(() => {
     void loadProviders()
     void loadAllProviderConfigs()
@@ -331,9 +400,6 @@ function AISummarySettings({ showMessage }: AISummarySettingsProps) {
   useEffect(() => {
     if (!provider) return
     const config = providerConfigs[provider]
-    if (provider === 'custom') {
-      setCustomProtocol(config?.protocol || 'openai-responses')
-    }
     if (currentProvider?.allowCustomBaseURL) {
       setBaseURL(config?.baseURL || (provider === 'ollama' ? 'http://localhost:11434/v1' : ''))
     } else {
@@ -358,37 +424,21 @@ function AISummarySettings({ showMessage }: AISummarySettingsProps) {
     }
   }, [provider, model, setField])
 
-  useEffect(() => {
-    if (provider !== 'custom') return
-    setRemoteModels([])
-    setRemoteModelDetails([])
-    setModelListError('')
-  }, [provider, customProtocol])
-
   const loadProviders = async () => {
     const list = await getAIProviders()
     setProviders(list)
     const normalizedProvider = normalizeProviderId(provider)
-    if (provider && normalizedProvider !== provider) {
-      setField('aiProvider', normalizedProvider)
-      await configService.setAiProvider(normalizedProvider)
-    } else if (!provider && list[0]?.id) {
-      setField('aiProvider', list[0].id)
+    const nextProvider = list.some(item => item.id === normalizedProvider)
+      ? normalizedProvider
+      : list[0]?.id
+    if (nextProvider && nextProvider !== provider) {
+      setField('aiProvider', nextProvider)
+      await configService.setAiProvider(nextProvider)
     }
   }
 
   const loadAllProviderConfigs = async () => {
     const configs = await configService.getAllAiProviderConfigs()
-    if (!configs.custom) {
-      const legacyConfig = configs['custom-responses'] || configs['openai-compatible']
-      if (legacyConfig) {
-        configs.custom = {
-          ...legacyConfig,
-          protocol: configs['custom-responses'] ? 'openai-responses' : (legacyConfig.protocol || 'openai-compatible')
-        }
-        await configService.setAiProviderConfig('custom', configs.custom)
-      }
-    }
     setProviderConfigs(configs || {})
   }
 
@@ -407,7 +457,7 @@ function AISummarySettings({ showMessage }: AISummarySettingsProps) {
       apiKey: config?.apiKey || (isCurrentProvider ? apiKey : ''),
       model: normalizeProviderModel(nextProvider, config?.model || (isCurrentProvider ? model : providerInfo?.models?.[0] || '')),
       baseURL: config?.baseURL || (isCurrentProvider ? baseURL : (nextProvider === 'ollama' ? 'http://localhost:11434/v1' : '')),
-      protocol: config?.protocol || (isCurrentProvider && nextProvider === 'custom' ? customProtocol : 'openai-responses')
+      protocol: config?.protocol || providerInfo?.protocol || 'openai-responses'
     }
   }
 
@@ -473,7 +523,7 @@ function AISummarySettings({ showMessage }: AISummarySettingsProps) {
       baseURL: providers.find(item => item.id === nextProvider)?.allowCustomBaseURL
         ? normalizeProviderBaseURL(nextProvider, nextBaseURL)
         : undefined,
-      protocol: nextProvider === 'custom' ? nextProtocol : undefined
+      protocol: undefined
     }
     await configService.setAiProvider(nextProvider)
     await configService.setAiProviderConfig(nextProvider, payload)
@@ -499,7 +549,7 @@ function AISummarySettings({ showMessage }: AISummarySettingsProps) {
         provider,
         apiKey,
         baseURL,
-        protocol: provider === 'custom' ? customProtocol : undefined
+        protocol: undefined
       })
       if (!result.success || !result.models?.length) {
         const error = result.error || '模型列表为空'
@@ -509,8 +559,10 @@ function AISummarySettings({ showMessage }: AISummarySettingsProps) {
       }
       setRemoteModels(result.models)
       setRemoteModelDetails(result.modelDetails || [])
-      if (!result.models.includes(model)) {
-        setField('aiModel', result.models[0])
+      const nextModelDetailsById = new Map((result.modelDetails || []).map(item => [item.id, item]))
+      const availableModels = result.models.filter(item => !isDeprecatedModel(nextModelDetailsById.get(item)))
+      if (!availableModels.includes(model)) {
+        setField('aiModel', availableModels[0] || result.models[0])
       }
       showMessage('模型列表已刷新', true)
     } catch (error) {
@@ -534,7 +586,7 @@ function AISummarySettings({ showMessage }: AISummarySettingsProps) {
 
     setIsTesting(true)
     try {
-      const result = await window.electronAPI.ai.testConnection(provider, apiKey, baseURL, provider === 'custom' ? customProtocol : undefined)
+      const result = await window.electronAPI.ai.testConnection(provider, apiKey, baseURL, undefined)
       showMessage(result.success ? '连接测试成功' : (result.error || '连接测试失败'), result.success)
       if (result.success) {
         await persistProviderConfig()
@@ -594,7 +646,7 @@ function AISummarySettings({ showMessage }: AISummarySettingsProps) {
       apiKey: presetDraft.apiKey,
       model: normalizeProviderModel(presetDraft.provider, presetDraft.model),
       baseURL: draftProviderInfo?.allowCustomBaseURL ? (presetDraft.baseURL || undefined) : undefined,
-      protocol: presetDraft.provider === 'custom' ? presetDraft.protocol : undefined
+      protocol: undefined
     }
     if (editingPresetId) {
       await configService.updateAiConfigPreset(editingPresetId, payload)
@@ -619,7 +671,7 @@ function AISummarySettings({ showMessage }: AISummarySettingsProps) {
       apiKey,
       model,
       baseURL,
-      protocol: provider === 'custom' ? customProtocol : 'openai-responses'
+      protocol: currentProvider?.protocol || 'openai-responses'
     })
     setShowSavePresetDialog(true)
   }
@@ -719,22 +771,17 @@ function AISummarySettings({ showMessage }: AISummarySettingsProps) {
                       <Label>服务商</Label>
                       <Select.Trigger>
                         <Select.Value>
-                          {({ defaultChildren, isPlaceholder }) => (
-                            isPlaceholder ? defaultChildren : (currentProviderOption?.content ?? currentProviderOption?.label ?? defaultChildren)
-                          )}
+                          {({ defaultChildren, isPlaceholder }) =>
+                            isPlaceholder || !currentProvider ? defaultChildren : <ProviderOptionContent providerInfo={currentProvider} />
+                          }
                         </Select.Value>
                         <Select.Indicator />
                       </Select.Trigger>
                       <Select.Popover>
                         <ListBox className={AI_DROPDOWN_LIST_CLASS}>
                           {providerOptions.map(option => (
-                            <ListBox.Item key={option.value} id={option.value} textValue={option.label} isDisabled={option.disabled} className="shrink-0">
-                              {option.content ?? (
-                                <span className="flex min-w-0 flex-col">
-                                  <span className="truncate text-sm text-foreground">{option.label}</span>
-                                  {option.description && <Description className="truncate text-xs">{option.description}</Description>}
-                                </span>
-                              )}
+                            <ListBox.Item key={option.value} id={option.value} textValue={`${option.label} ${option.value} ${option.description || ''}`} isDisabled={option.disabled} className="shrink-0">
+                              {option.content ?? option.label}
                               <ListBox.ItemIndicator />
                             </ListBox.Item>
                           ))}
@@ -1001,16 +1048,16 @@ function AISummarySettings({ showMessage }: AISummarySettingsProps) {
                         <Label>服务商</Label>
                         <Select.Trigger>
                           <Select.Value>
-                            {({ defaultChildren, isPlaceholder }) => (
-                              isPlaceholder ? defaultChildren : (presetProviderOption?.content ?? presetProviderOption?.label ?? defaultChildren)
-                            )}
+                            {({ defaultChildren, isPlaceholder }) =>
+                              isPlaceholder || !presetDraftProvider ? defaultChildren : <ProviderOptionContent providerInfo={presetDraftProvider} />
+                            }
                           </Select.Value>
                           <Select.Indicator />
                         </Select.Trigger>
                         <Select.Popover>
                           <ListBox className={AI_DROPDOWN_LIST_CLASS}>
                             {providerOptions.map(option => (
-                              <ListBox.Item key={option.value} id={option.value} textValue={option.label} isDisabled={option.disabled} className="shrink-0">
+                              <ListBox.Item key={option.value} id={option.value} textValue={`${option.label} ${option.value} ${option.description || ''}`} isDisabled={option.disabled} className="shrink-0">
                                 {option.content ?? option.label}
                                 <ListBox.ItemIndicator />
                               </ListBox.Item>
