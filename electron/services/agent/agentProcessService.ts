@@ -128,6 +128,10 @@ export class AgentProcessService {
           void this.handleWcdbCall(worker, msg.payload)
           return
         }
+        if (msg?.type === 'mcp:callTool') {
+          void this.handleMcpCall(worker, msg.payload)
+          return
+        }
         if (msg?.id === 0 && msg.type === 'ready') {
           if (!readyFired) { readyFired = true; resolve() }
           return
@@ -215,6 +219,28 @@ export class AgentProcessService {
       worker.postMessage({ type: 'wcdb:result', payload: { reqId, result } })
     } catch (e: any) {
       worker.postMessage({ type: 'wcdb:result', payload: { reqId, error: e?.message || String(e) } })
+    }
+  }
+
+  /**
+   * 处理子进程发来的 MCP 代理请求：MCP 连接只存在主进程，Agent 子进程只拿到只读工具描述。
+   */
+  private async handleMcpCall(
+    worker: UtilityProcess,
+    payload: { reqId: number; serverName: string; toolName: string; args?: Record<string, unknown> },
+  ): Promise<void> {
+    const reqId = payload?.reqId
+    try {
+      const { mcpClientService } = await import('../mcpClientService')
+      const response = await mcpClientService.callTool(
+        payload.serverName,
+        payload.toolName,
+        payload.args && typeof payload.args === 'object' ? payload.args : {},
+      )
+      if (!response.success) throw new Error(response.error || 'MCP tool call failed')
+      worker.postMessage({ type: 'mcp:result', payload: { reqId, result: response.result } })
+    } catch (e: any) {
+      worker.postMessage({ type: 'mcp:result', payload: { reqId, error: e?.message || String(e) } })
     }
   }
 

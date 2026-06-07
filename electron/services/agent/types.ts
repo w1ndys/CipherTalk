@@ -2,7 +2,7 @@
  * AI Agent 编排层 —— 类型与子进程通信协议。
  * 编排全程跑在独立的 AI utilityProcess 子进程（见 Docs/密语AI-Agent开发文档（AI-SDK版）.md §3.1）。
  */
-import type { ModelMessage, UIMessageChunk } from 'ai'
+import type { JSONSchema7, ModelMessage, UIMessageChunk } from 'ai'
 
 /** AI SDK provider 协议种类（对齐 ai/providers/base.ts 的 ProviderKind）。 */
 export type ProviderKind = 'openai-responses' | 'openai-compatible' | 'anthropic' | 'google'
@@ -35,6 +35,21 @@ export interface AgentProviderConfigOverride {
 export type AgentScope =
   | { kind: 'global' }
   | { kind: 'session'; sessionId: string; displayName?: string }
+
+export interface AgentMcpToolDescriptor {
+  name: string
+  serverName: string
+  toolName: string
+  description?: string
+  inputSchema?: JSONSchema7
+}
+
+export interface AgentSkillContextItem {
+  name: string
+  version: string
+  description: string
+  content: string
+}
 
 export type AgentProgressStage =
   | 'run_started'
@@ -69,6 +84,8 @@ export interface AgentRunInput {
   messages: ModelMessage[]
   providerConfig: AgentProviderConfig
   scope: AgentScope
+  mcpTools?: AgentMcpToolDescriptor[]
+  skills?: AgentSkillContextItem[]
 }
 
 // ========= 主进程 ↔ AI 子进程 postMessage 协议 =========

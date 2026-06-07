@@ -145,8 +145,8 @@ export async function runAgent(
     const memoryContext = await buildMemoryContext(input.scope)
     const agent = new ToolLoopAgent({
       model: createLanguageModel(input.providerConfig),
-      instructions: buildSystemPrompt(input.scope) + memoryContext,
-      tools: withToolTimeouts(buildTools(input.scope, input.providerConfig)),
+      instructions: buildSystemPrompt(input.scope, input.skills) + memoryContext,
+      tools: withToolTimeouts(buildTools(input.scope, input.providerConfig, input.mcpTools)),
       // 步数上限 + 死循环检测（连续 N 步相同工具调用即停），见 guards.ts
       stopWhen: [stepCountIs(MAX_STEPS), loopGuardCondition()],
       providerOptions: buildReasoningProviderOptions(input),

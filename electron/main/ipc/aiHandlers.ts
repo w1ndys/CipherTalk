@@ -8,6 +8,28 @@ import type { AgentProviderConfigOverride, AgentScope } from '../../services/age
 /** 进行中的 agent 运行：runId → AbortController，用于取消。 */
 const agentAborters = new Map<string, AbortController>()
 
+function textFromUiMessage(message: UIMessage): string {
+  const anyMessage = message as any
+  if (typeof anyMessage.content === 'string') return anyMessage.content
+  if (!Array.isArray(anyMessage.parts)) return ''
+  return anyMessage.parts
+    .map((part: any) => {
+      if (!part || typeof part !== 'object') return ''
+      if (part.type === 'text') return String(part.text || '')
+      if (typeof part.text === 'string') return part.text
+      return ''
+    })
+    .filter(Boolean)
+    .join('\n')
+}
+
+function lastUserTextFromUiMessages(messages: UIMessage[] = []): string {
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    if (messages[i]?.role === 'user') return textFromUiMessage(messages[i])
+  }
+  return ''
+}
+
 export function registerAiHandlers(_ctx: MainProcessContext): void {
   // ========= AI Agent（跑在独立 utilityProcess 子进程，主进程仅做 broker）=========
   ipcMain.handle('agent:run', async (event, payload: {
@@ -31,8 +53,20 @@ export function registerAiHandlers(_ctx: MainProcessContext): void {
       await refreshResolvedProxyUrl() // 主进程探测系统代理并持久化，供子进程 agent/嵌入读取
       const providerConfig = resolveProviderConfig(payload.modelConfig)
       const messages = await convertToModelMessages(payload.messages)
+      const lastUserText = lastUserTextFromUiMessages(payload.messages)
+      const { mcpClientService } = await import('../../services/mcpClientService')
+      const { buildReadOnlyMcpToolDescriptors } = await import('../../services/agent/mcpToolPolicy')
+      const { skillManagerService } = await import('../../services/skillManagerService')
+      const mcpTools = buildReadOnlyMcpToolDescriptors(mcpClientService.getConnectedToolSchemas())
+      const skills = skillManagerService.selectSkillsForAgent(lastUserText)
+      if (mcpTools.length > 0 || skills.length > 0) {
+        console.info('[agent:run] injected context', {
+          mcpTools: mcpTools.map((tool) => `${tool.serverName}/${tool.toolName}`),
+          skills: skills.map((skill) => skill.name),
+        })
+      }
       await agentProcessService.run(
-        { messages, providerConfig, scope: payload.scope ?? { kind: 'global' } },
+        { messages, providerConfig, scope: payload.scope ?? { kind: 'global' }, mcpTools, skills },
         (chunk) => send(chunk),
         (progress) => sendProgress(progress),
         aborter.signal,

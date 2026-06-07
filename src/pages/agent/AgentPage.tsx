@@ -180,6 +180,12 @@ const TOOL_LABELS: Record<string, string> = {
 }
 
 function formatToolName(toolName: string) {
+  if (toolName.startsWith('mcp__')) {
+    const parts = toolName.slice(5).split('__')
+    const server = parts[0] || 'server'
+    const tool = parts.slice(1).join('__') || 'tool'
+    return `MCP: ${server}/${tool}`
+  }
   return TOOL_LABELS[toolName] ?? toolName.replace(/[_-]+/g, ' ')
 }
 

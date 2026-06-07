@@ -5,7 +5,7 @@
  * 子 Agent 复用 buildBaseTools（不含 delegate_analysis），避免递归委托。
  */
 import type { ToolSet } from 'ai'
-import type { AgentProviderConfig, AgentScope } from '../types'
+import type { AgentMcpToolDescriptor, AgentProviderConfig, AgentScope } from '../types'
 import { withToolTimeouts } from '../guards'
 import { listContacts } from './listContacts'
 import { searchMessages } from './searchMessages'
@@ -20,6 +20,7 @@ import { querySql } from './querySql'
 import { updatePlan } from './updatePlan'
 import { createRemember, createRecall, createListMemories, createForget, createConsolidate } from './memory'
 import { createDelegateAnalysis } from './delegateAnalysis'
+import { buildMcpTools } from './mcpExternal'
 
 /** 基础读/查工具（不含 delegate_analysis），主 Agent 与子 Agent 共用。 */
 export function buildBaseTools(_scope: AgentScope): ToolSet {
@@ -38,9 +39,10 @@ export function buildBaseTools(_scope: AgentScope): ToolSet {
   }
 }
 
-export function buildTools(scope: AgentScope, providerConfig: AgentProviderConfig): ToolSet {
+export function buildTools(scope: AgentScope, providerConfig: AgentProviderConfig, mcpTools: AgentMcpToolDescriptor[] = []): ToolSet {
   return {
     ...buildBaseTools(scope),
+    ...buildMcpTools(mcpTools),
     remember: createRemember(scope),
     recall: createRecall(scope),
     list_memories: createListMemories(scope),
