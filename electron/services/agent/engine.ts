@@ -8,6 +8,7 @@ import { buildSystemPrompt } from './prompts'
 import { buildTools } from './tools'
 import { buildMemoryContext, extractMemories } from './tools/memory'
 import { compactMessages } from './compaction'
+import { runFinalReview, summarizeToolOutput, type ToolOutputSummary } from './finalReview'
 import { loopGuardCondition, withToolTimeouts } from './guards'
 import { reportAgentProgress, withAgentProgress } from './progress'
 import type { AgentProgressReporter, AgentProviderConfig, AgentRunInput } from './types'
@@ -52,6 +53,54 @@ function lastUserText(messages: ModelMessage[]): string {
     return ''
   }
   return ''
+}
+
+function trackToolChunk(
+  chunk: UIMessageChunk,
+  toolNames: Map<string, string>,
+  summaries: ToolOutputSummary[],
+): void {
+  if ('toolCallId' in chunk && 'toolName' in chunk && typeof chunk.toolCallId === 'string' && typeof chunk.toolName === 'string') {
+    toolNames.set(chunk.toolCallId, chunk.toolName)
+  }
+  if (chunk.type !== 'tool-output-available') return
+  const toolName = toolNames.get(chunk.toolCallId) || 'unknown_tool'
+  summaries.push(summarizeToolOutput(toolName, chunk.output))
+}
+
+function appendFinalReviewCorrection(
+  review: { evidenceScore: number; issues: string[]; correction?: string },
+  onChunk: (chunk: UIMessageChunk) => void,
+): string {
+  const correction = String(review.correction || '').trim()
+  if (!correction) return ''
+  const toolCallId = `final-review-${Date.now()}`
+  const textId = `${toolCallId}-text`
+  const appendText = `\n\n> 核查修正：${correction}`
+
+  onChunk({ type: 'start-step' })
+  onChunk({
+    type: 'tool-input-available',
+    toolCallId,
+    toolName: 'final_review',
+    input: { evidenceScore: review.evidenceScore },
+  })
+  onChunk({
+    type: 'tool-output-available',
+    toolCallId,
+    output: {
+      status: 'needs_correction',
+      evidenceScore: review.evidenceScore,
+      issues: review.issues,
+      correction,
+    },
+  })
+  onChunk({ type: 'finish-step' })
+
+  onChunk({ type: 'text-start', id: textId })
+  onChunk({ type: 'text-delta', id: textId, delta: appendText })
+  onChunk({ type: 'text-end', id: textId })
+  return appendText
 }
 
 /**
@@ -108,6 +157,8 @@ export async function runAgent(
     const result = await agent.stream({ messages: input.messages, abortSignal: signal })
     // 截留 message 的 finish，等 L1 自动记忆注入完再补发，让自动写入的工具 part 落在本条消息内
     let finishChunk: UIMessageChunk | undefined
+    const toolNames = new Map<string, string>()
+    const toolSummaries: ToolOutputSummary[] = []
     for await (const chunk of result.toUIMessageStream({
       messageMetadata: ({ part }) => {
         if (part.type !== 'finish') return undefined
@@ -121,10 +172,23 @@ export async function runAgent(
       },
     })) {
       if (chunk.type === 'finish') { finishChunk = chunk; continue }
+      trackToolChunk(chunk, toolNames, toolSummaries)
       onChunk(chunk)
     }
     let assistantText = ''
     try { assistantText = await result.text } catch { /* abort/异常：跳过自动记忆 */ }
+    if (assistantText && !signal?.aborted) {
+      const review = await runFinalReview({
+        providerConfig: input.providerConfig,
+        userText: lastUserText(input.messages),
+        assistantText,
+        toolSummaries,
+        signal,
+      })
+      if (review.status === 'needs_correction') {
+        assistantText += appendFinalReviewCorrection(review, onChunk)
+      }
+    }
     if (assistantText && !signal?.aborted) {
       await injectAutoMemories(assistantText, input, onChunk, signal)
     }

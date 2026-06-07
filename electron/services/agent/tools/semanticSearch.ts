@@ -21,6 +21,12 @@ interface FusedHit {
   anchor: { sessionId: string; localId: number; sortSeq: number; createTime: number }
 }
 
+function semanticFallbackReason(sessionId: string | undefined, embeddingReady: boolean): string | undefined {
+  if (!sessionId) return 'missing_session'
+  if (!embeddingReady) return 'embedding_not_ready'
+  return undefined
+}
+
 export const semanticSearch = tool({
   description:
     '查找与某主题/某件事相关的聊天记录，适合"聊过类似 X 吗 / 关于某话题都说了啥"。' +
@@ -39,9 +45,10 @@ export const semanticSearch = tool({
       const { getEmbeddingConfig } = await import('../../ai/embeddingService')
       const { messageVectorService, embedQuery } = await import('../../search/messageVectorService')
       const cfg = getEmbeddingConfig()
+      const embeddingReady = messageVectorService.isReady(cfg)
 
       // 混合路径：需启用嵌入 + 指定会话（懒构建成本只压在单个会话上）
-      if (sessionId && messageVectorService.isReady(cfg)) {
+      if (sessionId && embeddingReady) {
         const [vector, keyword] = await Promise.all([
           (async () => {
             const queryVec = await embedQuery(query, cfg)
@@ -113,6 +120,12 @@ export const semanticSearch = tool({
 
         return {
           mode: 'hybrid',
+          retrieval: {
+            mode: 'hybrid',
+            embeddingReady: true,
+            vectorCount: vector.hits.length,
+            keywordCount: keyword.hits.length,
+          },
           indexedVectors: vector.indexed,
           hits,
           evidence: hits.map((hit) => ({
@@ -128,7 +141,21 @@ export const semanticSearch = tool({
 
       // 关键词回退（全局 / 未配嵌入）
       const { hits, sessionsScanned, coverage } = await searchChat({ query, sessionId, startTimeMs, endTimeMs, limit })
-      return { mode: 'keyword', sessionsScanned, coverage, scope: sessionId ? 'session' : 'recent_sessions', hits, evidence: hits.map(evidenceFromHit) }
+      return {
+        mode: 'keyword',
+        retrieval: {
+          mode: 'keyword',
+          embeddingReady,
+          fallbackReason: semanticFallbackReason(sessionId, embeddingReady),
+          vectorCount: 0,
+          keywordCount: hits.length,
+        },
+        sessionsScanned,
+        coverage,
+        scope: sessionId ? 'session' : 'recent_sessions',
+        hits,
+        evidence: hits.map(evidenceFromHit),
+      }
     } catch (error) {
       return { error: error instanceof Error ? error.message : String(error) }
     }

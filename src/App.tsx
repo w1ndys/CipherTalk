@@ -628,7 +628,7 @@ function App() {
 
   return (
     <div className={`app-container${navLayout === 'sidebar' ? ' app-container--sidebar' : ''}`}>
-      <Toast.Provider placement="top" />
+      <Toast.Provider className="ct-toast-region" placement="top" />
       {navLayout === 'sidebar' && <Sidebar />}
       <div className="app-shell">
       <TitleBar showTitle={false} />
