@@ -34,6 +34,8 @@ function resolveAbout(about: string | undefined, scope: AgentScope): string | nu
 
 /** recall 走语义检索的两类记忆。 */
 const VECTOR_KINDS: Array<'profile' | 'fact'> = ['profile', 'fact']
+type RecallMode = 'keyword' | 'hybrid'
+type RecallMatchedBy = 'keyword' | 'vector' | 'both'
 
 function isEmbeddingReady(cfg: EmbeddingConfig): boolean {
   return !!(cfg.enabled && cfg.apiKey && cfg.model)
@@ -63,9 +65,36 @@ async function ensureMemoryVectors(cfg: EmbeddingConfig, sessionId: string | nul
   }
 }
 
-function formatRecall(items: MemoryItem[], mode: 'keyword' | 'hybrid') {
+function recallMatchedBy(item: MemoryItem, keywordIds: Set<number>, vectorIds: Set<number>): RecallMatchedBy {
+  const keyword = keywordIds.has(item.id)
+  const vector = vectorIds.has(item.id)
+  if (keyword && vector) return 'both'
+  return vector ? 'vector' : 'keyword'
+}
+
+function formatRecall(
+  items: MemoryItem[],
+  mode: RecallMode,
+  opts: {
+    embeddingReady: boolean
+    fallbackReason?: string
+    keywordIds?: Set<number>
+    vectorIds?: Set<number>
+    keywordCount?: number
+    vectorCount?: number
+  },
+) {
+  const keywordIds = opts.keywordIds || new Set<number>()
+  const vectorIds = opts.vectorIds || new Set<number>()
   return {
     mode,
+    retrieval: {
+      mode,
+      embeddingReady: opts.embeddingReady,
+      fallbackReason: opts.fallbackReason,
+      keywordCount: opts.keywordCount ?? keywordIds.size,
+      vectorCount: opts.vectorCount ?? vectorIds.size,
+    },
     count: items.length,
     memories: items.map((m) => ({
       id: m.id,
@@ -74,6 +103,7 @@ function formatRecall(items: MemoryItem[], mode: 'keyword' | 'hybrid') {
       about: m.sessionId,
       importance: m.importance,
       tags: m.tags,
+      matchedBy: recallMatchedBy(m, keywordIds, vectorIds),
     })),
   }
 }
@@ -130,13 +160,17 @@ export function createRecall(scope: AgentScope) {
         const filter = { ...(sessionId ? { sessionId } : {}), sourceTypes: VECTOR_KINDS }
         // 关键词路：始终算（也作为向量不可用时的回退）
         const keywordHits = memoryDatabase.searchMemoryItemsByKeyword({ query, ...filter, limit: limit * 2 })
+        const keywordIds = new Set(keywordHits.map((h) => h.item.id))
 
         const cfg = getEmbeddingConfig()
-        if (isEmbeddingReady(cfg)) {
+        const embeddingReady = isEmbeddingReady(cfg)
+        let fallbackReason = embeddingReady ? 'vector_no_hits' : 'embedding_not_ready'
+        if (embeddingReady) {
           try {
             await ensureMemoryVectors(cfg, sessionId)
             const queryVec = await embedQuery(query, cfg)
             const vectorHits = memoryDatabase.searchMemoryVectors(queryVec, cfg.model, { ...filter, limit: limit * 2 })
+            const vectorIds = new Set(vectorHits.map((h) => h.item.id))
             if (vectorHits.length > 0) {
               // 向量 + 关键词按排名 RRF 融合（key=记忆 id）
               const merged = reciprocalRankFusion<MemoryItem>(
@@ -146,13 +180,27 @@ export function createRecall(scope: AgentScope) {
                 ],
                 (item) => String(item.id),
               )
-              return formatRecall(merged.slice(0, limit).map((m) => m.item), 'hybrid')
+              return formatRecall(merged.slice(0, limit).map((m) => m.item), 'hybrid', {
+                embeddingReady,
+                keywordIds,
+                vectorIds,
+                keywordCount: keywordHits.length,
+                vectorCount: vectorHits.length,
+              })
             }
           } catch {
             /* 向量任一步失败（未建/API 错）→ 落回关键词 */
+            fallbackReason = 'vector_error'
           }
         }
-        return formatRecall(keywordHits.slice(0, limit).map((h) => h.item), 'keyword')
+        return formatRecall(keywordHits.slice(0, limit).map((h) => h.item), 'keyword', {
+          embeddingReady,
+          fallbackReason,
+          keywordIds,
+          vectorIds: new Set<number>(),
+          keywordCount: keywordHits.length,
+          vectorCount: 0,
+        })
       } catch (e) {
         return { error: e instanceof Error ? e.message : String(e) }
       }

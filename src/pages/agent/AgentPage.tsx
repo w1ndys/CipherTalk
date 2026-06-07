@@ -176,6 +176,7 @@ const TOOL_LABELS: Record<string, string> = {
   forget: '删除记忆',
   consolidate_memory: '整理记忆',
   auto_memory: '自动记忆',
+  final_review: '最终审核',
 }
 
 function formatToolName(toolName: string) {
@@ -265,6 +266,64 @@ function collectToolBadges(value: unknown, badges: string[] = []): string[] {
     for (const item of Object.values(value as Record<string, unknown>)) collectToolBadges(item, badges)
   }
   return badges
+}
+
+const RETRIEVAL_MODE_LABELS: Record<string, string> = {
+  hybrid: '召回: 混合',
+  keyword: '召回: 关键词',
+  vector: '召回: 向量',
+}
+
+const RETRIEVAL_FALLBACK_LABELS: Record<string, string> = {
+  missing_session: '回退: 未限定会话',
+  embedding_not_ready: '回退: 未配置向量',
+  vector_no_hits: '回退: 向量无命中',
+  vector_error: '回退: 向量失败',
+}
+
+const MATCHED_BY_LABELS: Record<string, string> = {
+  both: '命中: 向量+关键词',
+  vector: '命中: 向量',
+  keyword: '命中: 关键词',
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : null
+}
+
+function pushBadge(badges: string[], label?: string) {
+  if (label && !badges.includes(label)) badges.push(label)
+}
+
+function collectMatchedByBadges(value: unknown, badges: string[]) {
+  const items = Array.isArray(value) ? value : []
+  const seen = new Set<string>()
+  for (const item of items) {
+    const obj = asRecord(item)
+    const matchedBy = typeof obj?.matchedBy === 'string' ? obj.matchedBy : ''
+    if (matchedBy) seen.add(matchedBy)
+  }
+  for (const key of ['both', 'vector', 'keyword']) {
+    if (seen.has(key)) pushBadge(badges, MATCHED_BY_LABELS[key])
+  }
+}
+
+function collectRetrievalBadges(toolName: string, output: unknown): string[] {
+  if (toolName !== 'semantic_search' && toolName !== 'recall') return []
+  const obj = asRecord(output)
+  if (!obj) return []
+  const retrieval = asRecord(obj.retrieval)
+  const badges: string[] = []
+  const mode = typeof retrieval?.mode === 'string'
+    ? retrieval.mode
+    : typeof obj.mode === 'string'
+      ? obj.mode
+      : ''
+  pushBadge(badges, RETRIEVAL_MODE_LABELS[mode] || (mode ? `召回: ${mode}` : undefined))
+  const fallbackReason = typeof retrieval?.fallbackReason === 'string' ? retrieval.fallbackReason : ''
+  pushBadge(badges, RETRIEVAL_FALLBACK_LABELS[fallbackReason])
+  collectMatchedByBadges(toolName === 'recall' ? obj.memories : obj.hits, badges)
+  return badges.slice(0, 4)
 }
 
 // ====== @ 提及（聚焦某个联系人/群的数据）======
@@ -1690,7 +1749,10 @@ export default function AgentPage() {
                           const elapsedMs = toolElapsedByKey[toolPartProgressKey(part, toolName)]
                           const label = done && elapsedMs ? `${toolLabel} · ${formatElapsed(elapsedMs)}` : toolLabel
                           const badges = collectToolBadges(part.input)
-                          if (part.state === 'output-available') collectToolBadges(part.output, badges)
+                          if (part.state === 'output-available') {
+                            for (const badge of collectRetrievalBadges(toolName, part.output)) pushBadge(badges, badge)
+                            collectToolBadges(part.output, badges)
+                          }
                           return (
                             <ChainOfThoughtStep
                               icon={toolName.includes('search') ? Search : Wrench}
