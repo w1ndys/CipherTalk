@@ -1,5 +1,5 @@
 export const MEMORY_DB_NAME = 'agent_memory.db'
-export const MEMORY_SCHEMA_VERSION = '3'
+export const MEMORY_SCHEMA_VERSION = '4'
 
 export const MEMORY_SOURCE_TYPES = [
   'message',

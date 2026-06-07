@@ -9,8 +9,11 @@
 import { tool, generateObject } from 'ai'
 import { z } from 'zod'
 import type { AgentScope, AgentProviderConfig } from '../types'
+import type { MemoryItem } from '../../memory/memorySchema'
 import { memoryDatabase, hashMemoryContent } from '../../memory/memoryDatabase'
 import { createLanguageModel } from '../provider'
+import { embedQuery, embedTexts, getEmbeddingConfig, type EmbeddingConfig } from '../../ai/embeddingService'
+import { reciprocalRankFusion } from '../../retrieval/rrf'
 
 /** 开场注入的画像/会话事实条数上限；先取 SCAN_LIMIT 再按 importance 排序截断。 */
 const INJECT_PROFILE_LIMIT = 10
@@ -27,6 +30,52 @@ function resolveAbout(about: string | undefined, scope: AgentScope): string | nu
   if (explicit) return explicit
   if (scope.kind === 'session') return scope.sessionId
   return null
+}
+
+/** recall 走语义检索的两类记忆。 */
+const VECTOR_KINDS: Array<'profile' | 'fact'> = ['profile', 'fact']
+
+function isEmbeddingReady(cfg: EmbeddingConfig): boolean {
+  return !!(cfg.enabled && cfg.apiKey && cfg.model)
+}
+
+/** 懒构建：给缺向量 / 内容已变 / 维度不符的记忆补嵌入（限定 scope 与 recall 一致）。失败由调用方兜底回退关键词。 */
+async function ensureMemoryVectors(cfg: EmbeddingConfig, sessionId: string | null): Promise<void> {
+  const items = memoryDatabase
+    .listMemoryItems({ ...(sessionId ? { sessionId } : {}), limit: 1000 })
+    .filter((m) => m.sourceType === 'profile' || m.sourceType === 'fact')
+  if (items.length === 0) return
+  const meta = memoryDatabase.getVectorMeta(cfg.model)
+  const stale = items.filter((m) => {
+    const v = meta.get(m.id)
+    return !v || v.contentHash !== m.contentHash || (cfg.dimension > 0 && v.dim !== cfg.dimension)
+  })
+  if (stale.length === 0) return
+  const BATCH = 64
+  for (let i = 0; i < stale.length; i += BATCH) {
+    const batch = stale.slice(i, i + BATCH)
+    const vectors = await embedTexts(batch.map((m) => m.content), cfg)
+    batch.forEach((m, idx) => {
+      const vec = vectors[idx]
+      if (!vec || vec.length === 0) return
+      memoryDatabase.upsertMemoryVector(m.id, cfg.model, vec.length, m.contentHash, Buffer.from(Float32Array.from(vec).buffer))
+    })
+  }
+}
+
+function formatRecall(items: MemoryItem[], mode: 'keyword' | 'hybrid') {
+  return {
+    mode,
+    count: items.length,
+    memories: items.map((m) => ({
+      id: m.id,
+      kind: m.sourceType,
+      content: m.content,
+      about: m.sessionId,
+      importance: m.importance,
+      tags: m.tags,
+    })),
+  }
 }
 
 export function createRemember(scope: AgentScope) {
@@ -78,23 +127,32 @@ export function createRecall(scope: AgentScope) {
     execute: async ({ query, about, limit }) => {
       try {
         const sessionId = resolveAbout(about, scope)
-        const hits = memoryDatabase.searchMemoryItemsByKeyword({
-          query,
-          ...(sessionId ? { sessionId } : {}),
-          sourceTypes: ['profile', 'fact'],
-          limit,
-        })
-        return {
-          count: hits.length,
-          memories: hits.map((h) => ({
-            id: h.item.id,
-            kind: h.item.sourceType,
-            content: h.item.content,
-            about: h.item.sessionId,
-            importance: h.item.importance,
-            tags: h.item.tags,
-          })),
+        const filter = { ...(sessionId ? { sessionId } : {}), sourceTypes: VECTOR_KINDS }
+        // 关键词路：始终算（也作为向量不可用时的回退）
+        const keywordHits = memoryDatabase.searchMemoryItemsByKeyword({ query, ...filter, limit: limit * 2 })
+
+        const cfg = getEmbeddingConfig()
+        if (isEmbeddingReady(cfg)) {
+          try {
+            await ensureMemoryVectors(cfg, sessionId)
+            const queryVec = await embedQuery(query, cfg)
+            const vectorHits = memoryDatabase.searchMemoryVectors(queryVec, cfg.model, { ...filter, limit: limit * 2 })
+            if (vectorHits.length > 0) {
+              // 向量 + 关键词按排名 RRF 融合（key=记忆 id）
+              const merged = reciprocalRankFusion<MemoryItem>(
+                [
+                  vectorHits.map((h, i) => ({ item: h.item, rank: i + 1 })),
+                  keywordHits.map((h, i) => ({ item: h.item, rank: i + 1 })),
+                ],
+                (item) => String(item.id),
+              )
+              return formatRecall(merged.slice(0, limit).map((m) => m.item), 'hybrid')
+            }
+          } catch {
+            /* 向量任一步失败（未建/API 错）→ 落回关键词 */
+          }
         }
+        return formatRecall(keywordHits.slice(0, limit).map((h) => h.item), 'keyword')
       } catch (e) {
         return { error: e instanceof Error ? e.message : String(e) }
       }

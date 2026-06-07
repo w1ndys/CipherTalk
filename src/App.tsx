@@ -417,7 +417,6 @@ function App() {
   if (isMomentsWindow) {
     return (
       <div className="standalone-window">
-        <TitleBar variant="standalone" className="moments-title-bar" />
         <MomentsWindow />
       </div>
     )

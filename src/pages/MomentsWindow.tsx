@@ -1,12 +1,13 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
+import { Button, Card } from '@heroui/react'
 import { Loader2, RefreshCw, Search, Calendar, User, X, Filter, AlertTriangle, Play, Download, Heart, Copy, Link, Music, FileDown, ArrowUp, ChevronLeft, ChevronRight, Newspaper } from 'lucide-react'
 import { ImagePreview } from '../components/ImagePreview'
 import { LivePhotoIcon } from '../components/LivePhotoIcon'
 import { parseWechatEmoji, parseWechatEmojiHtml } from '../utils/wechatEmoji'
-import { useTitleBarStore } from '../stores/titleBarStore'
+import TitleBar from '../components/TitleBar'
 import JumpToDateDialog from '../components/JumpToDateDialog'
 import DateRangePicker from '../components/DateRangePicker'
-import './MomentsWindow.scss'
+import './MomentsWindow.css'
 
 export interface SnsShareInfo {
   title: string
@@ -818,7 +819,6 @@ function MomentsWindow() {
   const [error, setError] = useState<string | null>(null)
 
   // 筛选状态
-  const [searchKeyword, setSearchKeyword] = useState('')
   const [selectedUsernames, setSelectedUsernames] = useState<string[]>(() => {
     const p = new URLSearchParams(window.location.search)
     const u = p.get('filterUsername')
@@ -838,25 +838,6 @@ function MomentsWindow() {
   // 导出状态
   const [exporting, setExporting] = useState(false)
   const [showExportOptions, setShowExportOptions] = useState(false)
-
-  // 标题与右侧操作交给窗口级标题栏（由 App 渲染），本页只写入 store
-  const setTitleBarTitle = useTitleBarStore(state => state.setTitle)
-  const setTitleBarRightContent = useTitleBarStore(state => state.setRightContent)
-  useEffect(() => {
-    setTitleBarTitle('朋友圈')
-    setTitleBarRightContent(
-      <div className="title-actions">
-        <button className="export-btn" onClick={() => setShowExportOptions(true)} data-tooltip="导出">
-          <FileDown size={14} />
-          <span>导出</span>
-        </button>
-      </div>
-    )
-    return () => {
-      setTitleBarTitle(null)
-      setTitleBarRightContent(null)
-    }
-  }, [setTitleBarTitle, setTitleBarRightContent])
   const [exportDateRange, setExportDateRange] = useState<{ start: string, end: string }>({ start: '', end: '' })
   const [exportOptions, setExportOptions] = useState({
     includeImages: true
@@ -885,7 +866,7 @@ function MomentsWindow() {
       if (scrollContainerRef.current) scrollContainerRef.current.scrollTo({ top: 0, behavior: 'smooth' })
     }
     isInitialLoad.current = false
-  }, [searchKeyword, selectedUsernames, jumpTargetDate])
+  }, [selectedUsernames, jumpTargetDate])
 
   const handleScroll = (e: React.UIEvent<HTMLDivElement>) => {
     setShowGoTop(e.currentTarget.scrollTop > 500)
@@ -989,7 +970,7 @@ function MomentsWindow() {
         currentLimit,
         currentOffset,
         selectedUsernames,
-        searchKeyword,
+        undefined,
         startTs,
         endTs
       )
@@ -1032,12 +1013,12 @@ function MomentsWindow() {
       setLoadingNewer(false)
       loadingRef.current = false
     }
-  }, [selectedUsernames, searchKeyword, jumpTargetDate])
+  }, [selectedUsernames, jumpTargetDate])
 
   // 监听筛选条件变化，自动重置加载
   useEffect(() => {
     loadPosts({ reset: true })
-  }, [selectedUsernames, searchKeyword, jumpTargetDate]) // Removed loadPosts dependency to avoid loop
+  }, [selectedUsernames, jumpTargetDate]) // Removed loadPosts dependency to avoid loop
 
   // 无限滚动
   useEffect(() => {
@@ -1075,7 +1056,6 @@ function MomentsWindow() {
   }
 
   const clearFilters = () => {
-    setSearchKeyword('')
     setSelectedUsernames([])
     setJumpTargetDate(undefined)
   }
@@ -1114,7 +1094,7 @@ function MomentsWindow() {
         const res = await window.electronAPI.sns.getTimeline(
           batchSize, offset,
           selectedUsernames.length > 0 ? selectedUsernames : undefined,
-          searchKeyword || undefined,
+          undefined,
           startTs,
           endTs
         )
@@ -1604,7 +1584,7 @@ document.querySelectorAll('.vi video').forEach(function(v) {
         setExportProgress({ current: 0, total: 0, status: '' })
       }, 3000)
     }
-  }, [exporting, selectedUsernames, searchKeyword, exportOptions, exportDateRange])
+  }, [exporting, selectedUsernames, exportOptions, exportDateRange])
 
   const filteredContacts = contacts.filter(c =>
     c.displayName.toLowerCase().includes(contactSearch.toLowerCase()) ||
@@ -1613,9 +1593,9 @@ document.querySelectorAll('.vi video').forEach(function(v) {
 
   return (
     <div className="moments-window">
-      <div className="moments-container">
-        {/* 侧边栏 (左侧) */}
-        <aside className={`sns-sidebar ${isSidebarOpen ? 'open' : 'closed'}`}>
+      {/* 侧边栏 (左侧) */}
+      <aside className={`sns-sidebar ${isSidebarOpen ? 'open' : 'closed'}`}>
+          <div className="moments-sidebar-drag-region" aria-hidden="true" />
           <div className="sidebar-toolbar">
             {isSidebarOpen && (
               <div className="sidebar-toolbar-title">
@@ -1624,60 +1604,40 @@ document.querySelectorAll('.vi video').forEach(function(v) {
               </div>
             )}
             <div className="sidebar-toolbar-actions">
-              <button
-                className="sidebar-tool-btn"
-                onClick={() => loadPosts({ reset: true })}
-                disabled={isLoading}
-                data-tooltip="刷新"
-                aria-label="刷新朋友圈"
-              >
-                <RefreshCw size={16} className={isLoading ? 'spinning' : ''} />
-              </button>
-              <button
-                className={`sidebar-tool-btn sidebar-toggle-btn ${isSidebarOpen ? 'active' : ''}`}
-                onClick={() => setIsSidebarOpen(!isSidebarOpen)}
-                data-tooltip={isSidebarOpen ? '收起筛选' : '展开筛选'}
+              <Button
+                type="button"
+                className="sidebar-toggle-btn"
+                variant={isSidebarOpen ? 'secondary' : 'ghost'}
+                size="sm"
+                isIconOnly
+                onPress={() => setIsSidebarOpen(!isSidebarOpen)}
                 aria-label={isSidebarOpen ? '收起筛选' : '展开筛选'}
               >
                 {isSidebarOpen ? <ChevronLeft size={16} /> : <ChevronRight size={16} />}
-              </button>
+              </Button>
             </div>
           </div>
 
           {isSidebarOpen && (
             <>
               <div className="filter-content custom-scrollbar">
-                {/* 1. 搜索 */}
-                <div className="filter-card">
-                  <div className="filter-section">
-                    <label><Search size={14} /> 关键词搜索</label>
-                    <div className="search-input-wrapper">
-                      <Search size={14} className="input-icon" />
-                      <input
-                        type="text"
-                        placeholder="搜索动态内容..."
-                        value={searchKeyword}
-                        onChange={e => setSearchKeyword(e.target.value)}
-                      />
-                      {searchKeyword && (
-                        <button className="clear-input" onClick={() => setSearchKeyword('')}>
-                          <X size={14} />
-                        </button>
-                      )}
-                    </div>
-                  </div>
-                </div>
-
-                {/* 2. 日期 */}
+                {/* 1. 日期 */}
                 <div className="filter-card jump-date-card">
                   <div className="filter-section">
                     <label><Calendar size={14} /> 时间跳转</label>
-                    <button className={`jump-date-btn ${jumpTargetDate ? 'active' : ''}`} onClick={() => setShowJumpDialog(true)}>
+                    <Button
+                      type="button"
+                      className="jump-date-btn"
+                      variant={jumpTargetDate ? 'secondary' : 'outline'}
+                      size="sm"
+                      fullWidth
+                      onPress={() => setShowJumpDialog(true)}
+                    >
                       <span className="text">
                         {jumpTargetDate ? jumpTargetDate.toLocaleDateString('zh-CN', { year: 'numeric', month: 'long', day: 'numeric' }) : '选择跳转日期...'}
                       </span>
                       <Calendar size={14} className="icon" />
-                    </button>
+                    </Button>
                     {jumpTargetDate && (
                       <button className="clear-jump-date-inline" onClick={() => setJumpTargetDate(undefined)}>
                         返回最新动态
@@ -1686,7 +1646,7 @@ document.querySelectorAll('.vi video').forEach(function(v) {
                   </div>
                 </div>
 
-                {/* 3. 联系人 */}
+                {/* 2. 联系人 */}
                 <div className="filter-card contact-card">
                   <div className="contact-filter-section">
                     <div className="section-header">
@@ -1736,17 +1696,52 @@ document.querySelectorAll('.vi video').forEach(function(v) {
                 </div>
               </div>
               <div className="sidebar-footer">
-                <button className="clear-btn" onClick={clearFilters}>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  fullWidth
+                  onPress={clearFilters}
+                >
                   <RefreshCw size={14} />
                   重置所有筛选
-                </button>
+                </Button>
               </div>
             </>
           )}
-        </aside>
+      </aside>
 
+      <div className="moments-workspace">
+        <TitleBar
+          className="moments-title-bar"
+          showTitle={false}
+          variant="app"
+        />
         {/* 主内容区 */}
         <div className="moments-main">
+          <div className="moments-main-actions">
+            <Button
+              type="button"
+              variant="secondary"
+              size="sm"
+              isIconOnly
+              onPress={() => loadPosts({ reset: true })}
+              isDisabled={isLoading}
+              aria-label="刷新朋友圈"
+            >
+              <RefreshCw size={16} className={isLoading ? 'spinning' : ''} />
+            </Button>
+            <Button
+              type="button"
+              variant="secondary"
+              size="sm"
+              isIconOnly
+              onPress={() => setShowExportOptions(true)}
+              aria-label="导出"
+            >
+              <FileDown size={16} />
+            </Button>
+          </div>
           <div className="moments-content-wrapper">
             <div className="moments-content custom-scrollbar" ref={scrollContainerRef} onScroll={handleScroll}>
               {isLoading ? (
@@ -1763,7 +1758,7 @@ document.querySelectorAll('.vi video').forEach(function(v) {
                 <div className="moments-placeholder">
                   <Search size={64} opacity={0.3} />
                   <p>暂无朋友圈动态</p>
-                  {(selectedUsernames.length > 0 || searchKeyword || jumpTargetDate) && (
+                  {(selectedUsernames.length > 0 || jumpTargetDate) && (
                     <button onClick={clearFilters} style={{ marginTop: 10 }}>重置筛选条件</button>
                   )}
                 </div>
@@ -1924,9 +1919,16 @@ document.querySelectorAll('.vi video').forEach(function(v) {
             </div>
           </div>
           {showGoTop && (
-            <button className="go-to-top-btn" onClick={scrollToTop} aria-label="返回顶部">
+            <Button
+              type="button"
+              className="go-to-top-btn"
+              variant="secondary"
+              isIconOnly
+              onPress={scrollToTop}
+              aria-label="返回顶部"
+            >
               <ArrowUp size={20} />
-            </button>
+            </Button>
           )}
         </div>
       </div>
@@ -1988,16 +1990,23 @@ document.querySelectorAll('.vi video').forEach(function(v) {
       {
         showExportOptions && (
           <div className="modal-overlay">
-            <div className="export-modal fade-in">
-              <div className="export-modal-header">
-                <h3>导出朋友圈</h3>
+            <Card className="export-modal fade-in gap-0 p-0">
+              <Card.Header className="export-modal-header">
+                <Card.Title className="export-modal-title">导出朋友圈</Card.Title>
                 {!exporting && (
-                  <button className="close-btn" onClick={() => setShowExportOptions(false)}>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    isIconOnly
+                    onPress={() => setShowExportOptions(false)}
+                    aria-label="关闭导出弹框"
+                  >
                     <X size={20} />
-                  </button>
+                  </Button>
                 )}
-              </div>
-              <div className="export-modal-body">
+              </Card.Header>
+              <Card.Content className="export-modal-body">
                 {exporting ? (
                   <div className="exporting-view">
                     <Loader2 size={36} className="spin progress-icon" />
@@ -2038,16 +2047,16 @@ document.querySelectorAll('.vi video').forEach(function(v) {
                     </div>
                   </div>
                 )}
-              </div>
+              </Card.Content>
               {!exporting && (
-                <div className="export-modal-footer">
-                  <button className="btn-cancel" onClick={() => setShowExportOptions(false)}>取消</button>
-                  <button className="btn-primary" onClick={handleExport}>
+                <Card.Footer className="export-modal-footer">
+                  <Button type="button" variant="tertiary" onPress={() => setShowExportOptions(false)}>取消</Button>
+                  <Button type="button" onPress={handleExport}>
                     <FileDown size={14} /> 开始导出
-                  </button>
-                </div>
+                  </Button>
+                </Card.Footer>
               )}
-            </div>
+            </Card>
           </div>
         )
       }

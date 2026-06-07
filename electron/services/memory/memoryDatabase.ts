@@ -1,4 +1,5 @@
 import Database from 'better-sqlite3'
+import { cosineSimilarity } from 'ai'
 import { createHash } from 'crypto'
 import { existsSync, mkdirSync } from 'fs'
 import { dirname, join } from 'path'
@@ -297,7 +298,17 @@ export class MemoryDatabase {
         ON memory_items(content_hash);
     `)
 
-    db.exec('DROP TABLE IF EXISTS memory_embeddings;')
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS memory_embeddings (
+        memory_id    INTEGER NOT NULL,
+        model_id     TEXT NOT NULL,
+        dim          INTEGER NOT NULL,
+        content_hash TEXT NOT NULL,
+        embedding    BLOB NOT NULL,
+        indexed_at   INTEGER NOT NULL,
+        PRIMARY KEY (memory_id, model_id)
+      );
+    `)
 
     db.exec(`
       CREATE VIRTUAL TABLE IF NOT EXISTS memory_items_fts USING fts5(
@@ -559,6 +570,7 @@ export class MemoryDatabase {
   deleteMemoryItem(id: number): boolean {
     const db = this.getDb()
     db.prepare('DELETE FROM memory_items_fts WHERE rowid = ?').run(id)
+    db.prepare('DELETE FROM memory_embeddings WHERE memory_id = ?').run(id)
     const result = db.prepare('DELETE FROM memory_items WHERE id = ?').run(id)
     return result.changes > 0
   }
@@ -582,6 +594,75 @@ export class MemoryDatabase {
       }
     }
     return { removed, groups: groups.size, scanned: all.length }
+  }
+
+  // ===== 语义检索：记忆向量（memory_embeddings，Float32 blob，与 messageVectorService 同套存取）=====
+
+  /** 写入/更新某记忆在某嵌入模型下的向量。 */
+  upsertMemoryVector(memoryId: number, modelId: string, dim: number, contentHash: string, embedding: Buffer): void {
+    this.getDb().prepare(`
+      INSERT INTO memory_embeddings (memory_id, model_id, dim, content_hash, embedding, indexed_at)
+      VALUES (@memoryId, @modelId, @dim, @contentHash, @embedding, @indexedAt)
+      ON CONFLICT(memory_id, model_id) DO UPDATE SET
+        dim = excluded.dim,
+        content_hash = excluded.content_hash,
+        embedding = excluded.embedding,
+        indexed_at = excluded.indexed_at
+    `).run({ memoryId, modelId, dim, contentHash, embedding, indexedAt: nowMs() })
+  }
+
+  /** 某模型下已建向量的元信息（memory_id → {contentHash, dim}），供懒构建判断哪些缺失/过期。 */
+  getVectorMeta(modelId: string): Map<number, { contentHash: string; dim: number }> {
+    const rows = this.getDb().prepare(
+      'SELECT memory_id, content_hash, dim FROM memory_embeddings WHERE model_id = ?'
+    ).all(modelId) as Array<{ memory_id: number; content_hash: string; dim: number }>
+    const map = new Map<number, { contentHash: string; dim: number }>()
+    for (const row of rows) map.set(Number(row.memory_id), { contentHash: row.content_hash, dim: Number(row.dim) })
+    return map
+  }
+
+  /** 向量 KNN：对候选记忆算 cosine，降序返回 {item, score}。维度不符的旧向量跳过。 */
+  searchMemoryVectors(
+    queryVec: number[],
+    modelId: string,
+    opts: { sourceTypes?: MemorySourceType[]; sessionId?: string; limit?: number } = {}
+  ): Array<{ item: MemoryItem; score: number }> {
+    const db = this.getDb()
+    const clauses: string[] = ['e.model_id = @modelId']
+    const params: Record<string, unknown> = { modelId }
+    if (opts.sessionId) {
+      clauses.push('m.session_id = @sessionId')
+      params.sessionId = opts.sessionId
+    }
+    const sourceTypes = Array.from(new Set((opts.sourceTypes || []).filter((t) => MEMORY_SOURCE_TYPES.includes(t))))
+    if (sourceTypes.length > 0) {
+      const placeholders = sourceTypes.map((_, i) => `@st${i}`)
+      sourceTypes.forEach((t, i) => { params[`st${i}`] = t })
+      clauses.push(`m.source_type IN (${placeholders.join(', ')})`)
+    }
+    const rows = db.prepare(`
+      SELECT m.*, e.dim AS e_dim, e.embedding AS e_embedding
+      FROM memory_embeddings e
+      JOIN memory_items m ON m.id = e.memory_id
+      WHERE ${clauses.join(' AND ')}
+    `).all(params) as Array<MemoryItemRow & { e_dim: number; e_embedding: Buffer }>
+
+    const scored: Array<{ item: MemoryItem; score: number }> = []
+    for (const row of rows) {
+      if (Number(row.e_dim) !== queryVec.length) continue
+      const buf = row.e_embedding
+      const ab = buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength)
+      const vec = Array.from(new Float32Array(ab))
+      let score = 0
+      try {
+        score = cosineSimilarity(queryVec, vec)
+      } catch {
+        continue
+      }
+      scored.push({ item: toMemoryItem(row), score })
+    }
+    scored.sort((a, b) => b.score - a.score)
+    return scored.slice(0, Math.max(1, Math.floor(opts.limit || 10)))
   }
 
   getStats(): MemoryDatabaseStats {

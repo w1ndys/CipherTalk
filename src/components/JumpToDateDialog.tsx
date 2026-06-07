@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react'
-import { Calendar as CalendarIcon, X } from 'lucide-react'
-import AppDatePicker, { formatDateValue, parseDateValue } from './AppDatePicker'
-import './JumpToDateDialog.scss'
+import { Button, Calendar, Modal } from '@heroui/react'
+import { getLocalTimeZone, parseDate, today, type DateValue } from '@internationalized/date'
+import { Calendar as CalendarIcon } from 'lucide-react'
+import { formatDateValue, parseDateValue } from './AppDatePicker'
 
 interface JumpToDateDialogProps {
   isOpen: boolean
@@ -10,8 +11,19 @@ interface JumpToDateDialogProps {
   currentDate?: Date | null
 }
 
+function toDateValue(value: string): DateValue | null {
+  if (!value) return null
+
+  try {
+    return parseDate(value)
+  } catch {
+    return null
+  }
+}
+
 function JumpToDateDialog({ isOpen, onClose, onSelect, currentDate }: JumpToDateDialogProps) {
   const [selectedDate, setSelectedDate] = useState('')
+  const maxValue = today(getLocalTimeZone())
 
   useEffect(() => {
     if (isOpen) {
@@ -19,41 +31,65 @@ function JumpToDateDialog({ isOpen, onClose, onSelect, currentDate }: JumpToDate
     }
   }, [isOpen, currentDate])
 
-  if (!isOpen) return null
-
-  const handleCommit = (dateValue: string) => {
-    const date = parseDateValue(dateValue)
+  const handleJump = () => {
+    const date = parseDateValue(selectedDate)
     if (!date) return
     onSelect(date)
     onClose()
   }
 
-  return (
-    <div className="jump-date-overlay" onClick={onClose}>
-      <div className="jump-date-modal" onClick={event => event.stopPropagation()}>
-        <div className="jump-date-header">
-          <div className="jump-date-title-row">
-            <CalendarIcon size={18} />
-            <h3>选择日期</h3>
-          </div>
-          <button className="jump-date-close-btn" onClick={onClose} aria-label="关闭日期选择">
-            <X size={18} />
-          </button>
-        </div>
+  const handleOpenChange = (open: boolean) => {
+    if (!open) onClose()
+  }
 
-        <AppDatePicker
-          mode="single"
-          inline
-          className="jump-date-inline-picker"
-          value={selectedDate}
-          onChange={setSelectedDate}
-          onCommit={handleCommit}
-          placeholder="选择日期"
-          confirmLabel="跳转"
-          showClear={false}
-        />
-      </div>
-    </div>
+  return (
+    <Modal.Backdrop isOpen={isOpen} onOpenChange={handleOpenChange}>
+      <Modal.Container>
+        <Modal.Dialog className="sm:max-w-90">
+          <Modal.CloseTrigger />
+          <Modal.Header>
+            <Modal.Icon>
+              <CalendarIcon size={18} />
+            </Modal.Icon>
+            <Modal.Heading>选择日期</Modal.Heading>
+          </Modal.Header>
+          <Modal.Body>
+            <Calendar
+              aria-label="选择跳转日期"
+              value={toDateValue(selectedDate)}
+              maxValue={maxValue}
+              onChange={(date) => setSelectedDate(date.toString())}
+            >
+              <Calendar.Header>
+                <Calendar.YearPickerTrigger>
+                  <Calendar.YearPickerTriggerHeading />
+                  <Calendar.YearPickerTriggerIndicator />
+                </Calendar.YearPickerTrigger>
+                <Calendar.NavButton slot="previous" />
+                <Calendar.NavButton slot="next" />
+              </Calendar.Header>
+              <Calendar.Grid>
+                <Calendar.GridHeader>
+                  {(day) => <Calendar.HeaderCell>{day}</Calendar.HeaderCell>}
+                </Calendar.GridHeader>
+                <Calendar.GridBody>
+                  {(date) => <Calendar.Cell date={date} />}
+                </Calendar.GridBody>
+              </Calendar.Grid>
+              <Calendar.YearPickerGrid>
+                <Calendar.YearPickerGridBody>
+                  {({ year }) => <Calendar.YearPickerCell year={year} />}
+                </Calendar.YearPickerGridBody>
+              </Calendar.YearPickerGrid>
+            </Calendar>
+          </Modal.Body>
+          <Modal.Footer>
+            <Button type="button" variant="tertiary" slot="close">取消</Button>
+            <Button type="button" onPress={handleJump} isDisabled={!selectedDate}>跳转</Button>
+          </Modal.Footer>
+        </Modal.Dialog>
+      </Modal.Container>
+    </Modal.Backdrop>
   )
 }
 
