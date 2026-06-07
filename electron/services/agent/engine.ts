@@ -2,7 +2,8 @@
  * 编排引擎 —— 用 AI SDK 的 ToolLoopAgent 跑 ReAct 循环，流式产出 UIMessageChunk。
  * 运行在 AI utilityProcess 子进程内（见文档 §3.1/§5.2）。
  */
-import { generateText, ToolLoopAgent, stepCountIs, type ModelMessage, type ProviderOptions, type StepResult, type ToolSet, type UIMessageChunk } from 'ai'
+import { generateText, ToolLoopAgent, stepCountIs, type ModelMessage, type StepResult, type ToolSet, type UIMessageChunk } from 'ai'
+import type { ProviderOptions } from '@ai-sdk/provider-utils'
 import { createLanguageModel } from './provider'
 import { buildSystemPrompt } from './prompts'
 import { buildTools } from './tools'
@@ -159,7 +160,7 @@ export async function runAgent(
     reportAgentProgress({ stage: 'run_started', title: '开始分析聊天记录' })
     const memoryContext = await buildMemoryContext(input.scope)
     const tools = withToolTimeouts(buildTools(input.scope, input.providerConfig, input.mcpTools))
-    const toolNames = Object.keys(tools)
+    const activeToolNames = Object.keys(tools)
     const agent = new ToolLoopAgent({
       model: createLanguageModel(input.providerConfig),
       instructions: buildSystemPrompt(input.scope, input.skills) + memoryContext,
@@ -170,7 +171,7 @@ export async function runAgent(
       // 每步压缩上下文（裁旧工具结果/推理痕迹，见 compaction.ts）+ query_sql 门控（见 activeToolsFor）
       prepareStep: ({ messages, steps }) => ({
         messages: compactMessages(messages),
-        activeTools: activeToolsFor(steps, toolNames),
+        activeTools: activeToolsFor(steps, activeToolNames),
       }),
     })
 
