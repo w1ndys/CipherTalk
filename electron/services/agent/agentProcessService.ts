@@ -14,7 +14,30 @@ import type { AgentProgressEvent, AgentProviderConfig, AgentRunInput } from './t
 const UTILITY_FILE = 'aiAgentUtilityProcess.js'
 const RESTART_DELAY_MS = 2000
 
-type Pending = { resolve: (value: any) => void; reject: (reason: any) => void }
+type Pending = {
+  resolve: (value: any) => void
+  reject: (reason: any) => void
+  type: string
+  startedAt: number
+}
+
+type AgentProcessLogger = {
+  debug?(category: string, message: string, data?: any): void
+  info(category: string, message: string, data?: any): void
+  warn(category: string, message: string, data?: any): void
+  error(category: string, message: string, data?: any): void
+}
+
+function errorToLogData(error: unknown): Record<string, unknown> {
+  if (error instanceof Error) {
+    return { name: error.name, message: error.message, stack: error.stack }
+  }
+  return { message: String(error) }
+}
+
+function truncateLogText(text: string, maxLength = 2000): string {
+  return text.length > maxLength ? `${text.slice(0, maxLength)}...<truncated>` : text
+}
 
 export class AgentProcessService {
   private worker: UtilityProcess | null = null
@@ -26,6 +49,11 @@ export class AgentProcessService {
   private initPromise: Promise<void> | null = null
   private restartTimer: NodeJS.Timeout | null = null
   private shuttingDown = false
+  private logger: AgentProcessLogger | null = null
+
+  setLogger(logger: AgentProcessLogger | null): void {
+    this.logger = logger
+  }
 
   /** 连通性自检：返回 'pong'。 */
   async ping(): Promise<string> {
@@ -87,12 +115,22 @@ export class AgentProcessService {
       const utilityPath = this.resolveUtilityPath()
       if (!utilityPath) {
         this.initPromise = null
+        this.logger?.error('AIAgentProcess', `未找到 ${UTILITY_FILE}`, {
+          candidates: this.getUtilityPathCandidates(),
+          packaged: isElectronPackaged(),
+          appPath: getAppPath(),
+          resourcesPath: process.resourcesPath || null,
+        })
         reject(new Error(`未找到 ${UTILITY_FILE}`))
         return
       }
 
       let worker: UtilityProcess
       try {
+        this.logger?.warn('AIAgentProcess', '准备启动 AI Agent utility process', {
+          utilityPath,
+          packaged: isElectronPackaged(),
+        })
         worker = utilityProcess.fork(utilityPath, [], {
           serviceName: 'CipherTalk AI Agent',
           stdio: 'pipe',
@@ -100,6 +138,7 @@ export class AgentProcessService {
         })
       } catch (e: any) {
         this.initPromise = null
+        this.logger?.error('AIAgentProcess', '启动 AI Agent utility process 失败', errorToLogData(e))
         reject(new Error(`启动 AI agent utility process 失败: ${e?.message || String(e)}`))
         return
       }
@@ -112,15 +151,30 @@ export class AgentProcessService {
 
       worker.on('spawn', () => {
         console.info(`[agentProcessService] utility process spawned pid=${worker.pid ?? 'unknown'}`)
+        this.logger?.warn('AIAgentProcess', 'AI Agent utility process 已启动', {
+          pid: worker.pid ?? null,
+        })
       })
 
       worker.stdout?.on('data', (chunk: Buffer) => {
         const text = chunk.toString().trim()
-        if (text) console.log(`[aiAgentUtility:${worker.pid ?? 'unknown'}] ${text}`)
+        if (text) {
+          console.log(`[aiAgentUtility:${worker.pid ?? 'unknown'}] ${text}`)
+          this.logger?.debug?.('AIAgentProcess', 'AI Agent utility stdout', {
+            pid: worker.pid ?? null,
+            text: truncateLogText(text),
+          })
+        }
       })
       worker.stderr?.on('data', (chunk: Buffer) => {
         const text = chunk.toString().trim()
-        if (text) console.error(`[aiAgentUtility:${worker.pid ?? 'unknown'}] ${text}`)
+        if (text) {
+          console.error(`[aiAgentUtility:${worker.pid ?? 'unknown'}] ${text}`)
+          this.logger?.warn('AIAgentProcess', 'AI Agent utility stderr', {
+            pid: worker.pid ?? null,
+            text: truncateLogText(text),
+          })
+        }
       })
 
       worker.on('message', (msg: any) => {
@@ -133,7 +187,13 @@ export class AgentProcessService {
           return
         }
         if (msg?.id === 0 && msg.type === 'ready') {
-          if (!readyFired) { readyFired = true; resolve() }
+          if (!readyFired) {
+            readyFired = true
+            this.logger?.warn('AIAgentProcess', 'AI Agent utility process 已就绪', {
+              pid: worker.pid ?? null,
+            })
+            resolve()
+          }
           return
         }
         if (msg?.id === -1 && msg.type === 'chunk') {
@@ -150,13 +210,32 @@ export class AgentProcessService {
           const pending = this.pending.get(msg.id)
           if (!pending) return
           this.pending.delete(msg.id)
-          if (msg.error) pending.reject(new Error(msg.error))
-          else pending.resolve(msg.result)
+          if (msg.error) {
+            this.logger?.error('AIAgentProcess', 'AI Agent utility 调用失败', {
+              id: msg.id,
+              type: pending.type,
+              elapsedMs: Date.now() - pending.startedAt,
+              error: msg.error,
+            })
+            pending.reject(new Error(msg.error))
+          } else {
+            this.logger?.debug?.('AIAgentProcess', 'AI Agent utility 调用完成', {
+              id: msg.id,
+              type: pending.type,
+              elapsedMs: Date.now() - pending.startedAt,
+            })
+            pending.resolve(msg.result)
+          }
         }
       })
 
       worker.on('error', (type, location) => {
         console.error('[agentProcessService] utility process fatal:', { pid: worker.pid, type, location })
+        this.logger?.error('AIAgentProcess', 'AI Agent utility process fatal', {
+          pid: worker.pid ?? null,
+          type,
+          location,
+        })
         if (this.worker === worker) this.worker = null
         this.initPromise = null
         this.rejectAllPending(`agent utility process fatal (${type})`)
@@ -171,6 +250,11 @@ export class AgentProcessService {
         rejectInitOnce(new Error(`AI agent utility process 启动后立即退出，code=${code}`))
         if (!this.shuttingDown) {
           console.warn(`[agentProcessService] utility process 退出 pid=${pid ?? 'unknown'} code=${code}，${RESTART_DELAY_MS}ms 后自动重启`)
+          this.logger?.warn('AIAgentProcess', 'AI Agent utility process 退出，准备自动重启', {
+            pid: pid ?? null,
+            code,
+            restartDelayMs: RESTART_DELAY_MS,
+          })
           this.scheduleRestart()
         }
       })
@@ -191,17 +275,23 @@ export class AgentProcessService {
       if (this.shuttingDown) return
       this.initWorker().catch((e) => {
         console.error('[agentProcessService] 自动重启失败:', e?.message || e)
+        this.logger?.error('AIAgentProcess', 'AI Agent utility process 自动重启失败', errorToLogData(e))
       })
     }, RESTART_DELAY_MS)
   }
 
   private rejectAllPending(reason: string): void {
     if (this.pending.size === 0) return
+    const count = this.pending.size
     const err = new Error(reason)
     for (const { reject } of this.pending.values()) {
       try { reject(err) } catch { /* ignore */ }
     }
     this.pending.clear()
+    this.logger?.warn('AIAgentProcess', '已拒绝所有等待中的 AI Agent utility 调用', {
+      reason,
+      count,
+    })
   }
 
   /**
@@ -250,20 +340,25 @@ export class AgentProcessService {
     if (!w) throw new Error('AI agent utility process 未就绪')
     const id = ++this.seq
     return new Promise<T>((resolve, reject) => {
-      this.pending.set(id, { resolve, reject })
+      this.pending.set(id, { resolve, reject, type, startedAt: Date.now() })
       try {
         w.postMessage({ id, type, payload })
       } catch (e: any) {
         this.pending.delete(id)
+        this.logger?.error('AIAgentProcess', 'agent postMessage 失败', {
+          id,
+          type,
+          ...errorToLogData(e),
+        })
         reject(new Error(`agent postMessage 失败: ${e?.message || String(e)}`))
       }
     })
   }
 
-  private resolveUtilityPath(): string | null {
+  private getUtilityPathCandidates(): string[] {
     const appPath = getAppPath()
     const resourcesRoot = process.resourcesPath || appPath
-    const candidates = isElectronPackaged()
+    return isElectronPackaged()
       ? [
           join(resourcesRoot, 'app.asar.unpacked', 'dist-electron', UTILITY_FILE),
           join(resourcesRoot, 'app.asar', 'dist-electron', UTILITY_FILE),
@@ -276,7 +371,10 @@ export class AgentProcessService {
           join(__dirname, '..', UTILITY_FILE),
           join(appPath, 'dist-electron', UTILITY_FILE),
         ]
-    return candidates.find((c) => existsSync(c)) || null
+  }
+
+  private resolveUtilityPath(): string | null {
+    return this.getUtilityPathCandidates().find((c) => existsSync(c)) || null
   }
 }
 

@@ -3,7 +3,7 @@ import { existsSync, readFileSync } from 'fs'
 import { join } from 'path'
 import type { UIMessage } from 'ai'
 import type { MainProcessContext } from '../context'
-import type { AgentProviderConfigOverride, AgentScope } from '../../services/agent/types'
+import type { AgentProviderConfig, AgentProviderConfigOverride, AgentScope } from '../../services/agent/types'
 
 /** 进行中的 agent 运行：runId → AbortController，用于取消。 */
 const agentAborters = new Map<string, AbortController>()
@@ -30,7 +30,45 @@ function lastUserTextFromUiMessages(messages: UIMessage[] = []): string {
   return ''
 }
 
-export function registerAiHandlers(_ctx: MainProcessContext): void {
+function scopeToLogData(scope?: AgentScope): Record<string, unknown> {
+  if (!scope || scope.kind === 'global') return { scopeKind: 'global' }
+  return {
+    scopeKind: 'session',
+    sessionId: scope.sessionId,
+    hasDisplayName: Boolean(scope.displayName),
+  }
+}
+
+function hostFromUrl(url: string): string | null {
+  if (!url) return null
+  try {
+    return new URL(url).host || null
+  } catch {
+    return null
+  }
+}
+
+function providerToLogData(providerConfig: AgentProviderConfig): Record<string, unknown> {
+  return {
+    provider: providerConfig.name,
+    protocol: providerConfig.providerKind,
+    model: providerConfig.model,
+    baseURLHost: hostFromUrl(providerConfig.baseURL),
+    hasBaseURL: Boolean(providerConfig.baseURL),
+    hasApiKey: Boolean(providerConfig.apiKey),
+    hasProxy: Boolean(providerConfig.proxyUrl),
+    reasoningEffort: providerConfig.reasoningEffort || null,
+  }
+}
+
+function errorToLogData(error: unknown): Record<string, unknown> {
+  if (error instanceof Error) {
+    return { name: error.name, message: error.message, stack: error.stack }
+  }
+  return { message: String(error) }
+}
+
+export function registerAiHandlers(ctx: MainProcessContext): void {
   // ========= AI Agent（跑在独立 utilityProcess 子进程，主进程仅做 broker）=========
   ipcMain.handle('agent:run', async (event, payload: {
     runId: string
@@ -44,16 +82,41 @@ export function registerAiHandlers(_ctx: MainProcessContext): void {
     const send = (chunk: unknown) => { if (!sender.isDestroyed()) sender.send('agent:chunk', { runId, chunk }) }
     const sendProgress = (progress: unknown) => { if (!sender.isDestroyed()) sender.send('agent:progress', { runId, progress }) }
     const aborter = new AbortController()
+    const logger = ctx.getLogService()
+    const startedAt = Date.now()
+    const scope = payload.scope ?? { kind: 'global' as const }
+    const initialLastUserText = lastUserTextFromUiMessages(payload.messages || [])
+    const baseRunData = {
+      runId,
+      conversationId: payload.conversationId ?? null,
+      messageCount: payload.messages?.length ?? 0,
+      lastUserTextLength: initialLastUserText.length,
+      ...scopeToLogData(scope),
+    }
+    let stage = 'start'
+    let chunkCount = 0
+    let progressCount = 0
+    let lastActivityAt = startedAt
+    let lastActivityKind = 'start'
+    let idleWarningCount = 0
+    let watchdog: NodeJS.Timeout | null = null
     agentAborters.set(runId, aborter)
+    logger?.warn('AIAgent', 'AI Agent 请求开始', baseRunData)
     try {
+      stage = 'import_services'
       const { agentProcessService } = await import('../../services/agent/agentProcessService')
+      agentProcessService.setLogger(logger)
       const { resolveProviderConfig } = await import('../../services/agent/resolveProviderConfig')
       const { refreshResolvedProxyUrl } = await import('../../services/ai/proxyFetch')
       const { convertToModelMessages } = await import('ai')
+      stage = 'refresh_proxy'
       await refreshResolvedProxyUrl() // 主进程探测系统代理并持久化，供子进程 agent/嵌入读取
+      stage = 'resolve_provider'
       const providerConfig = resolveProviderConfig(payload.modelConfig)
+      stage = 'convert_messages'
       const messages = await convertToModelMessages(payload.messages)
       const lastUserText = lastUserTextFromUiMessages(payload.messages)
+      stage = 'load_context_services'
       const { mcpClientService } = await import('../../services/mcpClientService')
       const { buildReadOnlyMcpToolDescriptors } = await import('../../services/agent/mcpToolPolicy')
       const { skillManagerService } = await import('../../services/skillManagerService')
@@ -61,14 +124,20 @@ export function registerAiHandlers(_ctx: MainProcessContext): void {
       const { agentResourceVectorService } = await import('../../services/agent/agentResourceVectorService')
       const readOnlyMcpTools = buildReadOnlyMcpToolDescriptors(mcpClientService.getConnectedToolSchemas())
       let mcpCandidates = readOnlyMcpTools
+      stage = 'select_mcp_candidates'
       if (agentResourceVectorService.isReady()) {
         try {
           const vectorMcpTools = await agentResourceVectorService.searchMcpTools(lastUserText, readOnlyMcpTools, 24)
           if (vectorMcpTools.length > 0) mcpCandidates = vectorMcpTools
         } catch (error) {
           console.warn('[agent:run] MCP vector candidate selection failed, fallback to all read-only tools:', error)
+          logger?.warn('AIAgent', 'MCP 工具向量候选选择失败，回退到全部只读工具', {
+            ...baseRunData,
+            ...errorToLogData(error),
+          })
         }
       }
+      stage = 'rerank_mcp_tools'
       const mcpTools = (await rerankCandidates(
         lastUserText,
         mcpCandidates.map((tool) => ({
@@ -82,6 +151,7 @@ export function registerAiHandlers(_ctx: MainProcessContext): void {
         })),
         { topN: 8 },
       )).items
+      stage = 'select_skills'
       const skills = await skillManagerService.selectSkillsForAgent(lastUserText)
       if (mcpTools.length > 0 || skills.length > 0) {
         console.info('[agent:run] injected context', {
@@ -89,21 +159,81 @@ export function registerAiHandlers(_ctx: MainProcessContext): void {
           skills: skills.map((skill) => skill.name),
         })
       }
+      logger?.warn('AIAgent', 'AI Agent 配置与上下文准备完成', {
+        ...baseRunData,
+        elapsedMs: Date.now() - startedAt,
+        provider: providerToLogData(providerConfig),
+        modelMessageCount: messages.length,
+        readOnlyMcpToolCount: readOnlyMcpTools.length,
+        mcpCandidateCount: mcpCandidates.length,
+        selectedMcpToolCount: mcpTools.length,
+        selectedMcpTools: mcpTools.map((tool) => `${tool.serverName}/${tool.toolName}`),
+        selectedSkillCount: skills.length,
+        selectedSkills: skills.map((skill) => skill.name),
+      })
+      stage = 'run_agent_process'
+      watchdog = setInterval(() => {
+        const idleMs = Date.now() - lastActivityAt
+        if (idleMs < 10000) return
+        if (idleWarningCount >= 6) return
+        idleWarningCount += 1
+        logger?.warn('AIAgent', 'AI Agent 运行中暂无新输出', {
+          ...baseRunData,
+          stage,
+          elapsedMs: Date.now() - startedAt,
+          idleMs,
+          chunkCount,
+          progressCount,
+          lastActivityKind,
+        })
+      }, 15000)
+      logger?.warn('AIAgent', 'AI Agent 已交给 utility process 运行', {
+        ...baseRunData,
+        elapsedMs: Date.now() - startedAt,
+      })
       await agentProcessService.run(
-        { messages, providerConfig, scope: payload.scope ?? { kind: 'global' }, mcpTools, skills },
-        (chunk) => send(chunk),
-        (progress) => sendProgress(progress),
+        { messages, providerConfig, scope, mcpTools, skills },
+        (chunk) => {
+          chunkCount += 1
+          lastActivityAt = Date.now()
+          lastActivityKind = 'chunk'
+          idleWarningCount = 0
+          send(chunk)
+        },
+        (progress) => {
+          progressCount += 1
+          lastActivityAt = Date.now()
+          lastActivityKind = 'progress'
+          idleWarningCount = 0
+          sendProgress(progress)
+        },
         aborter.signal,
       )
+      stage = 'done'
       send('[DONE]')
+      logger?.warn('AIAgent', 'AI Agent 请求完成', {
+        ...baseRunData,
+        elapsedMs: Date.now() - startedAt,
+        chunkCount,
+        progressCount,
+      })
       return { success: true }
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e)
+      logger?.error('AIAgent', 'AI Agent 请求失败', {
+        ...baseRunData,
+        stage,
+        elapsedMs: Date.now() - startedAt,
+        chunkCount,
+        progressCount,
+        ...errorToLogData(e),
+      })
       sendProgress({ stage: 'error', title: 'AI 助手运行失败', detail: message, at: Date.now() })
       send({ type: 'error', errorText: message })
       send('[DONE]')
       return { success: false, error: message }
     } finally {
+      if (watchdog) clearInterval(watchdog)
       agentAborters.delete(runId)
     }
   })
@@ -195,6 +325,7 @@ export function registerAiHandlers(_ctx: MainProcessContext): void {
   })
 
   ipcMain.handle('agent:abort', (_e, runId: string) => {
+    ctx.getLogService()?.warn('AIAgent', '收到 AI Agent 取消请求', { runId })
     agentAborters.get(runId)?.abort()
     return { success: true }
   })
