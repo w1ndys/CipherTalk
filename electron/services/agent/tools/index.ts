@@ -18,6 +18,7 @@ import { groupMembers } from './groupMembers'
 import { groupMemberRanking } from './groupMemberRanking'
 import { querySql } from './querySql'
 import { updatePlan } from './updatePlan'
+import { searchMoments, momentsStats } from './moments'
 import { createRemember, createRecall, createListMemories, createForget, createConsolidate } from './memory'
 import { createDelegateAnalysis } from './delegateAnalysis'
 import { buildMcpTools } from './mcpExternal'
@@ -34,6 +35,8 @@ export function buildBaseTools(_scope: AgentScope): ToolSet {
     list_groups: listGroups,
     group_members: groupMembers,
     group_member_ranking: groupMemberRanking,
+    search_moments: searchMoments,
+    moments_stats: momentsStats,
     query_sql: querySql,
     update_plan: updatePlan,
   }
@@ -51,6 +54,8 @@ export function buildSubAgentTools(_scope: AgentScope): ToolSet {
     list_groups: listGroups,
     group_members: groupMembers,
     group_member_ranking: groupMemberRanking,
+    search_moments: searchMoments,
+    moments_stats: momentsStats,
     query_sql: querySql,
   }
 }

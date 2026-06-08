@@ -44,6 +44,7 @@ import {
   WebPreviewNavigation,
   WebPreviewUrl,
 } from "./web-preview";
+import { ChartBlock, parseChartOption } from "./chart-block";
 
 export type MessageProps = HTMLAttributes<HTMLDivElement> & {
   from: UIMessage["role"];
@@ -56,6 +57,7 @@ export const Message = ({ className, from, ...props }: MessageProps) => (
       from === "user" ? "is-user ml-auto justify-end" : "is-assistant",
       className
     )}
+    data-agent-message-role={from}
     {...props}
   />
 );
@@ -355,6 +357,8 @@ const TERMINAL_LANGUAGES = new Set([
   "zsh",
 ]);
 
+const CHART_LANGUAGES = new Set(["chart", "echarts"]);
+
 function normalizeCodeLanguage(language?: string): BundledLanguage {
   const normalized = language?.trim().toLowerCase();
   if (!normalized) return DEFAULT_CODE_LANGUAGE;
@@ -380,6 +384,10 @@ function isTerminalCode(language: string | undefined): boolean {
   return Boolean(language && TERMINAL_LANGUAGES.has(language));
 }
 
+function isChartCode(language: string | undefined): boolean {
+  return Boolean(language && CHART_LANGUAGES.has(language));
+}
+
 type MessageCodeProps = ComponentProps<"code"> & {
   node?: unknown;
   "data-block"?: boolean | string;
@@ -401,6 +409,7 @@ const MessageCode = ({ children, className, ...props }: MessageCodeProps) => {
   const rawLanguage = getRawCodeLanguage(className);
   const canPreviewHtml = isHtmlCode(rawLanguage, code);
   const canRenderTerminal = isTerminalCode(rawLanguage);
+  const chartOption = isChartCode(rawLanguage) ? parseChartOption(code) : null;
   const language = normalizeCodeLanguage(canPreviewHtml && !rawLanguage ? "html" : rawLanguage);
   const handleCopy = async () => {
     if (typeof window === "undefined" || !navigator?.clipboard?.writeText) return;
@@ -415,7 +424,7 @@ const MessageCode = ({ children, className, ...props }: MessageCodeProps) => {
         <div className="min-w-0">
           <ArtifactTitle className="font-mono">{rawLanguage || language}</ArtifactTitle>
           <ArtifactDescription>
-            {showPreview && canPreviewHtml ? "HTML Preview" : canRenderTerminal ? "Terminal" : "Code"}
+            {chartOption ? "ECharts" : showPreview && canPreviewHtml ? "HTML Preview" : canRenderTerminal ? "Terminal" : "Code"}
           </ArtifactDescription>
         </div>
         <ArtifactActions>
@@ -436,7 +445,9 @@ const MessageCode = ({ children, className, ...props }: MessageCodeProps) => {
         </ArtifactActions>
       </ArtifactHeader>
       <ArtifactContent className="p-0">
-        {showPreview && canPreviewHtml ? (
+        {chartOption ? (
+          <ChartBlock className="p-3" option={chartOption} />
+        ) : showPreview && canPreviewHtml ? (
           <WebPreview className="rounded-none border-0" defaultUrl="about:srcdoc">
             <WebPreviewNavigation>
               <WebPreviewUrl readOnly value="about:srcdoc" />

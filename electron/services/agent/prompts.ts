@@ -13,6 +13,8 @@ const TOOL_PROMPT = `
 - list_groups：列出群聊（含成员数，按活跃排序）。
 - group_members：列某个群的成员名单（chatroomId = 群 username，@chatroom 结尾）。
 - group_member_ranking：群内成员发言排行（"群里谁最活跃"）。区分：跨私聊排行用 chat_stats，群内逐成员用这个。
+- search_moments：查询/筛选朋友圈动态（只读），支持发布者 usernames、关键词、时间范围、分页；用于"某人发过什么朋友圈 / 朋友圈里提到 X / 某段时间朋友圈内容"。
+- moments_stats：统计朋友圈动态（只读），用于"朋友圈发帖趋势 / 内容类型占比 / 谁发得多 / 点赞评论最多"，返回适合做图的数据分布。
 - query_sql：【兜底·只读·最后手段】仅当上面结构化工具都答不了时才用；调用前必须说明哪个结构化工具试过、为什么不够；能用结构化工具回答的一律不准写 SQL。
 - delegate_analysis：把"要翻大量消息才能归纳"的重活（总结某人某段时间都聊了啥、梳理某话题来龙去脉）委托给独立子助手，只回结论，原始消息不占你的上下文。简单精确查询别用它，直接 search_messages / chat_stats。
 - update_plan：把复杂任务拆成步骤清单。跨多人/长时间跨度/要综合多轮的问题，先用它列计划，每推进一步重发整份更新后的清单（done/in_progress/pending）。简单一步到位的别用。
@@ -31,6 +33,8 @@ const ROUTING_PROMPT = `
 - 要核对事实、拿可引用的原文出处 → 先 search_messages / semantic_search 拿 anchor，再 get_context
 - "某人某天 / 某段时间聊了啥" → list_contacts 拿 username，再 get_timeline
 - 人名/群名解析 → list_contacts；列群 / 群成员 / 群内发言排行 → list_groups / group_members / group_member_ranking
+- 朋友圈内容查询 → search_moments；朋友圈数量/趋势/占比/点赞评论排行 → moments_stats
+- 用户要求画图/图表/趋势图/占比图/分布图，且你已有结构化数据 → 输出 ECharts option JSON 代码块（语言标记 echarts 或 chart），不要输出 Mermaid。
 - 以上都覆盖不了的特殊结构化查询，且已确认结构化工具不够 → 才轮到 query_sql（兜底，见行为准则）
 
 # 典型链路
@@ -52,6 +56,7 @@ const EVIDENCE_PROMPT = `
 - 时间一律用毫秒时间戳传给工具；anchor 字段原样回传，不要改动。
 - 遇到"要读很多条消息才能归纳"的大任务（长时间跨度的总结/复盘），用 delegate_analysis 委托子助手，别自己把海量原文读进上下文；精确小查询不要委托。
 - 复杂/多步问题（跨多人、长时间跨度、要综合多轮）先用 update_plan 列步骤再动手，每完成一步更新；简单问题别用，直接查。
+- 图表回答使用 ECharts：输出 \`\`\`echarts 的严格 JSON option（不能有注释、函数、尾逗号或 JS 表达式）。常用字段：title、tooltip、legend、dataset、xAxis、yAxis、series；图表后用文字解释关键结论。
 `
 
 const MEMORY_PROMPT = `

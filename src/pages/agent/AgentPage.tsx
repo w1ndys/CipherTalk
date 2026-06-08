@@ -11,9 +11,9 @@ import { Sources, SourcesContent, SourcesTrigger } from '@/components/ai-element
 import { HoverCard, HoverCardContent, HoverCardTrigger } from '@/components/ui/hover-card'
 import {
   Conversation,
-  ConversationAutoScroll,
   ConversationContent,
   ConversationEmptyState,
+  ConversationFocusLatestUser,
   ConversationScrollButton,
 } from '@/components/ai-elements/conversation'
 import { Message, MessageAction, MessageActions, MessageAttachment, MessageAttachments, MessageContent, MessageResponse } from '@/components/ai-elements/message'
@@ -175,6 +175,8 @@ const TOOL_LABELS: Record<string, string> = {
   list_memories: '查看记忆',
   forget: '删除记忆',
   consolidate_memory: '整理记忆',
+  search_moments: '搜索朋友圈',
+  moments_stats: '朋友圈统计',
   auto_memory: '自动记忆',
   final_review: '最终审核',
 }
@@ -978,6 +980,59 @@ type AgentMessageMetadata = {
   rawFinishReason?: string
   modelProvider?: string
   modelId?: string
+  ciphertalk?: {
+    subAgentProgress?: AgentProgressEvent[]
+  }
+}
+
+function isAgentProgressEvent(value: unknown): value is AgentProgressEvent {
+  if (!value || typeof value !== 'object') return false
+  const item = value as Partial<AgentProgressEvent>
+  return typeof item.stage === 'string'
+    && typeof item.title === 'string'
+    && typeof item.at === 'number'
+}
+
+function readSubAgentProgressFromMessage(message: UIMessage): AgentProgressEvent[] {
+  const metadata = (message as { metadata?: AgentMessageMetadata }).metadata
+  const value = metadata?.ciphertalk?.subAgentProgress
+  return Array.isArray(value) ? value.filter(isAgentProgressEvent) : []
+}
+
+function progressSignature(events: AgentProgressEvent[]): string {
+  return JSON.stringify(events.map((event) => ({
+    stage: event.stage,
+    title: event.title,
+    detail: event.detail,
+    toolName: event.toolName,
+    toolCallId: event.toolCallId,
+    depth: event.depth,
+    at: event.at,
+  })))
+}
+
+function attachSubAgentProgressToLastAssistant(messages: UIMessage[], progress: AgentProgressEvent[]): UIMessage[] {
+  if (progress.length === 0) return messages
+  const targetIndex = [...messages].reverse().findIndex((message) => message.role === 'assistant')
+  if (targetIndex < 0) return messages
+  const index = messages.length - 1 - targetIndex
+  const current = readSubAgentProgressFromMessage(messages[index])
+  if (progressSignature(current) === progressSignature(progress)) return messages
+
+  return messages.map((message, i) => {
+    if (i !== index) return message
+    const metadata = ((message as { metadata?: AgentMessageMetadata }).metadata || {}) as AgentMessageMetadata
+    return {
+      ...message,
+      metadata: {
+        ...metadata,
+        ciphertalk: {
+          ...(metadata.ciphertalk || {}),
+          subAgentProgress: progress,
+        },
+      },
+    } as UIMessage
+  })
 }
 
 function finiteNumber(value: unknown): number | undefined {
@@ -1728,16 +1783,21 @@ export default function AgentPage() {
   const lastSavedMessagesRef = useRef('')
   useEffect(() => {
     if (busy || !conversationId || messages.length === 0) return
+    const messagesWithSubAgentProgress = attachSubAgentProgressToLastAssistant(messages, subAgentProgress)
+    if (messagesWithSubAgentProgress !== messages) {
+      setMessages(messagesWithSubAgentProgress)
+      return
+    }
     let signature = ''
     try {
-      signature = JSON.stringify(messages)
+      signature = JSON.stringify(messagesWithSubAgentProgress)
     } catch {
-      signature = `${messages.length}:${Date.now()}`
+      signature = `${messagesWithSubAgentProgress.length}:${Date.now()}`
     }
     if (signature === lastSavedMessagesRef.current) return
     lastSavedMessagesRef.current = signature
-    void persistConversationMessages(conversationId, messages, activeScopeRef.current)
-  }, [busy, conversationId, messages, persistConversationMessages])
+    void persistConversationMessages(conversationId, messagesWithSubAgentProgress, activeScopeRef.current)
+  }, [busy, conversationId, messages, persistConversationMessages, setMessages, subAgentProgress])
 
   // 出处：会话名解析
   const sessionNameMap = useMemo(() => new Map(sessions.map((s) => [s.username, s.displayName])), [sessions])
@@ -1889,7 +1949,10 @@ export default function AgentPage() {
         </div>
       </div>
       <Conversation className="min-h-0 flex-1">
-        <ConversationAutoScroll enabled={status === 'submitted'} trigger={messages.length} />
+        <ConversationFocusLatestUser
+          enabled={messages[messages.length - 1]?.role === 'user'}
+          trigger={messages[messages.length - 1]?.id || messages.length}
+        />
         <ConversationContent className="mx-auto w-full min-w-80 max-w-[82%] py-4">
           {messages.length === 0 ? (
             <ConversationEmptyState
@@ -1905,7 +1968,10 @@ export default function AgentPage() {
               const chainActive = isLastMessage && busy
               const assistantText = message.role === 'assistant' ? messageTextOf(message) : ''
               const userDisplay = message.role === 'user' ? getUserMessageDisplay(message.parts) : null
-              const subAgentEventsForMessage = message.role === 'assistant' && isLastMessage ? subAgentProgress : []
+              const persistedSubAgentEvents = message.role === 'assistant' ? readSubAgentProgressFromMessage(message) : []
+              const subAgentEventsForMessage = message.role === 'assistant'
+                ? (isLastMessage && subAgentProgress.length > 0 ? subAgentProgress : persistedSubAgentEvents)
+                : []
               return (
                 <Message from={message.role} key={message.id}>
                   {userDisplay && <UserMessageMentions mentions={userDisplay.mentions} />}
@@ -2020,6 +2086,7 @@ export default function AgentPage() {
             maxFileSize={8 * 1024 * 1024}
             multiple
             onSubmit={handleSubmit}
+            style={{ '--agent-radius': '14px' } as CSSProperties}
           >
             <PromptInputHeader className="flex-col items-stretch gap-2 border-b">
               <MentionField

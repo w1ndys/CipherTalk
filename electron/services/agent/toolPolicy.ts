@@ -13,6 +13,8 @@ const SQL_GATE_UNLOCK_TOOLS = new Set([
   'list_groups',
   'group_members',
   'group_member_ranking',
+  'search_moments',
+  'moments_stats',
 ])
 
 export function activeToolsFor(steps: ReadonlyArray<StepResult<ToolSet>>, toolNames: string[]): string[] {

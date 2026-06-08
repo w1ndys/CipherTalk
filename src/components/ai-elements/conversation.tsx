@@ -111,6 +111,48 @@ export const ConversationAutoScroll = ({
   return null;
 };
 
+export type ConversationFocusLatestUserProps = {
+  enabled?: boolean;
+  trigger: unknown;
+  topOffsetRatio?: number;
+};
+
+export const ConversationFocusLatestUser = ({
+  enabled = true,
+  trigger,
+  topOffsetRatio = 0.18,
+}: ConversationFocusLatestUserProps) => {
+  const context = useStickToBottomContext();
+  const { contentRef, scrollRef, stopScroll } = context;
+  const didMountRef = useRef(false);
+
+  useEffect(() => {
+    if (!didMountRef.current) {
+      didMountRef.current = true;
+      return;
+    }
+    if (!enabled) return;
+
+    const frame = window.requestAnimationFrame(() => {
+      const scrollElement = scrollRef.current;
+      const contentElement = contentRef.current;
+      if (!scrollElement || !contentElement) return;
+
+      const userMessages = contentElement.querySelectorAll<HTMLElement>('[data-agent-message-role="user"]');
+      const latest = userMessages[userMessages.length - 1];
+      if (!latest) return;
+
+      stopScroll();
+      const targetTop = Math.max(0, latest.offsetTop - scrollElement.clientHeight * topOffsetRatio);
+      scrollElement.scrollTo({ top: targetTop, behavior: "smooth" });
+    });
+
+    return () => window.cancelAnimationFrame(frame);
+  }, [contentRef, enabled, scrollRef, stopScroll, topOffsetRatio, trigger]);
+
+  return null;
+};
+
 export const ConversationScrollButton = ({
   className,
   ...props
