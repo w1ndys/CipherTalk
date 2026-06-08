@@ -2,7 +2,7 @@
  * 编排引擎 —— 用 AI SDK 的 ToolLoopAgent 跑 ReAct 循环，流式产出 UIMessageChunk。
  * 运行在 AI utilityProcess 子进程内（见文档 §3.1/§5.2）。
  */
-import { generateText, ToolLoopAgent, stepCountIs, type ModelMessage, type StepResult, type ToolSet, type UIMessageChunk } from 'ai'
+import { generateText, ToolLoopAgent, stepCountIs, type ModelMessage, type UIMessageChunk } from 'ai'
 import type { ProviderOptions } from '@ai-sdk/provider-utils'
 import { createLanguageModel } from './provider'
 import { buildSystemPrompt } from './prompts'
@@ -12,25 +12,11 @@ import { compactMessages } from './compaction'
 import { runFinalReview, summarizeToolOutput, type ToolOutputSummary } from './finalReview'
 import { loopGuardCondition, withToolTimeouts } from './guards'
 import { reportAgentProgress, withAgentProgress } from './progress'
+import { activeToolsFor } from './toolPolicy'
 import type { AgentProgressReporter, AgentProviderConfig, AgentRunInput } from './types'
 
 const MAX_STEPS = 24
 const DEFAULT_AGENT_TEMPERATURE = 0.2
-
-/**
- * query_sql 门控：只有当模型已经实际用过下列结构化检索/统计工具后，才把 query_sql 放进
- * activeTools 解锁。防止模型一上来就绕过专用工具直接写 SQL —— 结构化工具是一步到位的首选，
- * SQL 只是兜底。模型最差也得先尝试一次结构化工具，下一步才能拿到 SQL，不会卡死。见 prompts.ts「选工具速查」。
- */
-const SQL_GATE_UNLOCK_TOOLS = new Set([
-  'search_messages', 'semantic_search', 'chat_stats',
-  'get_timeline', 'get_context', 'list_groups', 'group_members', 'group_member_ranking',
-])
-
-function activeToolsFor(steps: ReadonlyArray<StepResult<ToolSet>>, toolNames: string[]): string[] {
-  const unlocked = steps.some((step) => step.toolCalls.some((call) => SQL_GATE_UNLOCK_TOOLS.has(call.toolName)))
-  return unlocked ? toolNames : toolNames.filter((name) => name !== 'query_sql')
-}
 
 function toCamelCase(value: string): string {
   return value.replace(/[-_\s]+([a-zA-Z0-9])/g, (_match, char: string) => char.toUpperCase())

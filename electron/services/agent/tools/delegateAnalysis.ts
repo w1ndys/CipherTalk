@@ -11,7 +11,9 @@ import { z } from 'zod'
 import { createLanguageModel } from '../provider'
 import { buildSystemPrompt } from '../prompts'
 import { loopGuardCondition } from '../guards'
+import { compactMessages } from '../compaction'
 import { reportAgentProgress, withSubAgentScope } from '../progress'
+import { activeToolsFor } from '../toolPolicy'
 import type { AgentEvidenceItem } from './shared'
 import type { AgentProviderConfig, AgentScope } from '../types'
 
@@ -49,7 +51,7 @@ const DELEGATE_SUFFIX =
   '\n\n你现在是被主助手委托的【子助手】：只专注完成下面这一个子任务，' +
   '用工具查到的真实数据得出结论，简洁作答并在结论里标注关键出处（时间 + 发送者）。' +
   '不要寒暄、不要复述任务，直接给结论。' +
-  '你自己没有 delegate_analysis 工具，请直接用其它工具完成，不要尝试再委托。'
+  '你自己没有 delegate_analysis、update_plan、记忆工具或 MCP 工具，请直接用读/查/统计工具完成，不要尝试再委托或规划。'
 
 export function createDelegateAnalysis(opts: {
   providerConfig: AgentProviderConfig
@@ -75,12 +77,18 @@ export function createDelegateAnalysis(opts: {
           detail: summarizeProgressDetail(task),
         })
         try {
+          const tools = opts.buildSubTools()
+          const activeToolNames = Object.keys(tools)
           const subAgent = new ToolLoopAgent({
             model: createLanguageModel(opts.providerConfig),
             instructions: buildSystemPrompt(opts.scope) + DELEGATE_SUFFIX,
-            tools: opts.buildSubTools(),
+            tools,
             temperature: DEFAULT_SUB_AGENT_TEMPERATURE,
             stopWhen: [stepCountIs(SUB_AGENT_MAX_STEPS), loopGuardCondition()],
+            prepareStep: ({ messages, steps }) => ({
+              messages: compactMessages(messages),
+              activeTools: activeToolsFor(steps, activeToolNames),
+            }),
           })
           const result = await subAgent.generate({ prompt: task, abortSignal })
           const conclusion = result.text.trim()
