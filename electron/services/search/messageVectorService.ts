@@ -16,6 +16,7 @@ import { cosineSimilarity } from 'ai'
 import { ConfigService } from '../config'
 import { chatSearchIndexService } from './chatSearchIndexService'
 import { embedTexts, embedQuery, getEmbeddingConfig, type EmbeddingConfig } from '../ai/embeddingService'
+import { voiceTranscribeService } from '../voiceTranscribeService'
 
 const VECTOR_DB_NAME = 'chat_vectors.db'
 const DEFAULT_SESSION_CAP = 1500 // 每个会话首次最多纳入的（最近）消息条数，控制成本/时延
@@ -41,6 +42,7 @@ interface SessionMessage {
   localId: number
   sortSeq: number
   createTime: number
+  localType: number
   isSend: number | null
   senderUsername: string | null
   parsedContent: string
@@ -238,11 +240,25 @@ class MessageVectorService {
     onProgress?: VectorBuildProgressReporter,
   ): Promise<number> {
     onProgress?.({ sessionId, stage: 'loading', current: 0, total: 0, indexed: 0, message: '读取会话消息' })
-    const messages = await chatSearchIndexService.listSessionMemoryMessages(sessionId)
-    if (messages.length === 0) {
+    const rawMessages = await chatSearchIndexService.listSessionMemoryMessages(sessionId)
+    if (rawMessages.length === 0) {
       onProgress?.({ sessionId, stage: 'done', current: 0, total: 0, indexed: 0, message: '没有可向量化的消息' })
       return 0
     }
+    const messages: SessionMessage[] = rawMessages.map((m) => {
+      const transcript = Number(m.localType) === 34
+        ? voiceTranscribeService.getCachedTranscript(sessionId, m.createTime) || undefined
+        : undefined
+      return {
+        localId: m.localId,
+        sortSeq: m.sortSeq,
+        createTime: m.createTime,
+        localType: m.localType,
+        isSend: m.isSend,
+        senderUsername: m.senderUsername,
+        parsedContent: transcript || m.parsedContent,
+      }
+    })
     const db = this.getDb()
     const existingCount = this.countChunks(db, sessionId)
 

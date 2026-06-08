@@ -3,6 +3,7 @@ import { existsSync, mkdirSync } from 'fs'
 import { join } from 'path'
 import { chatService, type Message } from '../chatService'
 import { ConfigService } from '../config'
+import { voiceTranscribeService } from '../voiceTranscribeService'
 
 export type ChatSearchIndexProgressStage =
   | 'preparing_index'
@@ -137,7 +138,7 @@ function uniqueStrings(values: string[]): string[] {
   return result
 }
 
-function extractMessageSearchText(message: Message): string {
+function extractMessageSearchText(message: Message, transcript?: string): string {
   const chatRecordText = Array.isArray(message.chatRecordList)
     ? message.chatRecordList
       .flatMap((item) => [
@@ -155,7 +156,7 @@ function extractMessageSearchText(message: Message): string {
       case 3:
         return '[图片]'
       case 34:
-        return '[语音]'
+        return transcript || '[语音]'
       case 43:
         return '[视频]'
       case 47:
@@ -168,7 +169,7 @@ function extractMessageSearchText(message: Message): string {
   })()
 
   return [
-    message.parsedContent,
+    transcript || message.parsedContent,
     message.quotedContent,
     message.fileName,
     chatRecordText,
@@ -599,7 +600,10 @@ export class ChatSearchIndexService {
     const run = db.transaction((items: Message[]) => {
       const indexedAt = Date.now()
       for (const message of items) {
-        const searchText = compactSearchText(extractMessageSearchText(message))
+        const transcript = Number(message.localType) === 34
+          ? voiceTranscribeService.getCachedTranscript(sessionId, message.createTime) || undefined
+          : undefined
+        const searchText = compactSearchText(extractMessageSearchText(message, transcript))
         const tokenText = buildSearchTokens(searchText)
         const payload = {
           sessionId,
