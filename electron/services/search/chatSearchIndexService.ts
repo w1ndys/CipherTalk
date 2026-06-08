@@ -46,12 +46,15 @@ export interface ChatSearchSessionOptions {
   endTimeMs?: number
   direction?: 'in' | 'out'
   senderUsername?: string
+  maxIndexMessages?: number
+  reusePartialIndex?: boolean
   onProgress?: (progress: ChatSearchIndexProgress) => void | Promise<void>
 }
 
 export interface ChatSearchSessionResult {
   hits: ChatSearchIndexHit[]
   indexedCount: number
+  indexComplete: boolean
   truncated: boolean
 }
 
@@ -705,10 +708,32 @@ export class ChatSearchIndexService {
 
   async ensureSessionIndexed(
     sessionId: string,
-    onProgress?: ChatSearchSessionOptions['onProgress']
+    onProgress?: ChatSearchSessionOptions['onProgress'],
+    options: { maxMessages?: number; reusePartial?: boolean } = {}
   ): Promise<ChatSearchIndexState> {
     const db = this.getDb()
     const state = this.getSessionState(db, sessionId)
+    const maxMessages = options.maxMessages && Number.isFinite(options.maxMessages)
+      ? Math.max(1, Math.floor(options.maxMessages))
+      : undefined
+
+    if (
+      options.reusePartial &&
+      state &&
+      !state.isComplete &&
+      state.indexedCount > 0 &&
+      (!maxMessages || state.indexedCount >= maxMessages)
+    ) {
+      await this.report({
+        stage: 'completed',
+        sessionId,
+        message: `使用已有部分搜索索引，共 ${state.indexedCount} 条消息`,
+        messagesScanned: 0,
+        indexedCount: state.indexedCount
+      }, onProgress)
+      return state
+    }
+
     let newest: Message | null = state?.isComplete && state.newestSortSeq > 0
       ? {
         localId: state.newestLocalId,
@@ -800,7 +825,8 @@ export class ChatSearchIndexService {
     db.prepare('DELETE FROM message_index WHERE session_id = ?').run(sessionId)
     db.prepare('DELETE FROM session_index_state WHERE session_id = ?').run(sessionId)
 
-    const firstPage = await chatService.getMessages(sessionId, 0, INDEX_BATCH_SIZE)
+    const batchSize = maxMessages ? Math.min(INDEX_BATCH_SIZE, maxMessages) : INDEX_BATCH_SIZE
+    const firstPage = await chatService.getMessages(sessionId, 0, batchSize)
     if (!firstPage.success) {
       throw new Error(firstPage.error || '建立搜索索引失败')
     }
@@ -820,12 +846,14 @@ export class ChatSearchIndexService {
       }, onProgress)
     }
 
-    while (hasMore && messages.length > 0) {
+    while (hasMore && messages.length > 0 && (!maxMessages || scanned < maxMessages)) {
       const oldest = messages[0]
+      const nextLimit = maxMessages ? Math.min(INDEX_BATCH_SIZE, maxMessages - scanned) : INDEX_BATCH_SIZE
+      if (nextLimit <= 0) break
       const result = await chatService.getMessagesBefore(
         sessionId,
         oldest.sortSeq,
-        INDEX_BATCH_SIZE,
+        nextLimit,
         oldest.createTime,
         oldest.localId
       )
@@ -848,11 +876,14 @@ export class ChatSearchIndexService {
       }, onProgress)
     }
 
-    const nextState = this.updateSessionState(db, sessionId, newest, true)
+    const isComplete = !hasMore || (maxMessages ? scanned < maxMessages : false)
+    const nextState = this.updateSessionState(db, sessionId, newest, isComplete)
     await this.report({
       stage: 'completed',
       sessionId,
-      message: `搜索索引已就绪，共 ${nextState.indexedCount} 条消息`,
+      message: isComplete
+        ? `搜索索引已就绪，共 ${nextState.indexedCount} 条消息`
+        : `已建立部分搜索索引，共 ${nextState.indexedCount} 条消息`,
       messagesScanned: scanned,
       indexedCount: nextState.indexedCount
     }, onProgress)
@@ -861,12 +892,16 @@ export class ChatSearchIndexService {
 
   async searchSession(options: ChatSearchSessionOptions): Promise<ChatSearchSessionResult> {
     const db = this.getDb()
-    const state = await this.ensureSessionIndexed(options.sessionId, options.onProgress)
+    const state = await this.ensureSessionIndexed(options.sessionId, options.onProgress, {
+      maxMessages: options.maxIndexMessages,
+      reusePartial: options.reusePartialIndex
+    })
     const query = normalizeSearchText(options.query)
     if (!query) {
       return {
         hits: [],
         indexedCount: state.indexedCount,
+        indexComplete: state.isComplete,
         truncated: false
       }
     }
@@ -967,7 +1002,8 @@ export class ChatSearchIndexService {
     return {
       hits: hits.slice(0, options.limit),
       indexedCount: state.indexedCount,
-      truncated: rows.length > options.limit
+      indexComplete: state.isComplete,
+      truncated: rows.length > options.limit || !state.isComplete
     }
   }
 
@@ -1004,9 +1040,13 @@ export class ChatSearchIndexService {
 
   async listSessionMemoryMessages(
     sessionId: string,
-    onProgress?: ChatSearchSessionOptions['onProgress']
+    onProgress?: ChatSearchSessionOptions['onProgress'],
+    maxIndexMessages?: number
   ): Promise<ChatSearchMemoryMessage[]> {
-    await this.ensureSessionIndexed(sessionId, onProgress)
+    await this.ensureSessionIndexed(sessionId, onProgress, {
+      maxMessages: maxIndexMessages,
+      reusePartial: !!maxIndexMessages
+    })
     const rows = this.getDb().prepare(`
       SELECT
         id,

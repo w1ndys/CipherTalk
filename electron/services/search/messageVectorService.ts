@@ -240,7 +240,16 @@ class MessageVectorService {
     onProgress?: VectorBuildProgressReporter,
   ): Promise<number> {
     onProgress?.({ sessionId, stage: 'loading', current: 0, total: 0, indexed: 0, message: '读取会话消息' })
-    const rawMessages = await chatSearchIndexService.listSessionMemoryMessages(sessionId)
+    const rawMessages = await chatSearchIndexService.listSessionMemoryMessages(sessionId, (progress) => {
+      onProgress?.({
+        sessionId,
+        stage: 'loading',
+        current: progress.messagesScanned || 0,
+        total: cap,
+        indexed: progress.indexedCount || 0,
+        message: progress.message
+      })
+    }, cap)
     if (rawMessages.length === 0) {
       onProgress?.({ sessionId, stage: 'done', current: 0, total: 0, indexed: 0, message: '没有可向量化的消息' })
       return 0

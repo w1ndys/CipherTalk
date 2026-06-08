@@ -35,14 +35,18 @@ function toCamelCase(value: string): string {
   return value.replace(/[-_\s]+([a-zA-Z0-9])/g, (_match, char: string) => char.toUpperCase())
 }
 
-function buildReasoningProviderOptions(input: AgentRunInput): ProviderOptions | undefined {
+function buildProviderOptions(input: AgentRunInput): ProviderOptions | undefined {
   const effort = input.providerConfig.reasoningEffort
-  if (!effort || effort === 'auto') return undefined
-  if (input.providerConfig.providerKind !== 'openai-responses' && input.providerConfig.providerKind !== 'openai-compatible') {
+  const isOpenAIProtocol = input.providerConfig.providerKind === 'openai-responses' || input.providerConfig.providerKind === 'openai-compatible'
+  if (!isOpenAIProtocol) {
     return undefined
   }
 
-  const option = { reasoningEffort: effort }
+  const option: Record<string, unknown> = {}
+  if (effort && effort !== 'auto') option.reasoningEffort = effort
+  if (input.providerConfig.providerKind === 'openai-responses') option.store = true
+  if (Object.keys(option).length === 0) return undefined
+
   const keys = new Set(['openai'])
   if (input.providerConfig.providerKind === 'openai-compatible') {
     keys.add(input.providerConfig.name)
@@ -167,7 +171,7 @@ export async function runAgent(
       tools,
       // 步数上限 + 死循环检测（连续 N 步相同工具调用即停），见 guards.ts
       stopWhen: [stepCountIs(MAX_STEPS), loopGuardCondition()],
-      providerOptions: buildReasoningProviderOptions(input),
+      providerOptions: buildProviderOptions(input),
       // 每步压缩上下文（裁旧工具结果/推理痕迹，见 compaction.ts）+ query_sql 门控（见 activeToolsFor）
       prepareStep: ({ messages, steps }) => ({
         messages: compactMessages(messages),

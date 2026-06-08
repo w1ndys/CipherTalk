@@ -48,6 +48,46 @@ function hostFromUrl(url: string): string | null {
   }
 }
 
+function shouldStripProviderMetadata(providerConfig: AgentProviderConfig): boolean {
+  if (providerConfig.providerKind !== 'openai-responses') return false
+  const host = hostFromUrl(providerConfig.baseURL)
+  return providerConfig.name === 'custom' || (host !== null && host !== 'api.openai.com')
+}
+
+function stripRemoteResponseRefs(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map((item) => stripRemoteResponseRefs(item))
+  }
+  if (!value || typeof value !== 'object') return value
+
+  const out: Record<string, unknown> = {}
+  for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
+    if (
+      key === 'providerMetadata' ||
+      key === 'callProviderMetadata' ||
+      key === 'resultProviderMetadata' ||
+      key === 'providerOptions' ||
+      key === 'itemId' ||
+      key === 'item_id' ||
+      key === 'responseId' ||
+      key === 'response_id' ||
+      key === 'previousResponseId' ||
+      key === 'previous_response_id'
+    ) {
+      continue
+    }
+    if (typeof child === 'string' && /^(msg|rs|resp)_[A-Za-z0-9_-]+$/.test(child)) {
+      continue
+    }
+    out[key] = stripRemoteResponseRefs(child)
+  }
+  return out
+}
+
+function stripUiMessageProviderMetadata(messages: UIMessage[] = []): UIMessage[] {
+  return stripRemoteResponseRefs(messages) as UIMessage[]
+}
+
 function providerToLogData(providerConfig: AgentProviderConfig): Record<string, unknown> {
   return {
     provider: providerConfig.name,
@@ -114,7 +154,10 @@ export function registerAiHandlers(ctx: MainProcessContext): void {
       stage = 'resolve_provider'
       const providerConfig = resolveProviderConfig(payload.modelConfig)
       stage = 'convert_messages'
-      const messages = await convertToModelMessages(payload.messages)
+      const uiMessages = shouldStripProviderMetadata(providerConfig)
+        ? stripUiMessageProviderMetadata(payload.messages)
+        : payload.messages
+      const messages = await convertToModelMessages(uiMessages)
       const lastUserText = lastUserTextFromUiMessages(payload.messages)
       stage = 'load_context_services'
       const { mcpClientService } = await import('../../services/mcpClientService')

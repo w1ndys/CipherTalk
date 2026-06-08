@@ -63,6 +63,8 @@ const MAX_SEARCH_LIMIT = 100
 const MAX_CONTEXT_LIMIT = 100
 const SEARCH_BATCH_SIZE = 200
 const MAX_SEARCH_SESSIONS = 20
+const MAX_GLOBAL_SEARCH_SESSIONS = 30
+const MAX_TARGETED_INDEX_MESSAGES = 5000
 const MAX_SCAN_PER_SESSION = 1000
 const MAX_SCAN_GLOBAL = 10000
 const MAX_TARGETED_SCAN_PER_SESSION = 200000
@@ -2154,11 +2156,12 @@ export class McpReadService {
 
     const targetSessions = sessionIdCandidates.length > 0
       ? await Promise.all(sessionIdCandidates.map((sessionId) => resolveSessionRefStrictWithProgress(sessionId, sessions, sessionMap, contacts, contactMap, reporter)))
-      : sessions.map((session) => ({
+      : sessions.slice(0, MAX_GLOBAL_SEARCH_SESSIONS).map((session) => ({
           sessionId: session.sessionId,
           displayName: session.displayName,
           kind: session.kind
         }))
+    const globalSessionLimited = sessionIdCandidates.length === 0 && sessions.length > targetSessions.length
     const exhaustiveTargetedSearch = sessionIdCandidates.length > 0
     const sessionScanLimit = exhaustiveTargetedSearch ? MAX_TARGETED_SCAN_PER_SESSION : MAX_SCAN_PER_SESSION
     const globalScanLimit = exhaustiveTargetedSearch ? MAX_TARGETED_SCAN_GLOBAL : MAX_SCAN_GLOBAL
@@ -2219,6 +2222,8 @@ export class McpReadService {
             endTimeMs,
             direction: args.data.direction,
             senderUsername: args.data.senderUsername,
+            maxIndexMessages: MAX_TARGETED_INDEX_MESSAGES,
+            reusePartialIndex: true,
             onProgress: async (progress) => {
               await reportProgress(reporter, {
                 stage: progress.stage === 'searching_index' ? 'streaming_hits' : 'scanning_messages',
@@ -2230,7 +2235,7 @@ export class McpReadService {
           })
 
           indexedMessages += indexed.indexedCount
-          indexedTruncated = indexedTruncated || indexed.truncated
+          indexedTruncated = indexedTruncated || indexed.truncated || !indexed.indexComplete
           vectorSearch.indexedMessages += indexed.indexedCount
 
           const indexedHits: Array<(typeof indexed.hits)[number] & { retrievalSource: McpSearchRetrievalSource }> = indexed.hits.map((hit) => ({
@@ -2287,7 +2292,8 @@ export class McpReadService {
           indexStatus: {
             ready: true,
             indexedSessions: targetSessions.length,
-            indexedMessages
+            indexedMessages,
+            error: indexedTruncated ? `Used partial local index capped at ${MAX_TARGETED_INDEX_MESSAGES} recent messages per session.` : undefined
           },
           vectorSearch,
           rerank
@@ -2304,7 +2310,8 @@ export class McpReadService {
           indexStatus: {
             ready: true,
             indexedSessions: targetSessions.length,
-            indexedMessages
+            indexedMessages,
+            error: indexedTruncated ? `Used partial local index capped at ${MAX_TARGETED_INDEX_MESSAGES} recent messages per session.` : undefined
           },
           vectorSearch,
           rerank
@@ -2460,7 +2467,7 @@ export class McpReadService {
       limit,
       sessionsScanned,
       messagesScanned,
-      truncated,
+      truncated: truncated || globalSessionLimited,
       sessionSummaries,
       source: 'scan',
       indexStatus: exhaustiveTargetedSearch
@@ -2479,7 +2486,7 @@ export class McpReadService {
       limit,
       sessionsScanned,
       messagesScanned,
-      truncated,
+      truncated: truncated || globalSessionLimited,
       sessionSummaries,
       source: 'scan',
       indexStatus: exhaustiveTargetedSearch

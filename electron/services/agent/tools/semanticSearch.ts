@@ -60,7 +60,16 @@ export const semanticSearch = tool({
               detail: query,
               sessionId,
             })
-            const indexed = await messageVectorService.ensureSessionVectors(sessionId, cfg)
+            const indexed = await messageVectorService.ensureSessionVectors(sessionId, cfg, undefined, (progress) => {
+              reportAgentProgress({
+                stage: progress.stage === 'embedding' ? 'indexing' : 'searching',
+                title: progress.message,
+                detail: query,
+                sessionId,
+                messagesScanned: progress.current,
+                indexedCount: progress.indexed,
+              })
+            })
             reportAgentProgress({
               stage: 'searching',
               title: '搜索会话语义索引',

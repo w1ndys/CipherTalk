@@ -110,29 +110,29 @@ export async function searchChat(opts: {
   endTimeMs?: number
   limit: number
 }): Promise<{ hits: ChatSearchHit[]; sessionsScanned: number; coverage: string }> {
-  const INITIAL_SESSION_CAP = 20
-  const EXPANDED_SESSION_CAP = 100
+  const RECENT_SESSION_CAP = 20
+  const GLOBAL_INDEX_MESSAGE_CAP = 800
+  const SESSION_INDEX_MESSAGE_CAP = 5000
   const { chatSearchIndexService } = await import('../../search/chatSearchIndexService')
 
   const targetSessions = opts.sessionId
     ? [opts.sessionId]
-    : await getRecentChatSessions(EXPANDED_SESSION_CAP)
+    : await getRecentChatSessions(RECENT_SESSION_CAP)
   const batches = opts.sessionId
     ? [targetSessions]
-    : [targetSessions.slice(0, INITIAL_SESSION_CAP), targetSessions.slice(INITIAL_SESSION_CAP)]
-        .filter((batch) => batch.length > 0)
+    : [targetSessions].filter((batch) => batch.length > 0)
 
   const perSession = Math.max(opts.limit, 10)
   const raw: ChatSearchIndexHit[] = []
   let sessionsScanned = 0
-  for (const [batchIndex, batch] of batches.entries()) {
+  for (const batch of batches) {
     if (batch.length === 0) continue
     reportAgentProgress({
       stage: 'searching',
-      title: opts.sessionId ? '搜索当前会话' : (batchIndex === 0 ? '搜索最近活跃会话' : '扩展搜索更多会话'),
+      title: opts.sessionId ? '搜索当前会话' : '搜索最近活跃会话',
       detail: opts.query,
       sessionsScanned,
-      coverage: opts.sessionId ? 'session' : `recent_${batchIndex === 0 ? INITIAL_SESSION_CAP : EXPANDED_SESSION_CAP}`,
+      coverage: opts.sessionId ? 'session_partial' : `recent_${RECENT_SESSION_CAP}_partial`,
     })
 
     for (const sid of batch) {
@@ -143,6 +143,8 @@ export async function searchChat(opts: {
           limit: perSession,
           startTimeMs: opts.startTimeMs,
           endTimeMs: opts.endTimeMs,
+          maxIndexMessages: opts.sessionId ? SESSION_INDEX_MESSAGE_CAP : GLOBAL_INDEX_MESSAGE_CAP,
+          reusePartialIndex: true,
           onProgress: (progress) => {
             reportAgentProgress({
               stage: progress.stage === 'searching_index' ? 'searching' : 'indexing',
@@ -182,10 +184,8 @@ export async function searchChat(opts: {
     }
   })
   const coverage = opts.sessionId
-    ? 'session'
-    : sessionsScanned > INITIAL_SESSION_CAP
-      ? `recent_${EXPANDED_SESSION_CAP}`
-      : `recent_${INITIAL_SESSION_CAP}`
+    ? `session_recent_${SESSION_INDEX_MESSAGE_CAP}`
+    : `recent_${RECENT_SESSION_CAP}_messages_${GLOBAL_INDEX_MESSAGE_CAP}`
   return { hits, sessionsScanned, coverage }
 }
 
