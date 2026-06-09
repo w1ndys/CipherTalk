@@ -161,11 +161,12 @@ export function registerAiHandlers(ctx: MainProcessContext): void {
     let idleWarningCount = 0
     let watchdog: NodeJS.Timeout | null = null
     agentAborters.set(runId, aborter)
-    const sendPrepProgress = (title: string, detail?: string) => {
-      progressCount += 1
+    const sendPrepProgress = (title: string, detail?: string, visible = false) => {
       lastActivityAt = Date.now()
       lastActivityKind = 'progress'
       idleWarningCount = 0
+      if (!visible) return
+      progressCount += 1
       sendProgress({
         stage: 'run_started',
         title,
@@ -177,7 +178,7 @@ export function registerAiHandlers(ctx: MainProcessContext): void {
     logger?.warn('AIAgent', 'AI Agent 请求开始', baseRunData)
     try {
       stage = 'import_services'
-      sendPrepProgress('正在读取 Agent 服务')
+      sendPrepProgress('正在准备 Agent', undefined, true)
       const { agentProcessService } = await import('../../services/agent/agentProcessService')
       agentProcessService.setLogger(logger)
       const { resolveProviderConfig } = await import('../../services/agent/resolveProviderConfig')

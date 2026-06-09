@@ -124,8 +124,20 @@ export class WcdbService extends EventEmitter {
     this.initPromise = null
     this.rejectAllPending('wcdb utility process shutdown')
     if (w) {
+      let exited = false
+      let forceKillTimer: NodeJS.Timeout | null = setTimeout(() => {
+        forceKillTimer = null
+        if (exited) return
+        try { w.kill() } catch { /* ignore */ }
+      }, 1500)
+      w.once('exit', () => {
+        exited = true
+        if (forceKillTimer) {
+          clearTimeout(forceKillTimer)
+          forceKillTimer = null
+        }
+      })
       this.postToUtility(w, { id: ++this.seq, type: 'shutdown', payload: {} })
-      try { w.kill() } catch { /* ignore */ }
     }
     if (this.restartTimer) {
       clearTimeout(this.restartTimer)

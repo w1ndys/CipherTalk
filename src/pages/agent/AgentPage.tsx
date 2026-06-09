@@ -77,6 +77,17 @@ const REASONING_EFFORT_OPTIONS: Array<{ value: AgentReasoningEffort; label: stri
   { value: 'high', label: '思考：高' },
 ]
 
+const PLAN_DELEGATE_ANALYSIS_REQUIRED_PATTERN = /<!--\s*ciphertalk:delegate_analysis=required\s*-->/i
+const PLAN_CONTROL_MARKER_PATTERN = /<!--\s*ciphertalk:delegate_analysis=(?:required|not_required)\s*-->/gi
+
+function stripPlanControlMarkers(text: string): string {
+  return text.replace(PLAN_CONTROL_MARKER_PATTERN, '').trim()
+}
+
+function planRequiresDelegateAnalysis(text: string): boolean {
+  return PLAN_DELEGATE_ANALYSIS_REQUIRED_PATTERN.test(text)
+}
+
 function SlashPresetButton({ showGroupSeparator = false }: { showGroupSeparator?: boolean }) {
   const { textInput } = usePromptInputController()
   const value = textInput.value
@@ -2145,7 +2156,7 @@ export default function AgentPage() {
     setAgentRunPending(true)
     setSubAgentProgress([])
     submitScopeRef.current = activeScopeRef.current
-    const sendPromise = Promise.resolve(sendMessage({ text: '请按上面的计划开始执行，直接给出最终结果，不要再重复计划。', files: [] })).finally(() => {
+    const sendPromise = Promise.resolve(sendMessage({ text: '请按上面的计划开始执行，按需调用工具或委托子助手，直接给出最终结果，不要再重复计划。', files: [] })).finally(() => {
       submitScopeRef.current = null
       setAgentRunPending(false)
     })
@@ -2354,8 +2365,10 @@ export default function AgentPage() {
                 (message.metadata as AgentMessageMetadata | undefined)?.planMode === true
                 || (isLastMessage && busy && runIsPlanRef.current)
               )
+              const assistantDisplayText = isPlanMessage ? stripPlanControlMarkers(assistantText) : assistantText
+              const planNeedsDelegateAnalysis = isPlanMessage && planRequiresDelegateAnalysis(assistantText)
               const outputActivity = message.role === 'assistant'
-                ? analyzeMessageRenderActivity(assistantText, assistantTextStreaming)
+                ? analyzeMessageRenderActivity(assistantDisplayText, assistantTextStreaming)
                 : null
               const outputActivitySteps = outputActivity ? renderOutputActivitySteps(outputActivity, assistantTextStreaming) : []
               const userDisplay = message.role === 'user' ? getUserMessageDisplay(message.parts) : null
@@ -2434,8 +2447,8 @@ export default function AgentPage() {
                         })}
                       </MessageChainOfThought>
                     )}
-                    {isPlanMessage && assistantText && (
-                      <PlanCard streaming={assistantTextStreaming} text={assistantText} />
+                    {isPlanMessage && assistantDisplayText && (
+                      <PlanCard streaming={assistantTextStreaming} text={assistantDisplayText} />
                     )}
                     {message.parts.map((part, index) => {
                       if (part.type === 'text') {
@@ -2466,11 +2479,11 @@ export default function AgentPage() {
                         canRegenerate={selectedModelSupportsTools}
                         copied={copiedMessageId === message.id}
                         metadata={message.metadata}
-                        messageText={assistantText}
-                        onCopy={() => { void handleCopyAssistantMessage(message.id, assistantText) }}
+                        messageText={assistantDisplayText}
+                        onCopy={() => { void handleCopyAssistantMessage(message.id, assistantDisplayText) }}
                         onOpenDetails={setUsageDetailsModal}
                         onRegenerate={() => handleRegenerateAssistantMessage(messageIndex)}
-                        onSpeak={() => handleSpeakAssistantMessage(message.id, assistantText)}
+                        onSpeak={() => handleSpeakAssistantMessage(message.id, assistantDisplayText)}
                         regenerating={busy}
                         speaking={speakingMessageId === message.id}
                       />
@@ -2486,6 +2499,12 @@ export default function AgentPage() {
                           <Play className="size-3.5" />
                           开始执行
                         </HeroButton>
+                        {planNeedsDelegateAnalysis && (
+                          <span className="inline-flex items-center gap-1 rounded-(--agent-radius,12px) border border-amber-500/30 bg-amber-500/10 px-2 py-1 text-amber-700 text-xs dark:text-amber-300">
+                            <Users className="size-3.5" />
+                            预计会委托子助手
+                          </span>
+                        )}
                         <span className="text-muted-foreground text-xs">确认计划后点此执行，或直接回复修改计划</span>
                       </div>
                     )}

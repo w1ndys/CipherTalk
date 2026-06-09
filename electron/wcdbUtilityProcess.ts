@@ -18,6 +18,12 @@ if (!parentPort) {
 const core = new WcdbCore()
 let monitorRegistered = false
 const keepAliveTimer = setInterval(() => undefined, 60_000)
+keepAliveTimer.ref?.()
+try {
+  process.stdin?.resume?.()
+} catch {
+  // stdin may be unavailable in some utilityProcess modes; the timer still keeps the process alive.
+}
 
 // 串行化所有请求：每个请求（含游标 open→fetch→close 全过程）跑完后下一个才开始。
 // 防止 close/open/shutdown 在某个游标批次的 await 间隙插入，导致 native 句柄被释放后

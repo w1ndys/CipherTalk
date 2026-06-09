@@ -8,7 +8,7 @@ import { createLanguageModel } from './provider'
 import { buildAgentPromptParts, PLAN_MODE_PROMPT, WEB_SEARCH_PROMPT } from './prompts'
 import { isWebSearchAvailable } from '../ai/webSearchService'
 import { applyAnthropicCacheControl, buildPromptCacheKey, buildProviderOptions } from './cache'
-import { buildTools } from './tools'
+import { buildPlanModeTools, buildTools } from './tools'
 import { buildMemoryContext, extractMemories, preloadRelevantMemories } from './tools/memory'
 import { compactMessages } from './compaction'
 import { runFinalReview, summarizeToolOutput, type ToolOutputSummary } from './finalReview'
@@ -192,7 +192,9 @@ export async function runAgent(
     const relevantMemoryContext = await preloadRelevantMemories(userText, input.scope)
     reportAgentProgress({ stage: 'run_started', title: '正在准备工具' })
     const webSearchOn = isWebSearchAvailable()
-    const baseTools = withToolTimeouts(buildTools(input.scope, input.providerConfig, input.mcpTools, webSearchOn))
+    const baseTools = withToolTimeouts(input.planMode
+      ? buildPlanModeTools(input.scope)
+      : buildTools(input.scope, input.providerConfig, input.mcpTools, webSearchOn))
     const prepared = buildAgentInstructions(input, memoryContext, relevantMemoryContext, baseTools, webSearchOn)
     const agent = new ToolLoopAgent({
       model: createLanguageModel(input.providerConfig),

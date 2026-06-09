@@ -427,6 +427,7 @@ const TERMINAL_LANGUAGES = new Set([
 ]);
 
 const CHART_LANGUAGES = new Set(["chart", "echarts"]);
+const CHART_OPTION_LANGUAGES = new Set(["chart", "echarts", "json"]);
 const DATA_TABLE_LANGUAGES = new Set(["csv", "tsv"]);
 
 export type MessageRenderActivity = {
@@ -564,6 +565,10 @@ function isChartCode(language: string | undefined): boolean {
   return Boolean(language && CHART_LANGUAGES.has(language));
 }
 
+function canParseChartOption(language: string | undefined): boolean {
+  return Boolean(language && CHART_OPTION_LANGUAGES.has(language));
+}
+
 type MessageCodeProps = ComponentProps<"code"> & {
   node?: unknown;
   "data-block"?: boolean | string;
@@ -571,7 +576,7 @@ type MessageCodeProps = ComponentProps<"code"> & {
 
 function StreamingChartPlaceholder({ language }: { language?: string }) {
   return (
-    <Artifact className="my-2 h-128 max-h-[70vh] w-full max-w-full">
+    <Artifact className="my-2 h-[32rem] max-h-[70vh] w-full max-w-full">
       <ArtifactHeader>
         <div className="min-w-0">
           <ArtifactTitle className="font-mono">{language || "chart"}</ArtifactTitle>
@@ -619,7 +624,7 @@ const MessageCode = ({ children, className, node: _node, ...props }: MessageCode
   const rawLanguage = getRawCodeLanguage(className);
   const canPreviewHtml = isHtmlCode(rawLanguage, code);
   const canRenderTerminal = isTerminalCode(rawLanguage);
-  const chartOption = isChartCode(rawLanguage) ? parseChartOption(code) : null;
+  const chartOption = canParseChartOption(rawLanguage) ? parseChartOption(code) : null;
   const language = normalizeCodeLanguage(canPreviewHtml && !rawLanguage ? "html" : rawLanguage);
   const chartRef = useRef<ChartBlockHandle | null>(null);
 
@@ -645,7 +650,7 @@ const MessageCode = ({ children, className, node: _node, ...props }: MessageCode
   };
 
   return (
-    <Artifact className="my-2 h-128 max-h-[70vh] w-full max-w-full">
+    <Artifact className="my-2 h-[32rem] max-h-[70vh] w-full max-w-full">
       <ArtifactHeader>
         <div className="min-w-0">
           <ArtifactTitle className="font-mono">{rawLanguage || language}</ArtifactTitle>

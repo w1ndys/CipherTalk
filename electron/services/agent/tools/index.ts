@@ -61,6 +61,14 @@ export function buildSubAgentTools(_scope: AgentScope): ToolSet {
   }
 }
 
+/** 计划模式只保留轻量解析工具，避免计划轮直接读取/统计/总结用户数据。 */
+export function buildPlanModeTools(_scope: AgentScope): ToolSet {
+  return {
+    list_contacts: listContacts,
+    list_groups: listGroups,
+  }
+}
+
 export function buildTools(scope: AgentScope, providerConfig: AgentProviderConfig, mcpTools: AgentMcpToolDescriptor[] = [], enableWebSearch = false): ToolSet {
   return {
     ...buildBaseTools(scope),
