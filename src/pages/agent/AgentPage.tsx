@@ -5,7 +5,7 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode, type UIEvent } from 'react'
 import { useChat } from '@ai-sdk/react'
 import { isToolUIPart, type ChatStatus, type UIMessage } from 'ai'
-import { AlertDialog, Button as HeroButton, ButtonGroup, Dropdown, Label, ListBox, Modal, Separator, Surface, Switch, Table, Toolbar } from '@heroui/react'
+import { AlertDialog, Button as HeroButton, ButtonGroup, Dropdown, Header, Label, Modal, Separator, Surface, Switch, Table, Toolbar } from '@heroui/react'
 import { AtSign, BarChart3, Braces, Brain, CheckIcon, ChevronDown, Clock3, Code2, Copy, FileText, Globe, History, Image as ImageIcon, Info, Link2, ListChecks, PenLine, Play, Quote, RefreshCcw, Search, Slash, SquarePen, Table2, Trash2, Users, Volume2, Wrench, X, Sparkles } from 'lucide-react'
 import { Sources, SourcesContent, SourcesTrigger } from '@/components/ai-elements/sources'
 import { HoverCard, HoverCardContent, HoverCardTrigger } from '@/components/ui/hover-card'
@@ -36,17 +36,6 @@ import {
   type PromptInputMessage,
   usePromptInputController,
 } from '@/components/ai-elements/prompt-input'
-import {
-  ModelSelector,
-  ModelSelectorContent,
-  ModelSelectorEmpty,
-  ModelSelectorGroup,
-  ModelSelectorInput,
-  ModelSelectorItem,
-  ModelSelectorList,
-  ModelSelectorName,
-  ModelSelectorTrigger,
-} from '@/components/ai-elements/model-selector'
 import { Button } from '@/components/ui/button'
 import AIProviderLogo from '@/components/ai/AIProviderLogo'
 import { getAIProviders, type AIModelInfo, type AIProviderInfo } from '@/types/ai'
@@ -179,20 +168,17 @@ function ModelCapabilityIcons({ detail }: { detail: AIModelInfo }) {
 }
 
 const ModelItem = memo(
-  ({ model, selectedModel, onSelect }: { model: AgentModelItem; selectedModel: string; onSelect: (id: string) => void }) => {
-    const handleSelect = useCallback(() => {
-      if (!model.disabled) onSelect(model.id)
-    }, [model.disabled, model.id, onSelect])
+  ({ model }: { model: AgentModelItem }) => {
     return (
-      <ModelSelectorItem disabled={model.disabled} key={model.id} onSelect={handleSelect} value={model.id}>
+      <Dropdown.Item id={model.id} key={model.id} textValue={model.name}>
+        <Dropdown.ItemIndicator />
         {model.chefSlug && <AIProviderLogo providerId={model.chefSlug} alt={model.chef} className="shrink-0" size={20} />}
-        <ModelSelectorName>{model.name}</ModelSelectorName>
+        <Label className="min-w-0 flex-1 truncate text-left">{model.name}</Label>
         <span className="ml-auto flex shrink-0 items-center gap-1.5">
           {model.modelDetail && <ModelCapabilityIcons detail={model.modelDetail} />}
           {model.disabled && <span className="text-[10px] text-muted-foreground">无工具</span>}
-          {selectedModel === model.id ? <CheckIcon className="size-4" /> : <div className="size-4" />}
         </span>
-      </ModelSelectorItem>
+      </Dropdown.Item>
     )
   }
 )
@@ -1602,6 +1588,8 @@ export default function AgentPage() {
     }, ...list]
   }, [currentModelId, currentProviderId, presets, modelInfoByKey])
   const chefs = useMemo(() => [...new Set(models.map((model) => model.chef))], [models])
+  const disabledModelKeys = useMemo(() => models.filter((model) => model.disabled).map((model) => model.id), [models])
+  const selectedModelKeys = useMemo(() => new Set([selectedPresetId]), [selectedPresetId])
   const selectedModelData = models.find((model) => model.id === selectedPresetId)
   const selectedModelSupportsTools = selectedModelData?.modelDetail
     ? selectedModelData.modelDetail.capabilities.toolCall
@@ -2311,14 +2299,78 @@ export default function AgentPage() {
         <div className="relative">
           <Toolbar aria-label="对话操作" className="p-0">
             <ButtonGroup size="sm" variant="tertiary">
-              <HeroButton
-                aria-label="对话记录"
-                className="size-8 p-0"
-                isIconOnly
-                onPress={() => setRecordsOpen((open) => !open)}
-              >
-                <History className="size-4" />
-              </HeroButton>
+              <Dropdown isOpen={recordsOpen} onOpenChange={setRecordsOpen}>
+                <HeroButton
+                  aria-label="对话记录"
+                  className="size-8 p-0"
+                  isIconOnly
+                  size="sm"
+                  variant="tertiary"
+                >
+                  <History className="size-4" />
+                </HeroButton>
+                <Dropdown.Popover className="w-[min(28rem,calc(100vw-2rem))]" placement="bottom end">
+                  <Dropdown.Menu
+                    disabledKeys={conversationRecords.length > 0 ? undefined : ['empty-conversation-records']}
+                    selectedKeys={conversationId ? [conversationId] : []}
+                    selectionMode="single"
+                    className="max-h-[min(70vh,32rem)] overflow-y-auto"
+                    onAction={(key) => {
+                      const record = conversationRecords.find((item) => String(item.id) === String(key))
+                      if (record) handleOpenRecord(record)
+                    }}
+                  >
+                    {conversationRecords.length > 0 ? conversationRecords.map((record) => {
+                      return (
+                        <Dropdown.Item
+                          className="min-h-14 gap-3 py-2.5"
+                          id={record.id}
+                          key={record.id}
+                          textValue={record.title}
+                        >
+                          <Dropdown.ItemIndicator />
+                          <Clock3 className="size-4 shrink-0 text-muted" />
+                          <span className="min-w-0 flex-1">
+                            <Label className="block truncate font-medium text-sm">{record.title}</Label>
+                            <span className="block truncate text-muted-foreground text-xs">
+                              {new Date(record.updatedAt).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })}
+                            </span>
+                          </span>
+                          <span
+                            className="ms-auto flex shrink-0"
+                            onClick={(event) => event.stopPropagation()}
+                            onMouseDown={(event) => event.stopPropagation()}
+                            onPointerDown={(event) => event.stopPropagation()}
+                          >
+                            <HeroButton
+                              aria-label={`删除 ${record.title}`}
+                              className="size-8 p-0 text-muted-foreground hover:text-danger"
+                              isIconOnly
+                              size="sm"
+                              variant="ghost"
+                              onPress={() => {
+                                setRecordPendingDelete(record)
+                                setRecordsOpen(false)
+                              }}
+                            >
+                              <Trash2 className="size-4" />
+                            </HeroButton>
+                          </span>
+                        </Dropdown.Item>
+                      )
+                    }) : (
+                      <Dropdown.Item
+                        className="min-h-20 justify-center py-6 text-center text-muted-foreground text-sm"
+                        id="empty-conversation-records"
+                        key="empty-conversation-records"
+                        textValue="暂无对话记录"
+                      >
+                        暂无对话记录
+                      </Dropdown.Item>
+                    )}
+                  </Dropdown.Menu>
+                </Dropdown.Popover>
+              </Dropdown>
               <HeroButton
                 aria-label="新建对话"
                 className="size-8 p-0"
@@ -2330,55 +2382,6 @@ export default function AgentPage() {
               </HeroButton>
             </ButtonGroup>
           </Toolbar>
-          {recordsOpen && (
-            <Surface className="absolute right-0 top-10 z-50 w-80 overflow-hidden rounded-(--agent-radius,12px) border border-border bg-popover shadow-lg">
-              {conversationRecords.length > 0 ? (
-                <ListBox
-                  aria-label="对话记录"
-                  className="max-h-80 w-full overflow-y-auto p-1"
-                  selectionMode="none"
-                  onAction={(key) => {
-                    const record = conversationRecords.find((item) => String(item.id) === String(key))
-                    if (record) handleOpenRecord(record)
-                  }}
-                >
-                  {conversationRecords.map((record) => (
-                    <ListBox.Item className="items-center gap-2" id={record.id} key={record.id} textValue={record.title}>
-                      <Clock3 className="size-4 shrink-0 text-muted-foreground" />
-                      <div className="min-w-0 flex-1">
-                        <Label className="block truncate text-sm">{record.title}</Label>
-                        <span className="block truncate text-muted-foreground text-xs">
-                          {new Date(record.updatedAt).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })}
-                        </span>
-                      </div>
-                      <span
-                        className="ms-auto flex shrink-0"
-                        onClick={(event) => event.stopPropagation()}
-                        onMouseDown={(event) => event.stopPropagation()}
-                        onPointerDown={(event) => event.stopPropagation()}
-                      >
-                        <HeroButton
-                          aria-label={`删除 ${record.title}`}
-                          className="size-7 p-0 text-muted-foreground hover:text-danger"
-                          isIconOnly
-                          size="sm"
-                          variant="ghost"
-                          onPress={() => {
-                            setRecordPendingDelete(record)
-                            setRecordsOpen(false)
-                          }}
-                        >
-                          <Trash2 className="size-3.5" />
-                        </HeroButton>
-                      </span>
-                    </ListBox.Item>
-                  ))}
-                </ListBox>
-              ) : (
-                <div className="px-3 py-4 text-center text-muted-foreground text-xs">暂无对话记录</div>
-              )}
-            </Surface>
-          )}
         </div>
       </div>
       <Conversation className="min-h-0 flex-1">
@@ -2702,38 +2705,36 @@ export default function AgentPage() {
                 </ButtonGroup>
 
                 <ButtonGroup size="sm" variant="tertiary">
-                  <ModelSelector onOpenChange={setModelOpen} open={modelOpen}>
-                    <ModelSelectorTrigger asChild>
-                      <HeroButton className="max-w-48" size="sm" variant="tertiary">
-                        {selectedModelData?.chefSlug && (
-                          <AIProviderLogo providerId={selectedModelData.chefSlug} alt={selectedModelData.chef} className="shrink-0" size={18} />
-                        )}
-                        {selectedModelData?.name && (
-                          <ModelSelectorName>{selectedModelData.name}</ModelSelectorName>
-                        )}
-                      </HeroButton>
-                    </ModelSelectorTrigger>
-                    <ModelSelectorContent>
-                      <ModelSelectorInput placeholder="搜索模型..." />
-                      <ModelSelectorList>
-                        <ModelSelectorEmpty>没有匹配的模型</ModelSelectorEmpty>
+                  <Dropdown isOpen={modelOpen} onOpenChange={setModelOpen}>
+                    <HeroButton aria-label="选择模型" className="max-w-56" size="sm" variant="tertiary">
+                      {selectedModelData?.chefSlug && (
+                        <AIProviderLogo providerId={selectedModelData.chefSlug} alt={selectedModelData.chef} className="shrink-0" size={18} />
+                      )}
+                      {selectedModelData?.name && (
+                        <span className="min-w-0 flex-1 truncate text-left">{selectedModelData.name}</span>
+                      )}
+                      <ChevronDown className="size-3.5 shrink-0" />
+                    </HeroButton>
+                    <Dropdown.Popover className="max-h-96 min-w-72 overflow-y-auto" placement="top start">
+                      <Dropdown.Menu
+                        disabledKeys={disabledModelKeys}
+                        selectedKeys={selectedModelKeys}
+                        selectionMode="single"
+                        onAction={(key) => handleModelSelect(String(key))}
+                      >
                         {chefs.map((chef) => (
-                          <ModelSelectorGroup heading={chef} key={chef}>
+                          <Dropdown.Section key={chef}>
+                            <Header>{chef}</Header>
                             {models
                               .filter((model) => model.chef === chef)
                               .map((model) => (
-                                <ModelItem
-                                  key={model.id}
-                                  model={model}
-                                  onSelect={handleModelSelect}
-                                  selectedModel={selectedPresetId}
-                                />
+                                <ModelItem key={model.id} model={model} />
                               ))}
-                          </ModelSelectorGroup>
+                          </Dropdown.Section>
                         ))}
-                      </ModelSelectorList>
-                    </ModelSelectorContent>
-                  </ModelSelector>
+                      </Dropdown.Menu>
+                    </Dropdown.Popover>
+                  </Dropdown>
                 </ButtonGroup>
 
               </PromptInputTools>
@@ -2767,7 +2768,7 @@ export default function AgentPage() {
         }}
       >
         <AlertDialog.Container>
-          <AlertDialog.Dialog className="sm:max-w-[400px]">
+          <AlertDialog.Dialog className="sm:max-w-100">
             <AlertDialog.Header>
               <AlertDialog.Icon status="danger">
                 <Trash2 className="size-5" />
