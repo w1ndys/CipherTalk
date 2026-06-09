@@ -5,7 +5,7 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode, type UIEvent } from 'react'
 import { useChat } from '@ai-sdk/react'
 import { isToolUIPart, type ChatStatus, type UIMessage } from 'ai'
-import { Button as HeroButton, ButtonGroup, Dropdown, Label, Modal, Separator, Surface, Switch, Table } from '@heroui/react'
+import { AlertDialog, Button as HeroButton, ButtonGroup, Dropdown, Label, ListBox, Modal, Separator, Surface, Switch, Table, Toolbar } from '@heroui/react'
 import { AtSign, BarChart3, Braces, Brain, CheckIcon, ChevronDown, Clock3, Code2, Copy, FileText, Globe, History, Image as ImageIcon, Info, Link2, ListChecks, PenLine, Play, Quote, RefreshCcw, Search, Slash, SquarePen, Table2, Trash2, Users, Volume2, Wrench, X, Sparkles } from 'lucide-react'
 import { Sources, SourcesContent, SourcesTrigger } from '@/components/ai-elements/sources'
 import { HoverCard, HoverCardContent, HoverCardTrigger } from '@/components/ui/hover-card'
@@ -1770,6 +1770,8 @@ export default function AgentPage() {
   const titleRequestSeqRef = useRef(0)
   const [recordsOpen, setRecordsOpen] = useState(false)
   const [conversationRecords, setConversationRecords] = useState<AgentConversationRecord[]>([])
+  const [recordPendingDelete, setRecordPendingDelete] = useState<AgentConversationRecord | null>(null)
+  const [recordDeleting, setRecordDeleting] = useState(false)
 
   const appendMentionTargets = useCallback((items: MentionTarget[]) => {
     if (items.length === 0) return
@@ -1940,9 +1942,13 @@ export default function AgentPage() {
     })
   }, [busy, setMessages, stop])
 
-  const handleDeleteRecord = useCallback((record: AgentConversationRecord) => {
-    void window.electronAPI.agent.deleteConversation(record.id).then((result) => {
-      if (!result.success) return
+  const handleDeleteRecord = useCallback(async (record: AgentConversationRecord) => {
+    try {
+      const result = await window.electronAPI.agent.deleteConversation(record.id)
+      if (!result.success) {
+        setAgentNotice(result.error || '删除对话失败')
+        return false
+      }
       setConversationRecords((prev) => prev.filter((item) => item.id !== record.id))
       if (conversationIdRef.current === record.id) {
         setMessages([])
@@ -1957,8 +1963,21 @@ export default function AgentPage() {
         setAgentRunPending(false)
         setSubAgentProgress([])
       }
-    })
+      return true
+    } catch (error) {
+      setAgentNotice(error instanceof Error ? error.message : '删除对话失败')
+      return false
+    }
   }, [setMessages])
+
+  const confirmDeleteRecord = useCallback(async () => {
+    if (!recordPendingDelete) return
+    const target = recordPendingDelete
+    setRecordDeleting(true)
+    const deleted = await handleDeleteRecord(target)
+    setRecordDeleting(false)
+    if (deleted) setRecordPendingDelete(null)
+  }, [handleDeleteRecord, recordPendingDelete])
 
   const beginTitleEdit = useCallback(() => {
     titleRequestSeqRef.current += 1
@@ -2289,56 +2308,76 @@ export default function AgentPage() {
             </button>
           )}
         </div>
-        <div className="relative flex items-center gap-1">
-          <Button
-            aria-label="对话记录"
-            className="size-8 rounded-(--agent-radius,12px) p-0"
-            onClick={() => setRecordsOpen((open) => !open)}
-            title="对话记录"
-            type="button"
-            variant="ghost"
-          >
-            <History className="size-4" />
-          </Button>
-          <Button
-            aria-label="新建对话"
-            className="size-8 rounded-(--agent-radius,12px) p-0"
-            onClick={handleNewConversation}
-            title="新建对话"
-            type="button"
-            variant="ghost"
-          >
-            <SquarePen className="size-4" />
-          </Button>
+        <div className="relative">
+          <Toolbar aria-label="对话操作" className="p-0">
+            <ButtonGroup size="sm" variant="tertiary">
+              <HeroButton
+                aria-label="对话记录"
+                className="size-8 p-0"
+                isIconOnly
+                onPress={() => setRecordsOpen((open) => !open)}
+              >
+                <History className="size-4" />
+              </HeroButton>
+              <HeroButton
+                aria-label="新建对话"
+                className="size-8 p-0"
+                isIconOnly
+                onPress={handleNewConversation}
+              >
+                <ButtonGroup.Separator />
+                <SquarePen className="size-4" />
+              </HeroButton>
+            </ButtonGroup>
+          </Toolbar>
           {recordsOpen && (
-            <div className="absolute right-0 top-10 z-50 w-72 overflow-hidden rounded-(--agent-radius,12px) border border-border bg-popover p-1 shadow-lg">
+            <Surface className="absolute right-0 top-10 z-50 w-80 overflow-hidden rounded-(--agent-radius,12px) border border-border bg-popover shadow-lg">
               {conversationRecords.length > 0 ? (
-                conversationRecords.map((record) => (
-                  <div className="flex items-center gap-1 rounded-(--agent-radius,12px) hover:bg-accent" key={record.id}>
-                    <button
-                      className="flex min-w-0 flex-1 flex-col px-2 py-1.5 text-left"
-                      onClick={() => handleOpenRecord(record)}
-                      type="button"
-                    >
-                      <span className="w-full truncate text-sm text-foreground">{record.title}</span>
-                      <span className="text-muted-foreground text-xs">
-                        {new Date(record.updatedAt).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })}
+                <ListBox
+                  aria-label="对话记录"
+                  className="max-h-80 w-full overflow-y-auto p-1"
+                  selectionMode="none"
+                  onAction={(key) => {
+                    const record = conversationRecords.find((item) => String(item.id) === String(key))
+                    if (record) handleOpenRecord(record)
+                  }}
+                >
+                  {conversationRecords.map((record) => (
+                    <ListBox.Item className="items-center gap-2" id={record.id} key={record.id} textValue={record.title}>
+                      <Clock3 className="size-4 shrink-0 text-muted-foreground" />
+                      <div className="min-w-0 flex-1">
+                        <Label className="block truncate text-sm">{record.title}</Label>
+                        <span className="block truncate text-muted-foreground text-xs">
+                          {new Date(record.updatedAt).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })}
+                        </span>
+                      </div>
+                      <span
+                        className="ms-auto flex shrink-0"
+                        onClick={(event) => event.stopPropagation()}
+                        onMouseDown={(event) => event.stopPropagation()}
+                        onPointerDown={(event) => event.stopPropagation()}
+                      >
+                        <HeroButton
+                          aria-label={`删除 ${record.title}`}
+                          className="size-7 p-0 text-muted-foreground hover:text-danger"
+                          isIconOnly
+                          size="sm"
+                          variant="ghost"
+                          onPress={() => {
+                            setRecordPendingDelete(record)
+                            setRecordsOpen(false)
+                          }}
+                        >
+                          <Trash2 className="size-3.5" />
+                        </HeroButton>
                       </span>
-                    </button>
-                    <button
-                      aria-label={`删除 ${record.title}`}
-                      className="mr-1 inline-flex size-7 shrink-0 items-center justify-center rounded-(--agent-radius,12px) text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
-                      onClick={() => handleDeleteRecord(record)}
-                      type="button"
-                    >
-                      <Trash2 className="size-3.5" />
-                    </button>
-                  </div>
-                ))
+                    </ListBox.Item>
+                  ))}
+                </ListBox>
               ) : (
-                <div className="px-2 py-3 text-center text-muted-foreground text-xs">暂无对话记录</div>
+                <div className="px-3 py-4 text-center text-muted-foreground text-xs">暂无对话记录</div>
               )}
-            </div>
+            </Surface>
           )}
         </div>
       </div>
@@ -2455,7 +2494,7 @@ export default function AgentPage() {
                         // 计划消息的正文已经在 PlanCard 里展示，这里不再重复渲染。
                         if (isPlanMessage) return null
                         const displayText = userDisplay?.textByPartIndex.get(index) ?? part.text
-                        if (!displayText) return null
+                        if (!displayText && !assistantTextStreaming) return null
                         return (
                           <MessageResponse isStreaming={assistantTextStreaming} key={`text-${index}`}>
                             {displayText}
@@ -2721,6 +2760,41 @@ export default function AgentPage() {
           onClose={() => setUsageDetailsModal(null)}
         />
       )}
+      <AlertDialog.Backdrop
+        isOpen={recordPendingDelete !== null}
+        onOpenChange={(open) => {
+          if (!open && !recordDeleting) setRecordPendingDelete(null)
+        }}
+      >
+        <AlertDialog.Container>
+          <AlertDialog.Dialog className="sm:max-w-[400px]">
+            <AlertDialog.Header>
+              <AlertDialog.Icon status="danger">
+                <Trash2 className="size-5" />
+              </AlertDialog.Icon>
+              <AlertDialog.Heading>删除这条对话记录？</AlertDialog.Heading>
+            </AlertDialog.Header>
+            <AlertDialog.Body>
+              <p>删除后无法恢复。</p>
+              {recordPendingDelete && (
+                <p className="mt-2 truncate font-medium text-foreground">{recordPendingDelete.title}</p>
+              )}
+            </AlertDialog.Body>
+            <AlertDialog.Footer>
+              <HeroButton
+                isDisabled={recordDeleting}
+                variant="tertiary"
+                onPress={() => setRecordPendingDelete(null)}
+              >
+                取消
+              </HeroButton>
+              <HeroButton isDisabled={recordDeleting} variant="danger" onPress={confirmDeleteRecord}>
+                {recordDeleting ? '删除中...' : '删除'}
+              </HeroButton>
+            </AlertDialog.Footer>
+          </AlertDialog.Dialog>
+        </AlertDialog.Container>
+      </AlertDialog.Backdrop>
     </Surface>
   )
 }

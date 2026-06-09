@@ -18,7 +18,6 @@ import {
   Separator as HeroSeparator,
   Table as HeroTable,
   Toolbar as HeroToolbar,
-  Tooltip as HeroTooltip,
 } from "@heroui/react";
 import type { FileUIPart, UIMessage } from "ai";
 import {
@@ -132,6 +131,53 @@ export const MessageActions = ({
     </HeroToolbar>
   );
 };
+
+type MessageFloatingToolbarAction = {
+  ariaLabel: string;
+  icon: ReactNode;
+  isDisabled?: boolean;
+  onPress: () => void;
+};
+
+type MessageFloatingToolbarProps = Omit<ComponentProps<typeof HeroToolbar>, "children"> & {
+  actions: MessageFloatingToolbarAction[];
+  excludeFromTableExport?: boolean;
+};
+
+function MessageFloatingToolbar({
+  actions,
+  className,
+  excludeFromTableExport = false,
+  "aria-label": ariaLabel = "内容操作",
+  ...props
+}: MessageFloatingToolbarProps) {
+  if (actions.length === 0) return null;
+
+  return (
+    <HeroToolbar
+      aria-label={ariaLabel}
+      className={cn("absolute top-1 right-1 z-10 gap-1 border-0 bg-transparent p-0 shadow-none", className)}
+      data-ai-table-actions={excludeFromTableExport ? "" : undefined}
+      {...props}
+    >
+      <HeroButtonGroup className="border-0 bg-transparent shadow-none" variant="ghost">
+        {actions.map((action) => (
+          <HeroButton
+            aria-label={action.ariaLabel}
+            className="size-8 min-w-0 bg-transparent p-0 text-muted-foreground shadow-none hover:bg-transparent hover:text-foreground data-[hovered=true]:bg-transparent data-[hovered=true]:text-foreground data-[pressed=true]:scale-95 [&_svg]:size-4"
+            isDisabled={action.isDisabled}
+            isIconOnly
+            key={action.ariaLabel}
+            onPress={action.onPress}
+            size="sm"
+          >
+            {action.icon}
+          </HeroButton>
+        ))}
+      </HeroButtonGroup>
+    </HeroToolbar>
+  );
+}
 
 type HeroMessageActionProps = ComponentProps<typeof HeroButton>;
 
@@ -576,34 +622,26 @@ type MessageCodeProps = ComponentProps<"code"> & {
 
 function StreamingChartPlaceholder({ language }: { language?: string }) {
   return (
-    <Artifact className="my-2 h-[32rem] max-h-[70vh] w-full max-w-full">
-      <ArtifactHeader>
-        <div className="min-w-0">
-          <ArtifactTitle className="font-mono">{language || "chart"}</ArtifactTitle>
-          <ArtifactDescription>正在生成图表</ArtifactDescription>
+    <div aria-label={`正在生成${language || "图表"}`} className="relative my-2 w-full max-w-full overflow-hidden" role="img">
+      <Loader2Icon className="absolute top-5 right-5 z-10 size-4 animate-spin text-muted-foreground" />
+      <div className="flex aspect-video min-h-72 flex-col gap-4">
+        <div className="h-5 w-40 animate-pulse rounded bg-muted" />
+        <div className="grid flex-1 grid-cols-6 items-end gap-3">
+          {[46, 72, 58, 86, 64, 78].map((height, index) => (
+            <div
+              className="animate-pulse rounded-t bg-muted"
+              key={index}
+              style={{ height: `${height}%` }}
+            />
+          ))}
         </div>
-        <Loader2Icon className="size-4 animate-spin text-muted-foreground" />
-      </ArtifactHeader>
-      <ArtifactContent className="p-0">
-        <div className="flex h-full min-h-80 flex-col gap-4 p-4">
-          <div className="h-5 w-40 animate-pulse rounded bg-muted" />
-          <div className="grid flex-1 grid-cols-6 items-end gap-3">
-            {[46, 72, 58, 86, 64, 78].map((height, index) => (
-              <div
-                className="animate-pulse rounded-t bg-muted"
-                key={index}
-                style={{ height: `${height}%` }}
-              />
-            ))}
-          </div>
-          <div className="flex justify-between gap-3">
-            <div className="h-3 w-20 animate-pulse rounded bg-muted" />
-            <div className="h-3 w-24 animate-pulse rounded bg-muted" />
-            <div className="h-3 w-16 animate-pulse rounded bg-muted" />
-          </div>
+        <div className="flex justify-between gap-3">
+          <div className="h-3 w-20 animate-pulse rounded bg-muted" />
+          <div className="h-3 w-24 animate-pulse rounded bg-muted" />
+          <div className="h-3 w-16 animate-pulse rounded bg-muted" />
         </div>
-      </ArtifactContent>
-    </Artifact>
+      </div>
+    </div>
   );
 }
 
@@ -649,13 +687,36 @@ const MessageCode = ({ children, className, node: _node, ...props }: MessageCode
     document.body.removeChild(link);
   };
 
+  if (chartOption) {
+    return (
+      <div className="relative my-2 w-full max-w-full overflow-hidden">
+        <MessageFloatingToolbar
+          actions={[
+            {
+              ariaLabel: isCopied ? "图表配置已复制" : "复制图表配置",
+              icon: isCopied ? <CheckIcon /> : <CopyIcon />,
+              onPress: () => void handleCopy(),
+            },
+            {
+              ariaLabel: "下载图表",
+              icon: <DownloadIcon />,
+              onPress: handleDownloadChart,
+            },
+          ]}
+          aria-label="图表操作"
+        />
+        <ChartBlock className="aspect-video h-auto min-h-72" option={chartOption} ref={chartRef} />
+      </div>
+    );
+  }
+
   return (
-    <Artifact className="my-2 h-[32rem] max-h-[70vh] w-full max-w-full">
+    <Artifact className="my-2 h-128 max-h-[70vh] w-full max-w-full">
       <ArtifactHeader>
         <div className="min-w-0">
           <ArtifactTitle className="font-mono">{rawLanguage || language}</ArtifactTitle>
           <ArtifactDescription>
-            {chartOption ? "ECharts" : showPreview && canPreviewHtml ? "HTML Preview" : canRenderTerminal ? "Terminal" : "Code"}
+            {showPreview && canPreviewHtml ? "HTML Preview" : canRenderTerminal ? "Terminal" : "Code"}
           </ArtifactDescription>
         </div>
         <ArtifactActions>
@@ -667,14 +728,6 @@ const MessageCode = ({ children, className, node: _node, ...props }: MessageCode
               tooltip={showPreview ? "查看代码" : "预览 HTML"}
             />
           )}
-          {chartOption && (
-            <ArtifactAction
-              icon={DownloadIcon}
-              label="下载图表"
-              onClick={handleDownloadChart}
-              tooltip="下载图表"
-            />
-          )}
           <ArtifactAction
             icon={isCopied ? CheckIcon : CopyIcon}
             label="复制代码"
@@ -684,9 +737,7 @@ const MessageCode = ({ children, className, node: _node, ...props }: MessageCode
         </ArtifactActions>
       </ArtifactHeader>
       <ArtifactContent className="p-0">
-        {chartOption ? (
-          <ChartBlock className="p-3" option={chartOption} ref={chartRef} />
-        ) : showPreview && canPreviewHtml ? (
+        {showPreview && canPreviewHtml ? (
           <WebPreview className="rounded-none border-0" defaultUrl="about:srcdoc">
             <WebPreviewNavigation>
               <WebPreviewUrl readOnly value="about:srcdoc" />
@@ -907,40 +958,24 @@ const MessageTable = ({ children, className, node: _node, ..._props }: MessageTa
   return (
     <div className="my-4 min-w-0 max-w-full">
       <div className="relative" ref={exportRef} data-ai-table-export>
-        <div className="absolute top-2 right-3 z-10 flex items-center gap-0.5" data-ai-table-actions>
-          <HeroTooltip delay={0}>
-            <HeroButton
-              aria-label={isCopied ? "表格已复制" : "复制表格"}
-              className="h-6 w-6 min-w-0 rounded-md bg-transparent p-0 text-muted-foreground shadow-none hover:bg-muted/70 hover:text-foreground data-[hovered=true]:bg-muted/70 data-[hovered=true]:text-foreground data-[pressed=true]:scale-95 [&_svg]:size-3.5"
-              isDisabled={!hasTableData}
-              isIconOnly
-              onPress={() => void handleCopy()}
-              size="sm"
-              variant="ghost"
-            >
-              {isCopied ? <CheckIcon /> : <CopyIcon />}
-            </HeroButton>
-            <HeroTooltip.Content>
-              <p>{isCopied ? "已复制" : "复制表格"}</p>
-            </HeroTooltip.Content>
-          </HeroTooltip>
-          <HeroTooltip delay={0}>
-            <HeroButton
-              aria-label="下载表格图片"
-              className="h-6 w-6 min-w-0 rounded-md bg-transparent p-0 text-muted-foreground shadow-none hover:bg-muted/70 hover:text-foreground data-[hovered=true]:bg-muted/70 data-[hovered=true]:text-foreground data-[pressed=true]:scale-95 [&_svg]:size-3.5"
-              isDisabled={isExporting}
-              isIconOnly
-              onPress={() => void handleDownload()}
-              size="sm"
-              variant="ghost"
-            >
-              {isExporting ? <Loader2Icon className="animate-spin" /> : <DownloadIcon />}
-            </HeroButton>
-            <HeroTooltip.Content>
-              <p>{isExporting ? "正在生成" : "下载图片"}</p>
-            </HeroTooltip.Content>
-          </HeroTooltip>
-        </div>
+        <MessageFloatingToolbar
+          actions={[
+            {
+              ariaLabel: isCopied ? "表格已复制" : "复制表格",
+              icon: isCopied ? <CheckIcon /> : <CopyIcon />,
+              isDisabled: !hasTableData,
+              onPress: () => void handleCopy(),
+            },
+            {
+              ariaLabel: "下载表格图片",
+              icon: isExporting ? <Loader2Icon className="animate-spin" /> : <DownloadIcon />,
+              isDisabled: isExporting,
+              onPress: () => void handleDownload(),
+            },
+          ]}
+          aria-label="表格操作"
+          excludeFromTableExport
+        />
         <HeroTable className={cn("max-w-full", className)}>
           <HeroTable.ScrollContainer data-ai-table-scroll>
             <HeroTable.Content
@@ -1042,6 +1077,96 @@ function StreamingTablePlaceholder() {
   );
 }
 
+const PIXEL_RUNNER_FRAMES = [
+  [
+    "...##...",
+    "...##...",
+    "..####..",
+    ".#.##.#.",
+    "...##...",
+    "..#..#..",
+    ".#....#.",
+    "##....##",
+  ],
+  [
+    "...##...",
+    "...##...",
+    "..####..",
+    ".#.##.#.",
+    "...##...",
+    ".##..#..",
+    "....##..",
+    "...#..#.",
+  ],
+  [
+    "...##...",
+    "...##...",
+    "..####..",
+    "..####.#",
+    ".#.##...",
+    "...##...",
+    "..#..##.",
+    ".#....#.",
+  ],
+  [
+    "...##...",
+    "...##...",
+    "..####..",
+    "..##.#..",
+    ".#.##.#.",
+    "...##...",
+    ".##..#..",
+    "....#.##",
+  ],
+];
+
+function PixelRunnerFrame({ className, frame }: { className?: string; frame: string[] }) {
+  return (
+    <span aria-hidden className={cn("absolute inset-0 grid grid-cols-8 grid-rows-8 gap-px", className)}>
+      {frame.flatMap((row, rowIndex) =>
+        Array.from(row).map((pixel, columnIndex) => (
+          <span
+            className={cn(
+              "size-0.5 rounded-xs",
+              pixel === "#" ? "bg-current" : "bg-transparent"
+            )}
+            key={`${rowIndex}-${columnIndex}`}
+          />
+        ))
+      )}
+    </span>
+  );
+}
+
+export function MessageStreamingIndicator({ className, ...props }: HTMLAttributes<HTMLDivElement>) {
+  return (
+    <div
+      aria-label="AI 正在回复"
+      className={cn(
+        "mt-1.5 inline-flex w-fit items-center gap-1.5 text-muted-foreground text-xs",
+        className
+      )}
+      role="status"
+      {...props}
+    >
+      <span className="relative block h-5 w-6 shrink-0 overflow-hidden text-primary" aria-hidden>
+        <span className="absolute bottom-0.5 left-0 h-px w-6 bg-current/25" />
+        <span className="ai-runner-dust absolute bottom-1 left-0 size-0.5 rounded-xs bg-current/45" />
+        <span className="absolute top-px left-1 block size-5">
+          {PIXEL_RUNNER_FRAMES.map((frame, index) => (
+            <PixelRunnerFrame
+              className={`ai-runner-frame-${index}`}
+              frame={frame}
+              key={`runner-frame-${index}`}
+            />
+          ))}
+        </span>
+      </span>
+      <span>回复中...</span>
+    </div>
+  );
+}
+
 export const MessageResponse = memo(
   ({ className, components, isStreaming = false, children, ...props }: MessageResponseProps) => {
     const markdown = typeof children === "string" ? children : "";
@@ -1068,6 +1193,7 @@ export const MessageResponse = memo(
           {children}
         </Streamdown>
         {activity.pendingTable && <StreamingTablePlaceholder />}
+        {isStreaming && <MessageStreamingIndicator />}
       </MessageRenderContext.Provider>
     );
   },

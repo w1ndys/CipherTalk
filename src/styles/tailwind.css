@@ -94,3 +94,111 @@
     transform: translate(-50%, -50%) scale(1);
   }
 }
+
+.ai-runner-frame-0,
+.ai-runner-frame-1,
+.ai-runner-frame-2,
+.ai-runner-frame-3 {
+  opacity: 0;
+  animation-duration: 560ms;
+  animation-iteration-count: infinite;
+  animation-timing-function: steps(1, end);
+}
+
+.ai-runner-frame-0 {
+  animation-name: ai-runner-frame-0;
+}
+
+.ai-runner-frame-1 {
+  animation-name: ai-runner-frame-1;
+}
+
+.ai-runner-frame-2 {
+  animation-name: ai-runner-frame-2;
+}
+
+.ai-runner-frame-3 {
+  animation-name: ai-runner-frame-3;
+}
+
+.ai-runner-dust {
+  animation: ai-runner-dust 560ms steps(2, end) infinite;
+}
+
+@keyframes ai-runner-frame-0 {
+  0%, 24.99% {
+    opacity: 1;
+  }
+
+  25%, 100% {
+    opacity: 0;
+  }
+}
+
+@keyframes ai-runner-frame-1 {
+  0%, 24.99%, 50%, 100% {
+    opacity: 0;
+  }
+
+  25%, 49.99% {
+    opacity: 1;
+  }
+}
+
+@keyframes ai-runner-frame-2 {
+  0%, 49.99%, 75%, 100% {
+    opacity: 0;
+  }
+
+  50%, 74.99% {
+    opacity: 1;
+  }
+}
+
+@keyframes ai-runner-frame-3 {
+  0%, 74.99% {
+    opacity: 0;
+  }
+
+  75%, 100% {
+    opacity: 1;
+  }
+}
+
+@keyframes ai-runner-dust {
+  0% {
+    opacity: 0;
+    transform: translateX(13px);
+  }
+
+  45% {
+    opacity: 0.55;
+    transform: translateX(6px);
+  }
+
+  100% {
+    opacity: 0;
+    transform: translateX(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ai-runner-frame-0,
+  .ai-runner-frame-1,
+  .ai-runner-frame-2,
+  .ai-runner-frame-3,
+  .ai-runner-dust {
+    animation: none !important;
+  }
+
+  .ai-runner-frame-0 {
+    opacity: 1;
+  }
+
+  .ai-runner-frame-1,
+  .ai-runner-frame-2,
+  .ai-runner-frame-3,
+  .ai-runner-dust {
+    opacity: 0;
+  }
+}
