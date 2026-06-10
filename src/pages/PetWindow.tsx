@@ -23,12 +23,22 @@ type BubbleFrame = {
 
 const NOTICE_DURATION_MS = 5000
 const NOTICE_QUEUE_MAX = 5
+const SHORT_CLICK_MAX_MS = 220
+const SHORT_CLICK_MAX_DISTANCE = 4
+const NOTIFY_ACTION: PetStateId = 'waving'
 const DEFAULT_BUBBLE_FRAME: BubbleFrame = {
   expanded: false,
   baseLeft: 0,
   baseTop: 0,
   baseWidth: 150,
   baseHeight: 170,
+}
+
+type PointerDownInfo = {
+  pointerId: number
+  x: number
+  y: number
+  at: number
 }
 
 /** 消息提醒气泡：头像 + 昵称 + 预览，点击把主窗口带到前台。 */
@@ -83,6 +93,8 @@ export default function PetWindow() {
   const pet = useCurrentPetLoader()
   const [agentState, setAgentState] = useState<PetAgentState>('idle')
   const [dragState, setDragState] = useState<PetStateId | null>(null)
+  const [clickState, setClickState] = useState<PetStateId | null>(null)
+  const [notifyState, setNotifyState] = useState<PetStateId | null>(null)
   const [notice, setNotice] = useState<NotifyPayload | null>(null)
   const [bubbleFrame, setBubbleFrame] = useState<BubbleFrame>(DEFAULT_BUBBLE_FRAME)
   const [isPointerInside, setIsPointerInside] = useState(false)
@@ -92,10 +104,14 @@ export default function PetWindow() {
   const showingRef = useRef(false)
   const dismissTimerRef = useRef(0)
   const hoverFlairTimerRef = useRef(0)
+  const clickActionTimerRef = useRef(0)
+  const notifyActionTimerRef = useRef(0)
+  const pointerDownRef = useRef<PointerDownInfo | null>(null)
 
   const clearHoverState = useCallback(() => {
     setIsPointerInside(false)
     setHoverFlair(null)
+    pointerDownRef.current = null
     window.clearTimeout(hoverFlairTimerRef.current)
   }, [])
 
@@ -108,6 +124,57 @@ export default function PetWindow() {
       setHoverFlair(null)
     }, PET_STATES[next].durationMs * 2)
   }, [agentState, dragState])
+
+  const triggerClickJump = useCallback(() => {
+    if (dragState !== null) return
+    setHoverFlair(null)
+    setClickState('jumping')
+    window.clearTimeout(clickActionTimerRef.current)
+    clickActionTimerRef.current = window.setTimeout(() => {
+      setClickState(null)
+    }, PET_STATES.jumping.durationMs * 2)
+  }, [dragState])
+
+  const triggerNotifyAction = useCallback(() => {
+    setNotifyState(NOTIFY_ACTION)
+    window.clearTimeout(notifyActionTimerRef.current)
+    notifyActionTimerRef.current = window.setTimeout(() => {
+      setNotifyState(null)
+    }, PET_STATES[NOTIFY_ACTION].durationMs * 2)
+  }, [])
+
+  const handlePetPointerDown = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
+    if (event.button !== 0) return
+    if ((event.target as HTMLElement).closest('button')) return
+    pointerDownRef.current = {
+      pointerId: event.pointerId,
+      x: event.clientX,
+      y: event.clientY,
+      at: performance.now(),
+    }
+  }, [])
+
+  const handlePetPointerMove = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
+    const down = pointerDownRef.current
+    if (!down || down.pointerId !== event.pointerId) return
+    const distance = Math.hypot(event.clientX - down.x, event.clientY - down.y)
+    if (distance > SHORT_CLICK_MAX_DISTANCE) pointerDownRef.current = null
+  }, [])
+
+  const handlePetPointerUp = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
+    const down = pointerDownRef.current
+    pointerDownRef.current = null
+    if (!down || down.pointerId !== event.pointerId) return
+    const elapsed = performance.now() - down.at
+    const distance = Math.hypot(event.clientX - down.x, event.clientY - down.y)
+    if (elapsed <= SHORT_CLICK_MAX_MS && distance <= SHORT_CLICK_MAX_DISTANCE) {
+      triggerClickJump()
+    }
+  }, [triggerClickJump])
+
+  const handlePetPointerCancel = useCallback(() => {
+    pointerDownRef.current = null
+  }, [])
 
   useEffect(() => {
     document.documentElement.style.background = 'transparent'
@@ -139,6 +206,7 @@ export default function PetWindow() {
 
   useEffect(() => {
     const off = window.electronAPI.pet.onNotify((payload) => {
+      triggerNotifyAction()
       const queue = queueRef.current
       // 合并同一个人的多条，避免刷屏
       const idx = queue.findIndex((n) => n.username === payload.username)
@@ -151,9 +219,11 @@ export default function PetWindow() {
       off()
       window.clearTimeout(dismissTimerRef.current)
       window.clearTimeout(hoverFlairTimerRef.current)
+      window.clearTimeout(clickActionTimerRef.current)
+      window.clearTimeout(notifyActionTimerRef.current)
       window.electronAPI.pet.setBubble(false)
     }
-  }, [showNext])
+  }, [showNext, triggerNotifyAction])
 
   useEffect(() => {
     const off = window.electronAPI.pet.onBubbleFrame((frame) => {
@@ -219,6 +289,8 @@ export default function PetWindow() {
   const flair = useIdleFlair(agentState === 'idle' && dragState === null && !isPointerInside)
 
   const state: PetStateId = dragState
+    ?? clickState
+    ?? notifyState
     ?? (agentState === 'idle' && hoverFlair ? hoverFlair : agentState === 'idle' && flair ? flair : petStateForAgent(agentState))
 
   const petStageStyle: React.CSSProperties = {
@@ -269,7 +341,14 @@ export default function PetWindow() {
           <PetNotice notice={notice} onClose={dismissNotice} />
         </div>
       )}
-      <div className="flex flex-col items-center justify-end overflow-hidden pb-1" style={petStageStyle}>
+      <div
+        className="flex flex-col items-center justify-end overflow-hidden pb-1"
+        onPointerCancel={handlePetPointerCancel}
+        onPointerDown={handlePetPointerDown}
+        onPointerMove={handlePetPointerMove}
+        onPointerUp={handlePetPointerUp}
+        style={petStageStyle}
+      >
         <button
           aria-label="收起桌宠"
           className={`absolute top-1 right-1 rounded-full bg-black/30 p-1 text-white/80 transition-opacity hover:bg-black/50 ${isPointerInside ? 'opacity-100' : 'opacity-0'}`}

@@ -1,46 +1,45 @@
-// CSS 变量 - 主题
-@use './chat-patterns.scss';
+/* CSS 变量 - 主题 */
 
 :root {
-  // 旧样式变量桥接到 HeroUI 默认主题
+  /* 旧样式变量桥接到 HeroUI 默认主题 */
   --primary: var(--accent);
   --primary-hover: var(--accent-hover, var(--accent));
   --primary-light: var(--accent-soft);
   --primary-rgb: 37, 99, 235;
 
-  // 背景
+  /* 背景 */
   --bg-primary: var(--background);
   --bg-secondary: var(--surface-secondary);
   --bg-tertiary: var(--default);
   --bg-hover: var(--surface-hover, var(--default-hover));
 
-  // 文字
+  /* 文字 */
   --text-primary: var(--foreground);
   --text-secondary: var(--muted);
   --text-tertiary: var(--field-placeholder, var(--muted));
 
-  // 边框
+  /* 边框 */
   --border-color: var(--border);
   --border-radius: 9999px;
 
-  // 阴影
+  /* 阴影 */
   --shadow-sm: var(--surface-shadow);
   --shadow-md: var(--overlay-shadow);
 
-  // 侧边栏
+  /* 侧边栏 */
   --sidebar-width: 220px;
 
-  // 主题渐变
+  /* 主题渐变 */
   --bg-gradient: var(--background);
   --primary-gradient: var(--accent);
 
-  // 卡片背景
+  /* 卡片背景 */
   --card-bg: var(--surface);
 
-  // Logo 颜色反转（浅色主题用 0，深色主题用 1）
+  /* Logo 颜色反转（浅色主题用 0，深色主题用 1） */
   --logo-invert: 0;
 
-  // 独立窗口标题栏安全区
+  /* 独立窗口标题栏安全区 */
   --window-chrome-height: 40px;
   --window-controls-left-safe: 16px;
   --window-controls-right-safe: 176px;
@@ -66,14 +65,16 @@
   --window-toolbar-gap: 10px;
 }
 
-[data-theme="dark"] {
+[data-theme='dark'] {
   --logo-invert: 1;
   --primary-rgb: 96, 165, 250;
 }
 
-// 全局重置交给 Tailwind v4 Preflight（@import "tailwindcss" 已自带，
-// 在 @layer base 里做了 `* { margin:0; padding:0; box-sizing:border-box }`）。
-// 不要在此再写无层级的 `*` 重置——否则会压过 HeroUI 写在 @layer components 的组件样式。
+/*
+ * 全局重置交给 Tailwind v4 Preflight（@import "tailwindcss" 已自带，
+ * 在 @layer base 里做了 `* { margin:0; padding:0; box-sizing:border-box }`）。
+ * 不要在此再写无层级的 `*` 重置，否则会压过 HeroUI 写在 @layer components 的组件样式。
+ */
 
 html {
   height: 100%;
@@ -90,20 +91,19 @@ body {
   user-select: text;
 }
 
-
-// 启动屏窗口：强制纯透明背景（覆盖主题色）
+/* 启动屏窗口：强制纯透明背景（覆盖主题色） */
 body.splash-transparent {
   background: transparent !important;
 }
 
-// 禁止图片拖动
+/* 禁止图片拖动 */
 img {
   -webkit-user-drag: none;
   user-select: none;
   pointer-events: none;
 }
 
-// 滚动条样式
+/* 滚动条样式 */
 ::-webkit-scrollbar {
   width: 6px;
   height: 6px;
@@ -116,45 +116,50 @@ img {
 ::-webkit-scrollbar-thumb {
   background: var(--text-tertiary);
   border-radius: 3px;
+}
 
-  &:hover {
-    background: var(--text-secondary);
-  }
+::-webkit-scrollbar-thumb:hover {
+  background: var(--text-secondary);
 }
 
 .ct-ai-dropdown-list {
   scrollbar-width: thin;
   scrollbar-color: var(--border-color) transparent;
   scrollbar-gutter: stable;
-
-  &::-webkit-scrollbar {
-    width: 8px;
-    height: 8px;
-  }
-
-  &::-webkit-scrollbar-track {
-    background: transparent;
-  }
-
-  &::-webkit-scrollbar-thumb {
-    min-height: 32px;
-    background: var(--border-color);
-    background-clip: content-box;
-    border: 2px solid transparent;
-    border-radius: 9999px;
-
-    &:hover {
-      background: var(--text-tertiary);
-      background-clip: content-box;
-    }
-  }
-
-  &::-webkit-scrollbar-corner {
-    background: transparent;
-  }
 }
 
-// 按钮基础样式
+.ct-ai-dropdown-list::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+.ct-ai-dropdown-list::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.ct-ai-dropdown-list::-webkit-scrollbar-thumb {
+  min-height: 32px;
+  background: var(--border-color);
+  background-clip: content-box;
+  border: 2px solid transparent;
+  border-radius: 9999px;
+}
+
+.ct-ai-dropdown-list::-webkit-scrollbar-thumb:hover {
+  background: var(--text-tertiary);
+  background-clip: content-box;
+}
+
+.ct-ai-dropdown-list::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+.agent-prompt-input [data-slot='input-group']:has([data-slot='input-group-control']:focus-visible) {
+  border-color: var(--border) !important;
+  box-shadow: 0 1px 2px 0 rgb(0 0 0 / 0.05) !important;
+}
+
+/* 按钮基础样式 */
 .btn {
   display: inline-flex;
   align-items: center;
@@ -165,27 +170,27 @@ img {
   font-size: 14px;
   cursor: pointer;
   transition: all 0.2s;
-
-  &-primary {
-    background: var(--primary);
-    color: white;
-
-    &:hover {
-      background: var(--primary-hover);
-    }
-  }
-
-  &-secondary {
-    background: var(--bg-tertiary);
-    color: var(--text-primary);
-
-    &:hover {
-      background: var(--border-color);
-    }
-  }
 }
 
-// 卡片样式
+.btn-primary {
+  background: var(--primary);
+  color: white;
+}
+
+.btn-primary:hover {
+  background: var(--primary-hover);
+}
+
+.btn-secondary {
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+}
+
+.btn-secondary:hover {
+  background: var(--border-color);
+}
+
+/* 卡片样式 */
 .card {
   background: var(--bg-secondary);
   border-radius: 16px;
@@ -194,7 +199,7 @@ img {
 }
 
 
-// 微信表情样式
+/* 微信表情样式 */
 .wechat-emoji {
   display: inline-block;
   width: 20px;
@@ -204,14 +209,14 @@ img {
   pointer-events: auto;
 }
 
-// 消息中的链接样式
+/* 消息中的链接样式 */
 .message-link {
   color: var(--primary);
   text-decoration: none;
   word-break: break-all;
   pointer-events: auto;
+}
 
-  &:hover {
-    text-decoration: underline;
-  }
+.message-link:hover {
+  text-decoration: underline;
 }

@@ -14,6 +14,18 @@ export type PetStateId =
   | 'running'
   | 'review'
 
+export const PET_STATE_IDS = [
+  'idle',
+  'running-right',
+  'running-left',
+  'waving',
+  'jumping',
+  'failed',
+  'waiting',
+  'running',
+  'review',
+] as const satisfies readonly PetStateId[]
+
 export type PetStateSpec = {
   row: number
   frames: number

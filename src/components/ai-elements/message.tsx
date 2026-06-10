@@ -36,7 +36,7 @@ import {
 } from "lucide-react";
 import type { ComponentProps, HTMLAttributes, ReactElement, ReactNode } from "react";
 import { Children, Fragment, cloneElement, createContext, isValidElement, memo, useContext, useEffect, useMemo, useRef, useState } from "react";
-import { Streamdown } from "streamdown";
+import { Streamdown, type AnimateOptions } from "streamdown";
 import { bundledLanguages, type BundledLanguage } from "shiki";
 import {
   Artifact,
@@ -1167,6 +1167,14 @@ export function MessageStreamingIndicator({ className, ...props }: HTMLAttribute
   );
 }
 
+// 流式新增文字逐字淡入（中文没有空格分词，按字符切分）。
+// 插件自动跳过 code/pre/svg/math，且已渲染过的字符不会重复动画。
+const STREAMING_TEXT_ANIMATION: AnimateOptions = {
+  sep: "char",
+  duration: 150,
+  stagger: 10,
+};
+
 export const MessageResponse = memo(
   ({ className, components, isStreaming = false, children, ...props }: MessageResponseProps) => {
     const markdown = typeof children === "string" ? children : "";
@@ -1175,6 +1183,7 @@ export const MessageResponse = memo(
     return (
       <MessageRenderContext.Provider value={{ isStreaming }}>
         <Streamdown
+          animated={isStreaming ? STREAMING_TEXT_ANIMATION : false}
           className={cn(
             "size-full [&>*:first-child]:mt-0 [&>*:last-child]:mb-0",
             className
