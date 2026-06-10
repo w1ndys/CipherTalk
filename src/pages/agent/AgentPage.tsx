@@ -50,10 +50,6 @@ import {
 import { Loader } from '@/components/ai-elements/loader'
 import { Shimmer } from '@/components/ai-elements/shimmer'
 import { IpcChatTransport, type AgentModelConfig, type AgentProgressEvent, type AgentReasoningEffort, type AgentScope } from '@/features/aiagent/transport/ipcChatTransport'
-import { CurrentPetProvider, useCurrentPet } from '@/features/pets/PetContext'
-import { PetSprite } from '@/features/pets/PetSprite'
-import { petStateForAgent, type PetAgentState, type PetStateId } from '@/features/pets/petStates'
-import { useIdleFlair } from '@/features/pets/useIdleFlair'
 import * as configService from '@/services/config'
 
 const PROMPT_PRESETS = [
@@ -92,6 +88,7 @@ function SlashPresetButton({ showGroupSeparator = false }: { showGroupSeparator?
   )
   const [manualOpen, setManualOpen] = useState(false)
   const isOpen = manualOpen || query !== null
+  const applyingPresetRef = useRef(false)
 
   const openSlashMenu = () => {
     const v = textInput.value
@@ -99,7 +96,29 @@ function SlashPresetButton({ showGroupSeparator = false }: { showGroupSeparator?
     setManualOpen(true)
   }
 
+  const cancelSlashMenu = () => {
+    setManualOpen(false)
+    if (query === null) return
+    const slashIdx = value.lastIndexOf('/')
+    const prefix = slashIdx >= 0 ? value.slice(0, slashIdx).trimEnd() : value
+    textInput.setInput(prefix)
+  }
+
+  const handleOpenChange = (open: boolean) => {
+    if (open) {
+      setManualOpen(true)
+      return
+    }
+    if (applyingPresetRef.current) {
+      applyingPresetRef.current = false
+      setManualOpen(false)
+      return
+    }
+    cancelSlashMenu()
+  }
+
   const applyPreset = (text: string) => {
+    applyingPresetRef.current = true
     if (query !== null) {
       const slashIdx = value.lastIndexOf('/')
       const prefix = slashIdx >= 0 ? value.slice(0, slashIdx).trimEnd() : ''
@@ -111,7 +130,7 @@ function SlashPresetButton({ showGroupSeparator = false }: { showGroupSeparator?
   }
 
   return (
-    <Dropdown isOpen={isOpen} onOpenChange={setManualOpen}>
+    <Dropdown isOpen={isOpen} onOpenChange={handleOpenChange}>
       <HeroButton aria-label="打开预设" isIconOnly size="sm" variant="tertiary" onPress={openSlashMenu}>
         {showGroupSeparator && <ButtonGroup.Separator />}
         <Slash className="size-3.5" />
@@ -1392,18 +1411,6 @@ function messageTextOf(message: UIMessage): string {
     .trim()
 }
 
-/**
- * Agent 页常驻宠物：空对话时在对话区中间迎接，有对话后驻守在最新一条 AI 回复的
- * 操作栏（详情按钮右边）。跟随运行状态（跑/失败/挥手收尾），空闲时不定时随机小动作（含跑动）。
- */
-function AgentCompanionPet({ state, centered = false, className }: { state: PetAgentState; centered?: boolean; className?: string }) {
-  const pet = useCurrentPet()
-  const flair = useIdleFlair(Boolean(pet) && state === 'idle')
-  if (!pet) return null
-  const display: PetStateId = state === 'idle' && flair ? flair : petStateForAgent(state)
-  return <PetSprite className={className} label={pet.displayName} scale={centered ? 0.55 : 0.18} src={pet.spriteUrl} state={display} />
-}
-
 function MessageUsageStats({
   canRegenerate,
   metadata,
@@ -1411,7 +1418,6 @@ function MessageUsageStats({
   copied,
   regenerating,
   speaking,
-  petState,
   onCopy,
   onOpenDetails,
   onRegenerate,
@@ -1423,7 +1429,6 @@ function MessageUsageStats({
   copied: boolean
   regenerating: boolean
   speaking: boolean
-  petState?: PetAgentState
   onCopy: () => void
   onOpenDetails: (data: AgentMessageMetadata) => void
   onRegenerate: () => void
@@ -1470,7 +1475,6 @@ function MessageUsageStats({
             <Info className="size-3.5" />
           </MessageAction>
         </MessageActions>
-        {petState !== undefined && <AgentCompanionPet className="ml-2" state={petState} />}
       </div>
     </div>
   )
@@ -1732,7 +1736,8 @@ export default function AgentPage() {
     ),
     [handleAgentProgress]
   )
-  const { messages, sendMessage, setMessages, status, stop } = useChat({ transport })
+  // 流式 chunk 合并到每 50ms 更新一次 UI，避免 token 级高频重渲染拖卡滚动
+  const { messages, sendMessage, setMessages, status, stop } = useChat({ transport, experimental_throttle: 50 })
   const [modelOpen, setModelOpen] = useState(false)
   const busy = status === 'submitted' || status === 'streaming'
   const latestUserMessageId = useMemo(() => {
@@ -1747,13 +1752,6 @@ export default function AgentPage() {
     return !!last && last.role === 'assistant' && last.parts.some((part) => (
       isToolUIPart(part) && part.type.replace(/^tool-/, '') === 'delegate_analysis'
     ))
-  }, [messages])
-  // 常驻宠物驻守在最新一条 AI 回复的操作栏里
-  const lastAssistantIndex = useMemo(() => {
-    for (let i = messages.length - 1; i >= 0; i--) {
-      if (messages[i].role === 'assistant') return i
-    }
-    return -1
   }, [messages])
   // 本次会话累计 token 用量（各助手消息 usage 求和），供输入框底部展示
   const conversationUsage = useMemo(() => {
@@ -1786,25 +1784,20 @@ export default function AgentPage() {
   const [conversationRecords, setConversationRecords] = useState<AgentConversationRecord[]>([])
   const [recordPendingDelete, setRecordPendingDelete] = useState<AgentConversationRecord | null>(null)
   const [recordDeleting, setRecordDeleting] = useState(false)
-  // Agent 运行状态 → 宠物动作：跑→run，报错→failed，收尾→done(挥手 2.6s)。
-  // 同一份状态既驱动页面常驻宠物，也广播给桌宠窗口。
+  // Agent 运行状态 → 桌宠动作：跑→run，报错→failed，收尾→done(挥手 2.6s)。
   const petAgentState = busy ? 'running' : agentNotice ? 'failed' : 'idle'
-  const [companionPetState, setCompanionPetState] = useState<PetAgentState>('idle')
   const petPrevBusyRef = useRef(false)
   useEffect(() => {
     if (petAgentState === 'idle' && petPrevBusyRef.current) {
       window.electronAPI.pet?.setAgentState('done')
-      setCompanionPetState('done')
       const timer = window.setTimeout(() => {
         window.electronAPI.pet?.setAgentState('idle')
-        setCompanionPetState('idle')
       }, 2600)
       petPrevBusyRef.current = false
       return () => window.clearTimeout(timer)
     }
     petPrevBusyRef.current = petAgentState === 'running'
     window.electronAPI.pet?.setAgentState(petAgentState)
-    setCompanionPetState(petAgentState)
   }, [petAgentState])
 
   const appendMentionTargets = useCallback((items: MentionTarget[]) => {
@@ -2296,7 +2289,6 @@ export default function AgentPage() {
   ), [sessionNameMap, sourceNameById])
 
   return (
-    <CurrentPetProvider>
     <Surface
       className="flex h-full min-h-0 flex-col"
       style={{ '--agent-radius': '12px' } as CSSProperties}
@@ -2444,7 +2436,6 @@ export default function AgentPage() {
             <ConversationEmptyState
               title="开始查询聊天记录"
               description="输入问题后，助手会基于本地聊天数据回答"
-              icon={<AgentCompanionPet centered state={companionPetState} />}
             />
           ) : (
             messages.map((message, messageIndex) => {
@@ -2576,7 +2567,6 @@ export default function AgentPage() {
                         copied={copiedMessageId === message.id}
                         metadata={message.metadata}
                         messageText={assistantDisplayText}
-                        petState={messageIndex === lastAssistantIndex ? companionPetState : undefined}
                         onCopy={() => { void handleCopyAssistantMessage(message.id, assistantDisplayText) }}
                         onOpenDetails={setUsageDetailsModal}
                         onRegenerate={() => handleRegenerateAssistantMessage(messageIndex)}
@@ -2632,7 +2622,7 @@ export default function AgentPage() {
         <PromptInputProvider>
           <PromptInput
             accept="image/*,.txt,.md,.json,.csv"
-            className="mx-auto mb-2 w-full min-w-80 max-w-[82%] **:data-[slot=input-group]:rounded-(--agent-radius,12px) **:data-[slot=input-group]:border-border **:data-[slot=input-group]:bg-surface **:data-[slot=input-group]:shadow-xs"
+            className="agent-prompt-input mx-auto mb-2 w-full min-w-80 max-w-[82%] **:data-[slot=input-group]:rounded-(--agent-radius,12px) **:data-[slot=input-group]:border-border **:data-[slot=input-group]:bg-surface **:data-[slot=input-group]:shadow-xs"
             maxFiles={6}
             maxFileSize={8 * 1024 * 1024}
             multiple
@@ -2852,6 +2842,5 @@ export default function AgentPage() {
         </AlertDialog.Container>
       </AlertDialog.Backdrop>
     </Surface>
-    </CurrentPetProvider>
   )
 }

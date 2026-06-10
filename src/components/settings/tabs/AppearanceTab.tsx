@@ -3,6 +3,7 @@ import { Description, Label, Radio, RadioGroup, Slider, Switch, Tabs, type Key }
 import { ImageIcon, Moon, Monitor, PanelBottom, PanelLeft, Sun, Upload, Video } from 'lucide-react'
 import {
   HOME_BACKGROUND_PRESETS,
+  getHomeBackgroundPresetPoster,
   getHomeBackgroundPresetSrc,
   useThemeStore,
   type HomeBackgroundPreset,
@@ -32,10 +33,11 @@ const getAvatarFallback = (name?: string, wxid?: string): string => {
 }
 
 /**
- * 背景视频预览：默认停在首帧（#t=0.1 强制画出第一帧），悬停才播放。
- * 进外观页时不再同时拉起多个视频解码，消除进入卡顿。
+ * 背景视频预览：默认只展示静态画面，悬停才播放。
+ * 有 poster（预设视频的抽帧图）时用 preload="none"，挂载时完全不初始化解码器，
+ * 消除进入外观页的卡顿；无 poster（自定义视频）时退回 #t=0.1 画首帧。
  */
-function HoverPlayVideo({ src, className, style }: { src: string; className?: string; style?: CSSProperties }) {
+function HoverPlayVideo({ src, poster, className, style }: { src: string; poster?: string; className?: string; style?: CSSProperties }) {
   const ref = useRef<HTMLVideoElement>(null)
   return (
     <video
@@ -44,9 +46,10 @@ function HoverPlayVideo({ src, className, style }: { src: string; className?: st
       muted
       loop
       playsInline
-      preload="metadata"
+      poster={poster}
+      preload={poster ? 'none' : 'metadata'}
       ref={ref}
-      src={src.includes('#') ? src : `${src}#t=0.1`}
+      src={(poster || src.includes('#')) ? src : `${src}#t=0.1`}
       style={style}
       title="悬停预览"
       onMouseEnter={() => { void ref.current?.play().catch(() => undefined) }}
@@ -82,6 +85,7 @@ function AppearanceTab() {
   const customBackgroundReady = Boolean(homeBackground.customUrl)
     && (homeBackground.customType === 'image' || homeBackground.customType === 'video')
   const presetBackgroundSrc = getHomeBackgroundPresetSrc(homeBackground.preset)
+  const presetBackgroundPoster = getHomeBackgroundPresetPoster(homeBackground.preset)
   const backgroundPreviewStyle = {
     '--home-background-preview-blur': `${homeBackground.blur}px`
   } as CSSProperties
@@ -198,6 +202,7 @@ function AppearanceTab() {
                   <Radio.Content className="home-background-preset-radio-content">
                     <HoverPlayVideo
                       className="home-background-preset-video"
+                      poster={preset.poster}
                       src={preset.src}
                       style={backgroundPreviewStyle}
                     />
@@ -218,7 +223,7 @@ function AppearanceTab() {
                     <HoverPlayVideo src={homeBackground.customUrl} style={backgroundPreviewStyle} />
                   )
                 ) : (
-                  <HoverPlayVideo src={presetBackgroundSrc} style={backgroundPreviewStyle} />
+                  <HoverPlayVideo poster={presetBackgroundPoster} src={presetBackgroundSrc} style={backgroundPreviewStyle} />
                 )}
                 <span className="home-background-preview-badge">
                   {customBackgroundReady

@@ -2,7 +2,7 @@
  * 编排引擎 —— 用 AI SDK 的 ToolLoopAgent 跑 ReAct 循环，流式产出 UIMessageChunk。
  * 运行在 AI utilityProcess 子进程内（见文档 §3.1/§5.2）。
  */
-import { generateText, ToolLoopAgent, stepCountIs, type ModelMessage, type UIMessageChunk } from 'ai'
+import { generateText, smoothStream, ToolLoopAgent, stepCountIs, type ModelMessage, type UIMessageChunk } from 'ai'
 import type { SystemModelMessage } from '@ai-sdk/provider-utils'
 import { createLanguageModel } from './provider'
 import { buildAgentPromptParts, PLAN_MODE_PROMPT, WEB_SEARCH_PROMPT } from './prompts'
@@ -212,7 +212,16 @@ export async function runAgent(
     })
 
     reportAgentProgress({ stage: 'run_started', title: '正在请求模型' })
-    const result = await agent.stream({ messages: input.messages, abortSignal: signal })
+    const result = await agent.stream({
+      messages: input.messages,
+      abortSignal: signal,
+      // 文本按词匀速放流：模型突发吐一大段时不再整块砸向 UI，而是 ~10ms/词的稳定节奏。
+      // 中文没有空格，用 Intl.Segmenter 做 CJK 分词（AI SDK 官方推荐做法）。
+      experimental_transform: smoothStream({
+        delayInMs: 10,
+        chunking: new Intl.Segmenter('zh', { granularity: 'word' }),
+      }),
+    })
     // 截留 message 的 finish，等 L1 自动记忆注入完再补发，让自动写入的工具 part 落在本条消息内
     let finishChunk: UIMessageChunk | undefined
     const toolNames = new Map<string, string>()

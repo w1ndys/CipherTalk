@@ -10,17 +10,12 @@ import { StickToBottom, useStickToBottomContext } from "use-stick-to-bottom";
 
 export type ConversationProps = ComponentProps<typeof StickToBottom>;
 
-const STREAMING_RESIZE_ANIMATION = {
-  damping: 0.76,
-  stiffness: 0.08,
-  mass: 1.1,
-};
-
 export const Conversation = ({ className, ...props }: ConversationProps) => (
   <StickToBottom
     className={cn("relative flex-1 overflow-y-hidden", className)}
     initial="instant"
-    resize={STREAMING_RESIZE_ANIMATION}
+    // 流式内容长高时瞬时贴底：弹簧动画(欠阻尼)会过冲回弹，叠加 50ms 批量更新就是肉眼可见的上下抖
+    resize="instant"
     role="log"
     {...props}
   />
@@ -38,6 +33,19 @@ export const ConversationContent = ({
   ...props
 }: ConversationContentProps) => {
   const context = useStickToBottomContext();
+  const { state } = context;
+
+  // 流式内容撑高列表时，在浏览器绘制前同步把滚动钉回底部。
+  // 库自身的校正走 ResizeObserver→rAF 排到下一帧，会先画出"冒在底部的新内容"
+  // 下一帧才跳上去，50ms 一批就是持续抖动。state.scrollTop setter 自带
+  // ignoreScrollToTop 标记，不会被误判为用户滚动、不影响向上滚的逃逸锁。
+  useLayoutEffect(() => {
+    if (!state.isAtBottom || state.escapedFromLock) return;
+    const target = state.calculatedTargetScrollTop;
+    if (state.scrollTop < target) {
+      state.scrollTop = target;
+    }
+  });
 
   return (
     <ScrollShadow
