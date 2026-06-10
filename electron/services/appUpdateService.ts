@@ -4,10 +4,10 @@ import { autoUpdater } from 'electron-updater'
 const GITHUB_OWNER = 'ILoveBingLu'
 const GITHUB_REPO = 'CipherTalk'
 const GITHUB_FORCE_UPDATE_URL = `https://github.com/${GITHUB_OWNER}/${GITHUB_REPO}/releases/latest/download/force-update.json`
-const FORCE_UPDATE_POLICY_FALLBACK_URL = 'https://miyuapp.aiqji.com'
+const R2_UPDATE_BASE_URL = 'https://miyuapp.aiqji.com'
 
 export type ForceUpdateReason = 'minimum-version' | 'blocked-version'
-export type AppUpdateSource = 'github' | 'custom' | 'none'
+export type AppUpdateSource = 'r2' | 'github' | 'custom' | 'none'
 export type UpdateDownloadPhase = 'idle' | 'checking' | 'available' | 'downloading' | 'downloaded' | 'installing' | 'failed'
 export type UpdateDownloadStrategy = 'unknown' | 'differential' | 'full'
 
@@ -53,6 +53,15 @@ export interface UpdateDiagnostics {
 
 type ManifestLookupResult = {
   manifest: ForceUpdateManifest | null
+  source: AppUpdateSource
+}
+
+type UpdateFeedSource = 'r2' | 'github'
+
+type UpdateLookupResult = {
+  latestVersion?: string
+  releaseNotes: string
+  hasUpdate: boolean
   source: AppUpdateSource
 }
 
@@ -114,18 +123,34 @@ async function fetchManifestFromUrl(url: string): Promise<ForceUpdateManifest | 
 }
 
 async function resolveForceUpdateManifest(): Promise<ManifestLookupResult> {
+  const r2Url = `${R2_UPDATE_BASE_URL.replace(/\/+$/, '')}/force-update.json`
+  const r2Manifest = await fetchManifestFromUrl(r2Url)
+  if (r2Manifest) {
+    return { manifest: r2Manifest, source: 'r2' }
+  }
+
   const githubManifest = await fetchManifestFromUrl(GITHUB_FORCE_UPDATE_URL)
   if (githubManifest) {
     return { manifest: githubManifest, source: 'github' }
   }
 
-  const fallbackUrl = `${FORCE_UPDATE_POLICY_FALLBACK_URL.replace(/\/+$/, '')}/force-update.json`
-  const customManifest = await fetchManifestFromUrl(fallbackUrl)
-  if (customManifest) {
-    return { manifest: customManifest, source: 'custom' }
+  return { manifest: null, source: 'none' }
+}
+
+function configureUpdaterFeed(source: UpdateFeedSource): void {
+  if (source === 'r2') {
+    autoUpdater.setFeedURL({
+      provider: 'generic',
+      url: R2_UPDATE_BASE_URL
+    })
+    return
   }
 
-  return { manifest: null, source: 'none' }
+  autoUpdater.setFeedURL({
+    provider: 'github',
+    owner: GITHUB_OWNER,
+    repo: GITHUB_REPO
+  })
 }
 
 class AppUpdateService {
@@ -141,8 +166,8 @@ class AppUpdateService {
     return this.lastInfo
   }
 
-  getForceUpdatePolicyFallbackUrl(): string {
-    return FORCE_UPDATE_POLICY_FALLBACK_URL
+  getR2UpdateBaseUrl(): string {
+    return R2_UPDATE_BASE_URL
   }
 
   getGithubRepository(): { owner: string; repo: string } {
@@ -222,6 +247,23 @@ class AppUpdateService {
     this.updateDiagnostics(patch)
   }
 
+  private async checkUpdaterSource(source: UpdateFeedSource, currentVersion: string): Promise<UpdateLookupResult | null> {
+    configureUpdaterFeed(source)
+    const result = await autoUpdater.checkForUpdates()
+    if (!result?.updateInfo?.version) {
+      return null
+    }
+
+    const latestVersion = result.updateInfo.version
+    const hasUpdate = isNewerVersion(latestVersion, currentVersion)
+    return {
+      latestVersion,
+      releaseNotes: normalizeReleaseNotes(result.updateInfo.releaseNotes),
+      hasUpdate,
+      source: hasUpdate ? source : 'none'
+    }
+  }
+
   async checkForUpdates(): Promise<AppUpdateInfo> {
     const currentVersion = app.getVersion()
     let latestVersion: string | undefined
@@ -236,12 +278,27 @@ class AppUpdateService {
     })
 
     try {
-      const result = await autoUpdater.checkForUpdates()
-      if (result?.updateInfo?.version) {
-        latestVersion = result.updateInfo.version
-        releaseNotes = normalizeReleaseNotes(result.updateInfo.releaseNotes)
-        hasUpdate = isNewerVersion(latestVersion, currentVersion)
-        updateSource = hasUpdate ? 'github' : 'none'
+      let result: UpdateLookupResult | null = null
+
+      try {
+        result = await this.checkUpdaterSource('r2', currentVersion)
+      } catch (r2Error) {
+        console.warn('[AppUpdate] 检查 R2 更新失败，回退 GitHub:', r2Error)
+        this.updateDiagnostics({
+          lastError: String(r2Error),
+          lastEvent: 'R2 更新源检查失败，回退 GitHub'
+        })
+      }
+
+      if (!result) {
+        result = await this.checkUpdaterSource('github', currentVersion)
+      }
+
+      if (result?.latestVersion) {
+        latestVersion = result.latestVersion
+        releaseNotes = result.releaseNotes
+        hasUpdate = result.hasUpdate
+        updateSource = result.source
         this.updateDiagnostics({
           phase: hasUpdate ? 'available' : 'idle',
           targetVersion: latestVersion,
@@ -309,7 +366,7 @@ class AppUpdateService {
       hasUpdate: true,
       version: '6.0.4',
       releaseNotes: '开发模式模拟更新，仅用于测试更新提示 UI。',
-      updateSource: 'github',
+      updateSource: 'r2',
       policySource: 'none'
     })
     this.lastInfo = info

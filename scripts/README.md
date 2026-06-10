@@ -190,6 +190,6 @@ npm run build:force-update-manifest
 
 ## 当前更新源角色
 
-- **GitHub Release**：主更新源，负责安装包与 `latest.yml`
-- **Cloudflare R2**：镜像下载源 + 策略补充源
-- **force-update.json**：GitHub 优先，R2 回退
+- **Cloudflare R2**：主更新源，负责客户端优先读取安装包、`latest.yml` 与 `force-update.json`
+- **GitHub Release**：发布归档源 + 更新回退源
+- **force-update.json**：R2 优先，GitHub 回退
