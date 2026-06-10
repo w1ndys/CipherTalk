@@ -65,11 +65,29 @@ export async function embedTexts(texts: string[], cfg?: EmbeddingConfig): Promis
   return embeddings
 }
 
+// 查询嵌入短 TTL 缓存（含在飞请求去重）：Agent 准备阶段会对同一个问题并行做
+// MCP 工具/技能两路向量筛选，靠这里共享同一次嵌入请求；“重新生成”同样命中。
+const QUERY_EMBED_CACHE_TTL_MS = 60 * 1000
+const QUERY_EMBED_CACHE_MAX = 20
+const queryEmbedCache = new Map<string, { at: number; promise: Promise<number[]> }>()
+
 /** 单条嵌入（查询用）。 */
-export async function embedQuery(text: string, cfg?: EmbeddingConfig): Promise<number[]> {
+export function embedQuery(text: string, cfg?: EmbeddingConfig): Promise<number[]> {
   const c = cfg || getEmbeddingConfig()
-  const { embedding } = await embed({ model: buildEmbeddingModel(c), value: text, providerOptions: embeddingProviderOptions(c) })
-  return embedding
+  const key = [c.protocol, c.baseURL, c.model, c.dimension || 0, text].join('\n')
+  const cached = queryEmbedCache.get(key)
+  if (cached && Date.now() - cached.at < QUERY_EMBED_CACHE_TTL_MS) return cached.promise
+
+  const promise = embed({ model: buildEmbeddingModel(c), value: text, providerOptions: embeddingProviderOptions(c) })
+    .then(({ embedding }) => embedding)
+  queryEmbedCache.set(key, { at: Date.now(), promise })
+  promise.catch(() => queryEmbedCache.delete(key)) // 失败不留缓存
+  while (queryEmbedCache.size > QUERY_EMBED_CACHE_MAX) {
+    const oldest = queryEmbedCache.keys().next().value
+    if (oldest === undefined) break
+    queryEmbedCache.delete(oldest)
+  }
+  return promise
 }
 
 /** 测试嵌入配置：成功则回传实际维度。 */

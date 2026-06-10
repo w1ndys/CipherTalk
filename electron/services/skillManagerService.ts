@@ -22,7 +22,7 @@ const BUILTIN_SKILLS = new Set(['ct-mcp-copilot'])
 const DEFAULT_AGENT_SKILL_LIMIT = 3
 const DEFAULT_AGENT_SKILL_BUDGET = 9000
 const DEFAULT_AGENT_SKILL_CANDIDATES = 20
-const AGENT_PREP_RERANK_TIMEOUT_MS = 1500
+const AGENT_PREP_RERANK_TIMEOUT_MS = 800
 
 function parseSkillFrontmatter(content: string): { name: string; version: string; description: string } {
   const match = content.match(/^---\r?\n([\s\S]*?)\r?\n---/)

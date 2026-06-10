@@ -120,7 +120,7 @@ export default function PetsPage() {
                 宠物库
                 <Tabs.Indicator />
               </Tabs.Tab>
-              <Tabs.Tab id="installed">
+              <Tabs.Tab className="whitespace-nowrap" id="installed">
                 已安装{installed.length > 0 ? `（${installed.length}）` : ''}
                 <Tabs.Indicator />
               </Tabs.Tab>

@@ -8,7 +8,8 @@ import type { AgentProviderConfig, AgentProviderConfigOverride, AgentScope } fro
 /** 进行中的 agent 运行：runId → AbortController，用于取消。 */
 const agentAborters = new Map<string, AbortController>()
 const AGENT_RUN_PROXY_CACHE_TTL_MS = 5 * 60 * 1000
-const AGENT_PREP_RERANK_TIMEOUT_MS = 1500
+// 准备阶段重排超时：超时直接回退原排序（不影响正确性），别让慢服务拖住首包
+const AGENT_PREP_RERANK_TIMEOUT_MS = 800
 
 let agentRunProxyRefreshedAt = 0
 let agentRunProxyRefreshPromise: Promise<string | null> | null = null
@@ -205,59 +206,64 @@ export function registerAiHandlers(ctx: MainProcessContext): void {
       const { rerankCandidates } = await import('../../services/ai/rerankService')
       const { agentResourceVectorService } = await import('../../services/agent/agentResourceVectorService')
       const readOnlyMcpTools = buildReadOnlyMcpToolDescriptors(mcpClientService.getConnectedToolSchemas())
-      let mcpCandidates = readOnlyMcpTools
-      stage = 'select_mcp_candidates'
-      sendPrepProgress('正在筛选 MCP 工具', `只读工具 ${readOnlyMcpTools.length} 个`)
-      if (agentResourceVectorService.isReady()) {
-        try {
-          const mcpVectorStatus = agentResourceVectorService.getMcpStatus(readOnlyMcpTools)
-          const canUseMcpVector = mcpVectorStatus.enabled
-            && mcpVectorStatus.currentCount > 0
-            && mcpVectorStatus.count === mcpVectorStatus.currentCount
-            && mcpVectorStatus.staleCount === 0
-          if (canUseMcpVector) {
-            const vectorMcpTools = await agentResourceVectorService.searchMcpTools(
-              lastUserText,
-              readOnlyMcpTools,
-              24,
-              undefined,
-              { requireCurrent: true },
-            )
-            if (vectorMcpTools.length > 0) mcpCandidates = vectorMcpTools
-          } else if (mcpVectorStatus.currentCount > 0) {
-            logger?.warn('AIAgent', 'MCP 工具向量未就绪，跳过请求期向量补建', {
+      stage = 'select_tools_and_skills'
+      sendPrepProgress('正在筛选工具与技能', `只读 MCP 工具 ${readOnlyMcpTools.length} 个`, true)
+      // MCP 工具筛选+重排 与 技能选择 互相独立，并行执行；
+      // 两路对同一问题的查询嵌入由 embedQuery 的在飞缓存合并成一次请求。
+      const selectMcpToolsTask = async () => {
+        let candidates = readOnlyMcpTools
+        if (agentResourceVectorService.isReady()) {
+          try {
+            const mcpVectorStatus = agentResourceVectorService.getMcpStatus(readOnlyMcpTools)
+            const canUseMcpVector = mcpVectorStatus.enabled
+              && mcpVectorStatus.currentCount > 0
+              && mcpVectorStatus.count === mcpVectorStatus.currentCount
+              && mcpVectorStatus.staleCount === 0
+            if (canUseMcpVector) {
+              const vectorMcpTools = await agentResourceVectorService.searchMcpTools(
+                lastUserText,
+                readOnlyMcpTools,
+                24,
+                undefined,
+                { requireCurrent: true },
+              )
+              if (vectorMcpTools.length > 0) candidates = vectorMcpTools
+            } else if (mcpVectorStatus.currentCount > 0) {
+              logger?.warn('AIAgent', 'MCP 工具向量未就绪，跳过请求期向量补建', {
+                ...baseRunData,
+                currentCount: mcpVectorStatus.currentCount,
+                indexedCount: mcpVectorStatus.count,
+                staleCount: mcpVectorStatus.staleCount,
+              })
+            }
+          } catch (error) {
+            console.warn('[agent:run] MCP vector candidate selection failed, fallback to all read-only tools:', error)
+            logger?.warn('AIAgent', 'MCP 工具向量候选选择失败，回退到全部只读工具', {
               ...baseRunData,
-              currentCount: mcpVectorStatus.currentCount,
-              indexedCount: mcpVectorStatus.count,
-              staleCount: mcpVectorStatus.staleCount,
+              ...errorToLogData(error),
             })
           }
-        } catch (error) {
-          console.warn('[agent:run] MCP vector candidate selection failed, fallback to all read-only tools:', error)
-          logger?.warn('AIAgent', 'MCP 工具向量候选选择失败，回退到全部只读工具', {
-            ...baseRunData,
-            ...errorToLogData(error),
-          })
         }
+        const { items, meta } = await rerankCandidates(
+          lastUserText,
+          candidates.map((tool) => ({
+            item: tool,
+            text: [
+              `MCP ${tool.serverName}/${tool.toolName}`,
+              tool.name,
+              tool.description || '',
+              tool.inputSchema ? JSON.stringify(tool.inputSchema).slice(0, 1000) : '',
+            ].filter(Boolean).join('\n'),
+          })),
+          { topN: 8, timeoutMsOverride: AGENT_PREP_RERANK_TIMEOUT_MS },
+        )
+        return { mcpTools: items, mcpRerankMeta: meta, mcpCandidates: candidates }
       }
-      stage = 'rerank_mcp_tools'
-      sendPrepProgress('正在重排 MCP 工具', `候选 ${mcpCandidates.length} 个`)
-      const { items: mcpTools, meta: mcpRerankMeta } = await rerankCandidates(
-        lastUserText,
-        mcpCandidates.map((tool) => ({
-          item: tool,
-          text: [
-            `MCP ${tool.serverName}/${tool.toolName}`,
-            tool.name,
-            tool.description || '',
-            tool.inputSchema ? JSON.stringify(tool.inputSchema).slice(0, 1000) : '',
-          ].filter(Boolean).join('\n'),
-        })),
-        { topN: 8, timeoutMsOverride: AGENT_PREP_RERANK_TIMEOUT_MS },
-      )
-      stage = 'select_skills'
-      sendPrepProgress('正在选择技能')
-      const skills = await skillManagerService.selectSkillsForAgent(lastUserText)
+      const [{ mcpTools, mcpRerankMeta, mcpCandidates }, skills] = await Promise.all([
+        selectMcpToolsTask(),
+        skillManagerService.selectSkillsForAgent(lastUserText),
+      ])
+      sendPrepProgress('已选定工具与技能', `MCP 工具 ${mcpTools.length} 个 · 技能 ${skills.length} 个`, true)
       if (mcpTools.length > 0 || skills.length > 0) {
         console.info('[agent:run] injected context', {
           mcpTools: mcpTools.map((tool) => `${tool.serverName}/${tool.toolName}`),
