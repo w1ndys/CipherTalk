@@ -281,8 +281,8 @@ export interface ElectronAPI {
       minimumSupportedVersion?: string
       reason?: 'minimum-version' | 'blocked-version'
       checkedAt: number
-      updateSource: 'github' | 'custom' | 'none'
-      policySource: 'github' | 'custom' | 'none'
+      updateSource: 'r2' | 'github' | 'custom' | 'none'
+      policySource: 'r2' | 'github' | 'custom' | 'none'
       diagnostics?: {
         phase: 'idle' | 'checking' | 'available' | 'downloading' | 'downloaded' | 'installing' | 'failed'
         strategy: 'unknown' | 'differential' | 'full'
@@ -297,14 +297,14 @@ export interface ElectronAPI {
       }
     } | null>
     getUpdateSourceInfo: () => Promise<{
-      primaryUpdateSource: 'github'
+      primaryUpdateSource: 'r2'
+      r2UpdateBaseUrl: string
       githubRepository: {
         owner: string
         repo: string
       }
-      policySources: Array<'github' | 'custom'>
-      policyPrecedence: 'github'
-      forceUpdatePolicyFallbackUrl: string
+      policySources: Array<'r2' | 'github'>
+      policyPrecedence: 'r2'
     }>
     getMcpLaunchConfig: () => Promise<{
       command: string
@@ -323,8 +323,8 @@ export interface ElectronAPI {
       minimumSupportedVersion?: string
       reason?: 'minimum-version' | 'blocked-version'
       checkedAt: number
-      updateSource: 'github' | 'custom' | 'none'
-      policySource: 'github' | 'custom' | 'none'
+      updateSource: 'r2' | 'github' | 'custom' | 'none'
+      policySource: 'r2' | 'github' | 'custom' | 'none'
       diagnostics?: {
         phase: 'idle' | 'checking' | 'available' | 'downloading' | 'downloaded' | 'installing' | 'failed'
         strategy: 'unknown' | 'differential' | 'full'
@@ -339,14 +339,14 @@ export interface ElectronAPI {
       }
     } | null>
     getUpdateSourceInfo: () => Promise<{
-      primaryUpdateSource: 'github'
+      primaryUpdateSource: 'r2'
+      r2UpdateBaseUrl: string
       githubRepository: {
         owner: string
         repo: string
       }
-      policySources: Array<'github' | 'custom'>
-      policyPrecedence: 'github'
-      forceUpdatePolicyFallbackUrl: string
+      policySources: Array<'r2' | 'github'>
+      policyPrecedence: 'r2'
     }>
     checkForUpdates: () => Promise<{
       hasUpdate: boolean
@@ -359,8 +359,8 @@ export interface ElectronAPI {
       minimumSupportedVersion?: string
       reason?: 'minimum-version' | 'blocked-version'
       checkedAt: number
-      updateSource: 'github' | 'custom' | 'none'
-      policySource: 'github' | 'custom' | 'none'
+      updateSource: 'r2' | 'github' | 'custom' | 'none'
+      policySource: 'r2' | 'github' | 'custom' | 'none'
       diagnostics?: {
         phase: 'idle' | 'checking' | 'available' | 'downloading' | 'downloaded' | 'installing' | 'failed'
         strategy: 'unknown' | 'differential' | 'full'
@@ -388,8 +388,8 @@ export interface ElectronAPI {
       minimumSupportedVersion?: string
       reason?: 'minimum-version' | 'blocked-version'
       checkedAt: number
-      updateSource: 'github' | 'custom' | 'none'
-      policySource: 'github' | 'custom' | 'none'
+      updateSource: 'r2' | 'github' | 'custom' | 'none'
+      policySource: 'r2' | 'github' | 'custom' | 'none'
       diagnostics?: {
         phase: 'idle' | 'checking' | 'available' | 'downloading' | 'downloaded' | 'installing' | 'failed'
         strategy: 'unknown' | 'differential' | 'full'

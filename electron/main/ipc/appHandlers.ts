@@ -37,11 +37,11 @@ export function registerAppHandlers(ctx: MainProcessContext): void {
 
   ipcMain.handle('app:getUpdateSourceInfo', async () => {
     return {
-      primaryUpdateSource: 'github' as const,
+      primaryUpdateSource: 'r2' as const,
+      r2UpdateBaseUrl: appUpdateService.getR2UpdateBaseUrl(),
       githubRepository: appUpdateService.getGithubRepository(),
-      policySources: ['github', 'custom'] as const,
-      policyPrecedence: 'github' as const,
-      forceUpdatePolicyFallbackUrl: appUpdateService.getForceUpdatePolicyFallbackUrl()
+      policySources: ['r2', 'github'] as const,
+      policyPrecedence: 'r2' as const
     }
   })
 

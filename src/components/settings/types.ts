@@ -9,8 +9,8 @@ export interface UpdateInfo {
   minimumSupportedVersion?: string
   reason?: 'minimum-version' | 'blocked-version'
   checkedAt: number
-  updateSource: 'github' | 'custom' | 'none'
-  policySource: 'github' | 'custom' | 'none'
+  updateSource: 'r2' | 'github' | 'custom' | 'none'
+  policySource: 'r2' | 'github' | 'custom' | 'none'
   diagnostics?: {
     phase: 'idle' | 'checking' | 'available' | 'downloading' | 'downloaded' | 'installing' | 'failed'
     strategy: 'unknown' | 'differential' | 'full'

@@ -51,8 +51,8 @@ type AppUpdateInfo = {
   minimumSupportedVersion?: string
   reason?: 'minimum-version' | 'blocked-version'
   checkedAt: number
-  updateSource: 'github' | 'custom' | 'none'
-  policySource: 'github' | 'custom' | 'none'
+  updateSource: 'r2' | 'github' | 'custom' | 'none'
+  policySource: 'r2' | 'github' | 'custom' | 'none'
   diagnostics?: {
     phase: 'idle' | 'checking' | 'available' | 'downloading' | 'downloaded' | 'installing' | 'failed'
     strategy: 'unknown' | 'differential' | 'full'
@@ -350,7 +350,7 @@ function App() {
       description: (
         <>
           <div>v{updateInfo.version} 已发布</div>
-          <div>更新源：{updateInfo.updateSource === 'github' ? 'GitHub Release' : '未知'}</div>
+          <div>更新源：{updateInfo.updateSource === 'r2' ? 'R2 镜像' : updateInfo.updateSource === 'github' ? 'GitHub Release' : '未知'}</div>
         </>
       ),
       onClose: () => {
@@ -655,8 +655,8 @@ function App() {
               <div>当前版本：v{updateInfo.currentVersion}</div>
               {updateInfo.version && <div>目标版本：v{updateInfo.version}</div>}
               {updateInfo.minimumSupportedVersion && <div>最低安全版本：v{updateInfo.minimumSupportedVersion}</div>}
-              <div>更新来源：{updateInfo.updateSource === 'github' ? 'GitHub Release' : '未检测到普通更新源'}</div>
-              <div>策略来源：{updateInfo.policySource === 'github' ? 'GitHub 策略源' : updateInfo.policySource === 'custom' ? '自定义策略源' : '无'}</div>
+              <div>更新来源：{updateInfo.updateSource === 'r2' ? 'R2 镜像' : updateInfo.updateSource === 'github' ? 'GitHub Release' : '未检测到普通更新源'}</div>
+              <div>策略来源：{updateInfo.policySource === 'r2' ? 'R2 策略源' : updateInfo.policySource === 'github' ? 'GitHub 策略源' : updateInfo.policySource === 'custom' ? '自定义策略源' : '无'}</div>
             </div>
 
             {updateInfo.releaseNotes && (

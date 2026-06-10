@@ -39,8 +39,8 @@ function AboutTab({
   const transferredBytes = downloadProgressDetail?.transferred ?? updateInfo?.diagnostics?.downloadedBytes ?? 0
   const totalBytes = downloadProgressDetail?.total ?? updateInfo?.diagnostics?.totalBytes ?? 0
   const currentYear = new Date().getFullYear()
-  const updateSourceLabel = updateInfo?.updateSource === 'custom' ? '自定义源' : updateInfo?.updateSource === 'github' ? 'GitHub' : '默认'
-  const policySourceLabel = updateInfo?.policySource === 'custom' ? '自定义策略' : updateInfo?.policySource === 'github' ? 'GitHub 策略' : '无'
+  const updateSourceLabel = updateInfo?.updateSource === 'r2' ? 'R2 镜像' : updateInfo?.updateSource === 'custom' ? '自定义源' : updateInfo?.updateSource === 'github' ? 'GitHub' : '默认'
+  const policySourceLabel = updateInfo?.policySource === 'r2' ? 'R2 策略' : updateInfo?.policySource === 'custom' ? '自定义策略' : updateInfo?.policySource === 'github' ? 'GitHub 策略' : '无'
 
   const openExternal = (url: string) => {
     void window.electronAPI.shell.openExternal(url)
