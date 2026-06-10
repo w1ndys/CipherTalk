@@ -252,7 +252,11 @@ export default function PetWindow() {
   return (
     <div
       className="relative h-screen w-screen overflow-hidden"
-      onContextMenu={clearHoverState}
+      onContextMenu={(event) => {
+        event.preventDefault()
+        clearHoverState()
+        window.electronAPI.pet.showContextMenu()
+      }}
       onPointerEnter={() => {
         setIsPointerInside(true)
         triggerHoverFlair()

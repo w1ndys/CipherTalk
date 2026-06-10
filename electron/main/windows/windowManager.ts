@@ -232,6 +232,7 @@ export function createWindowManager(ctx: MainProcessContext): WindowManager {
   let petBubbleExpanded = false
   // 程序化 setBounds 会触发 'move'，用时间窗抑制，避免桌宠误判成拖动而播跑动画
   let petSuppressMoveUntil = 0
+  let lastPetContextMenuAt = 0
 
   const closePetWindowInternal = (): void => {
     if (petWindow && !petWindow.isDestroyed()) {
@@ -250,6 +251,9 @@ export function createWindowManager(ctx: MainProcessContext): WindowManager {
 
   const showPetContextMenu = (): void => {
     if (!petWindow || petWindow.isDestroyed()) return
+    const now = Date.now()
+    if (now - lastPetContextMenuAt < 150) return
+    lastPetContextMenuAt = now
     petWindow.webContents.send('pet:contextMenuOpened')
     const menu = Menu.buildFromTemplate([
       {
@@ -992,6 +996,10 @@ export function createWindowManager(ctx: MainProcessContext): WindowManager {
 
     isPetWindowOpen() {
       return petWindow !== null && !petWindow.isDestroyed()
+    },
+
+    showPetContextMenu() {
+      showPetContextMenu()
     },
 
     // 显示消息气泡时向右下角锚点扩窗腾出气泡空间，气泡消失后还原。仅尺寸变化，桌宠仍停在原处。

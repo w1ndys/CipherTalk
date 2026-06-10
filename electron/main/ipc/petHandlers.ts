@@ -94,6 +94,10 @@ export function registerPetHandlers(ctx: MainProcessContext): void {
     ctx.getWindowManager().setPetBubbleExpanded(Boolean(expanded))
   })
 
+  ipcMain.on('pet:showContextMenu', () => {
+    ctx.getWindowManager().showPetContextMenu()
+  })
+
   ipcMain.handle('pet:toggleDesktopWindow', async (_, enabled: boolean) => {
     const manager = ctx.getWindowManager()
     if (enabled) manager.openPetWindow()

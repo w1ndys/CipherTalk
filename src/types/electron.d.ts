@@ -194,6 +194,7 @@ export interface ElectronAPI {
     setAgentState: (state: string) => void
     toggleDesktopWindow: (enabled: boolean) => Promise<{ success: boolean }>
     setBubble: (expanded: boolean) => void
+    showContextMenu: () => void
     onAgentState: (callback: (state: string) => void) => () => void
     onWindowMove: (callback: (x: number) => void) => () => void
     onBubbleFrame: (callback: (frame: { expanded: boolean; baseLeft: number; baseTop: number; baseWidth: number; baseHeight: number }) => void) => () => void

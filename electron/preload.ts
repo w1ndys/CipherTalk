@@ -50,6 +50,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     setAgentState: (state: string) => ipcRenderer.send('pet:agentState', state),
     toggleDesktopWindow: (enabled: boolean) => ipcRenderer.invoke('pet:toggleDesktopWindow', enabled) as Promise<{ success: boolean }>,
     setBubble: (expanded: boolean) => ipcRenderer.send('pet:setBubble', expanded),
+    showContextMenu: () => ipcRenderer.send('pet:showContextMenu'),
     onAgentState: (callback: (state: string) => void) => {
       const listener = (_: any, state: string) => callback(state)
       ipcRenderer.on('pet:agentState', listener)
