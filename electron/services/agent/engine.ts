@@ -10,11 +10,12 @@ import { isWebSearchAvailable } from '../ai/webSearchService'
 import { isImageGenAvailable } from '../ai/imageGenService'
 import { applyAnthropicCacheControl, buildPromptCacheKey, buildProviderOptions } from './cache'
 import { buildPlanModeTools, buildTools } from './tools'
-import { buildMemoryContext, extractMemories, preloadRelevantMemories } from './tools/memory'
+import { buildMemoryContext, extractMemories } from './tools/memory'
 import { compactMessages } from './compaction'
 import { runFinalReview, summarizeToolOutput, type ToolOutputSummary } from './finalReview'
 import { loopGuardCondition, withToolTimeouts } from './guards'
 import { reportAgentProgress, withAgentProgress } from './progress'
+import { getCachedStartupMemory, warmStartupMemory } from './runtimeCache'
 import { buildToolRuntimeContext } from './toolPolicy'
 import type { AgentProgressReporter, AgentProviderConfig, AgentRunInput } from './types'
 
@@ -189,11 +190,12 @@ export async function runAgent(
 ): Promise<void> {
   await withAgentProgress(onProgress, async () => {
     const userText = lastUserText(input.messages)
-    reportAgentProgress({ stage: 'run_started', title: '正在加载长期记忆' })
-    const memoryContext = await buildMemoryContext(input.scope)
-    reportAgentProgress({ stage: 'run_started', title: '正在召回相关记忆' })
-    const relevantMemoryContext = await preloadRelevantMemories(userText, input.scope)
-    reportAgentProgress({ stage: 'run_started', title: '正在准备工具' })
+    const cachedMemoryContext = getCachedStartupMemory(input.scope)
+    const memoryContext = cachedMemoryContext ?? ''
+    if (cachedMemoryContext === null) {
+      warmStartupMemory(input.scope, () => buildMemoryContext(input.scope))
+    }
+    const relevantMemoryContext = ''
     const webSearchOn = isWebSearchAvailable()
     const imageGenOn = isImageGenAvailable()
     const baseTools = withToolTimeouts(input.planMode
@@ -215,7 +217,6 @@ export async function runAgent(
       }),
     })
 
-    reportAgentProgress({ stage: 'run_started', title: '正在请求模型' })
     const result = await agent.stream({
       messages: input.messages,
       abortSignal: signal,

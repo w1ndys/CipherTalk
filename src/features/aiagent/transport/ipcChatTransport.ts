@@ -20,6 +20,8 @@ export type AgentProgressEvent = {
   stage: 'run_started' | 'tool_started' | 'tool_finished' | 'indexing' | 'searching' | 'run_finished' | 'error'
   title: string
   detail?: string
+  visible?: boolean
+  category?: 'prep' | 'tool' | 'memory' | 'search' | 'system'
   toolName?: string
   toolCallId?: string
   parentToolCallId?: string

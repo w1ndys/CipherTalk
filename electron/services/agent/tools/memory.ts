@@ -12,6 +12,7 @@ import type { AgentScope, AgentProviderConfig } from '../types'
 import type { MemoryItem, MemorySourceType } from '../../memory/memorySchema'
 import { memoryDatabase, hashMemoryContent } from '../../memory/memoryDatabase'
 import { createLanguageModel } from '../provider'
+import { invalidateMemoryCache } from '../runtimeCache'
 import { embedQuery, embedTexts, getEmbeddingConfig, type EmbeddingConfig } from '../../ai/embeddingService'
 import { rerankCandidates, type RerankMeta } from '../../ai/rerankService'
 import { reciprocalRankFusion } from '../../retrieval/rrf'
@@ -174,6 +175,7 @@ export function createRemember(scope: AgentScope) {
           importance,
           tags: nextTags,
         })
+        invalidateMemoryCache(sessionId ? { kind: 'session', sessionId } : { kind: 'global' })
         return { remembered: true, id: item.id, kind: item.sourceType, importance: item.importance, about: sessionId || 'global' }
       } catch (e) {
         return { error: e instanceof Error ? e.message : String(e) }
@@ -312,6 +314,7 @@ export function createForget() {
     execute: async ({ id }) => {
       try {
         const ok = memoryDatabase.deleteMemoryItem(id)
+        if (ok) invalidateMemoryCache()
         return ok ? { forgotten: true, id } : { forgotten: false, id, reason: '未找到该记忆' }
       } catch (e) {
         return { error: e instanceof Error ? e.message : String(e) }
@@ -334,7 +337,9 @@ export function createConsolidate() {
         if (semantic) {
           try { await ensureMemoryVectors(cfg, null) } catch { /* 建不了就用已有向量 */ }
         }
-        return memoryDatabase.consolidate(50, semantic)
+        const result = memoryDatabase.consolidate(50, semantic)
+        invalidateMemoryCache()
+        return result
       } catch (e) {
         return { error: e instanceof Error ? e.message : String(e) }
       }
@@ -482,6 +487,7 @@ export async function extractMemories(opts: {
         confidence,
         tags,
       })
+      invalidateMemoryCache(m.kind === 'profile' ? { kind: 'global' } : scope)
       out.push({ id: item.id, content, kind: m.kind, importance: item.importance })
     }
     return out

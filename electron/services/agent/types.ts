@@ -66,6 +66,8 @@ export interface AgentProgressEvent {
   stage: AgentProgressStage
   title: string
   detail?: string
+  visible?: boolean
+  category?: 'prep' | 'tool' | 'memory' | 'search' | 'system'
   toolName?: string
   toolCallId?: string
   parentToolCallId?: string

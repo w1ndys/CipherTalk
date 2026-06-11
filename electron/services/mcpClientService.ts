@@ -3,6 +3,7 @@ import { existsSync, readFileSync, writeFileSync } from 'fs'
 import { homedir } from 'os'
 import { join } from 'path'
 import { ChildProcess } from 'child_process'
+import { invalidateMcpToolCache } from './agent/runtimeCache'
 
 export type McpTransportType = 'stdio' | 'sse' | 'http'
 
@@ -151,6 +152,7 @@ export class McpClientService {
     if (!configs[name]) return { success: false, error: `Server "${name}" not found` }
 
     void this.disconnectFromServer(name)
+    invalidateMcpToolCache()
     delete configs[name]
     saveConfigs(configs)
     return { success: true }
@@ -218,6 +220,7 @@ export class McpClientService {
       }))
 
       this.connections.set(name, { client, transport, tools })
+      invalidateMcpToolCache()
       this.pendingStatuses.delete(name)
       this.lastErrors.delete(name)
       this.setAutoConnect(name, true)
@@ -241,12 +244,14 @@ export class McpClientService {
     try {
       await conn.client.close()
       this.connections.delete(name)
+      invalidateMcpToolCache()
       this.pendingStatuses.delete(name)
       this.lastErrors.delete(name)
       if (rememberManualDisconnect) this.setAutoConnect(name, false)
       return { success: true }
     } catch (e) {
       this.connections.delete(name)
+      invalidateMcpToolCache()
       this.pendingStatuses.delete(name)
       if (rememberManualDisconnect) this.setAutoConnect(name, false)
       return { success: false, error: String(e) }
@@ -265,6 +270,7 @@ export class McpClientService {
         inputSchema: t.inputSchema,
       }))
       conn.tools = tools
+      invalidateMcpToolCache()
       return { success: true, tools }
     } catch (e) {
       return { success: false, error: String(e) }

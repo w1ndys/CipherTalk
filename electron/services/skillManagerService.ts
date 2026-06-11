@@ -4,6 +4,7 @@ import { join } from 'path'
 import AdmZip from 'adm-zip'
 import type { AgentSkillContextItem } from './agent/types'
 import { agentResourceVectorService, type SkillResourceDocument } from './agent/agentResourceVectorService'
+import { invalidateSkillSelectionCache } from './agent/runtimeCache'
 import { rerankCandidates } from './ai/rerankService'
 
 type AdmZipFull = InstanceType<typeof AdmZip> & {
@@ -242,6 +243,7 @@ export class SkillManagerService {
     if (!dir) return { success: false, error: `User skill "${skillName}" not found. Only user-imported skills can be edited.` }
     try {
       writeFileSync(join(dir, 'SKILL.md'), content, 'utf8')
+      invalidateSkillSelectionCache()
       return { success: true }
     } catch (e) {
       return { success: false, error: String(e) }
@@ -303,6 +305,7 @@ export class SkillManagerService {
       }
 
       renameSync(extractedDir, destDir)
+      invalidateSkillSelectionCache()
       return { success: true, skillName }
     } catch (error) {
       return { success: false, error: String(error) }
@@ -323,6 +326,7 @@ export class SkillManagerService {
 
     try {
       rmSync(dir, { recursive: true, force: true })
+      invalidateSkillSelectionCache()
       return { success: true }
     } catch (e) {
       return { success: false, error: String(e) }
@@ -340,6 +344,7 @@ export class SkillManagerService {
     try {
       mkdirSync(destDir, { recursive: true })
       writeFileSync(join(destDir, 'SKILL.md'), content, 'utf8')
+      invalidateSkillSelectionCache()
       return { success: true }
     } catch (e) {
       return { success: false, error: String(e) }

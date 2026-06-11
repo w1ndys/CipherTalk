@@ -180,7 +180,7 @@ export function registerAiHandlers(ctx: MainProcessContext): void {
     logger?.warn('AIAgent', 'AI Agent 请求开始', baseRunData)
     try {
       stage = 'import_services'
-      sendPrepProgress('正在准备 Agent', undefined, true)
+      sendPrepProgress('正在准备 Agent')
       const { agentProcessService } = await import('../../services/agent/agentProcessService')
       agentProcessService.setLogger(logger)
       const { resolveProviderConfig } = await import('../../services/agent/resolveProviderConfig')
@@ -206,12 +206,46 @@ export function registerAiHandlers(ctx: MainProcessContext): void {
       const { skillManagerService } = await import('../../services/skillManagerService')
       const { rerankCandidates } = await import('../../services/ai/rerankService')
       const { agentResourceVectorService } = await import('../../services/agent/agentResourceVectorService')
-      const readOnlyMcpTools = buildReadOnlyMcpToolDescriptors(mcpClientService.getConnectedToolSchemas())
+      const {
+        fingerprintMcpToolSchemas,
+        fingerprintSkills,
+        getCachedMcpToolDescriptors,
+        getCachedMcpSelection,
+        getCachedSkillSelection,
+        setCachedMcpToolDescriptors,
+        setCachedMcpSelection,
+        setCachedSkillSelection,
+      } = await import('../../services/agent/runtimeCache')
+      const connectedMcpToolSchemas = mcpClientService.getConnectedToolSchemas()
+      const mcpToolVersion = fingerprintMcpToolSchemas(connectedMcpToolSchemas)
+      let readOnlyMcpTools = getCachedMcpToolDescriptors(mcpToolVersion)
+      if (!readOnlyMcpTools) {
+        readOnlyMcpTools = buildReadOnlyMcpToolDescriptors(connectedMcpToolSchemas)
+        setCachedMcpToolDescriptors(mcpToolVersion, readOnlyMcpTools)
+      }
+      const skillManifestVersion = fingerprintSkills(skillManagerService.listSkills())
       stage = 'select_tools_and_skills'
-      sendPrepProgress('正在筛选工具与技能', `只读 MCP 工具 ${readOnlyMcpTools.length} 个`, true)
+      sendPrepProgress('正在筛选工具与技能', `只读 MCP 工具 ${readOnlyMcpTools.length} 个`)
       // MCP 工具筛选+重排 与 技能选择 互相独立，并行执行；
       // 两路对同一问题的查询嵌入由 embedQuery 的在飞缓存合并成一次请求。
       const selectMcpToolsTask = async () => {
+        if (readOnlyMcpTools.length === 0) {
+          return {
+            mcpTools: [],
+            mcpRerankMeta: { enabled: false, applied: false, candidateCount: 0, resultCount: 0 },
+            mcpCandidates: [],
+            mcpCacheHit: false,
+          }
+        }
+        const cached = getCachedMcpSelection(lastUserText, mcpToolVersion)
+        if (cached) {
+          return {
+            mcpTools: cached,
+            mcpRerankMeta: { enabled: false, applied: false, candidateCount: readOnlyMcpTools.length, resultCount: cached.length },
+            mcpCandidates: readOnlyMcpTools,
+            mcpCacheHit: true,
+          }
+        }
         let candidates = readOnlyMcpTools
         if (agentResourceVectorService.isReady()) {
           try {
@@ -245,6 +279,15 @@ export function registerAiHandlers(ctx: MainProcessContext): void {
             })
           }
         }
+        if (candidates.length === 0) {
+          setCachedMcpSelection(lastUserText, mcpToolVersion, [])
+          return {
+            mcpTools: [],
+            mcpRerankMeta: { enabled: false, applied: false, candidateCount: 0, resultCount: 0 },
+            mcpCandidates: candidates,
+            mcpCacheHit: false,
+          }
+        }
         const { items, meta } = await rerankCandidates(
           lastUserText,
           candidates.map((tool) => ({
@@ -258,13 +301,21 @@ export function registerAiHandlers(ctx: MainProcessContext): void {
           })),
           { topN: 8, timeoutMsOverride: AGENT_PREP_RERANK_TIMEOUT_MS },
         )
-        return { mcpTools: items, mcpRerankMeta: meta, mcpCandidates: candidates }
+        setCachedMcpSelection(lastUserText, mcpToolVersion, items)
+        return { mcpTools: items, mcpRerankMeta: meta, mcpCandidates: candidates, mcpCacheHit: false }
       }
-      const [{ mcpTools, mcpRerankMeta, mcpCandidates }, skills] = await Promise.all([
+      const selectSkillsTask = async () => {
+        const cached = getCachedSkillSelection(lastUserText, skillManifestVersion)
+        if (cached) return { skills: cached, skillCacheHit: true }
+        const skills = await skillManagerService.selectSkillsForAgent(lastUserText)
+        setCachedSkillSelection(lastUserText, skillManifestVersion, skills)
+        return { skills, skillCacheHit: false }
+      }
+      const [{ mcpTools, mcpRerankMeta, mcpCandidates, mcpCacheHit }, { skills, skillCacheHit }] = await Promise.all([
         selectMcpToolsTask(),
-        skillManagerService.selectSkillsForAgent(lastUserText),
+        selectSkillsTask(),
       ])
-      sendPrepProgress('已选定工具与技能', `MCP 工具 ${mcpTools.length} 个 · 技能 ${skills.length} 个`, true)
+      sendPrepProgress('已选定工具与技能', `MCP 工具 ${mcpTools.length} 个 · 技能 ${skills.length} 个`)
       if (mcpTools.length > 0 || skills.length > 0) {
         console.info('[agent:run] injected context', {
           mcpTools: mcpTools.map((tool) => `${tool.serverName}/${tool.toolName}`),
@@ -280,10 +331,12 @@ export function registerAiHandlers(ctx: MainProcessContext): void {
         mcpCandidateCount: mcpCandidates.length,
         selectedMcpToolCount: mcpTools.length,
         selectedMcpTools: mcpTools.map((tool) => `${tool.serverName}/${tool.toolName}`),
+        mcpSelectionCacheHit: mcpCacheHit,
         mcpRerankApplied: mcpRerankMeta.applied,
         mcpRerankError: mcpRerankMeta.error || null,
         selectedSkillCount: skills.length,
         selectedSkills: skills.map((skill) => skill.name),
+        skillSelectionCacheHit: skillCacheHit,
       })
       stage = 'run_agent_process'
       sendPrepProgress('正在交给 Agent 进程')

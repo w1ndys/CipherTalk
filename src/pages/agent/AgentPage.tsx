@@ -235,18 +235,11 @@ function PlanCard({ text, streaming }: { text: string; streaming: boolean }) {
   )
 }
 
-function MessageChainOfThought({ active, children }: { active: boolean; children: ReactNode }) {
-  const [open, setOpen] = useState(active)
-  const prevActive = useRef(active)
-  useEffect(() => {
-    if (prevActive.current !== active) {
-      prevActive.current = active
-      setOpen(active)
-    }
-  }, [active])
+function MessageChainOfThought({ children }: { active: boolean; children: ReactNode }) {
+  const [open, setOpen] = useState(false)
   return (
     <ChainOfThought onOpenChange={setOpen} open={open}>
-      <ChainOfThoughtHeader />
+      <ChainOfThoughtHeader>执行过程</ChainOfThoughtHeader>
       <ChainOfThoughtContent>{children}</ChainOfThoughtContent>
     </ChainOfThought>
   )
@@ -401,6 +394,25 @@ function getDelegateTasks(part: unknown): string[] {
 
 const SUB_AGENT_PROGRESS_LIMIT = 48
 const AGENT_PENDING_TITLE = '正在准备请求'
+const HIDDEN_PREP_PROGRESS_TITLES = new Set([
+  AGENT_PENDING_TITLE,
+  '正在准备 Agent',
+  '正在筛选工具与技能',
+  '已选定工具与技能',
+  '正在加载长期记忆',
+  '正在召回相关记忆',
+  '正在准备工具',
+  '正在请求模型',
+  '正在交给 Agent 进程',
+])
+
+function shouldDisplayAgentProgress(progress: AgentProgressEvent) {
+  if (progress.stage === 'error') return true
+  if (progress.visible === false) return false
+  if ((progress.depth ?? 0) === 0 && progress.stage === 'run_started' && HIDDEN_PREP_PROGRESS_TITLES.has(progress.title)) return false
+  if ((progress.depth ?? 0) === 0 && progress.stage === 'run_finished' && progress.title === '回答生成完成') return false
+  return true
+}
 
 function subAgentProgressGroupKey(progress: AgentProgressEvent) {
   return [
@@ -1766,13 +1778,16 @@ export default function AgentPage() {
       : { kind: 'global' }
 
   const handleAgentProgress = useCallback((progress: AgentProgressEvent) => {
+    const displayProgress = shouldDisplayAgentProgress(progress)
     if ((progress.depth ?? 0) > 0) {
-      setSubAgentProgress((prev) => mergeSubAgentProgress(prev, progress))
+      if (displayProgress) setSubAgentProgress((prev) => mergeSubAgentProgress(prev, progress))
     } else {
-      setAgentProgress((prev) => {
-        const withoutLocalPending = prev.filter((item) => item.title !== AGENT_PENDING_TITLE)
-        return mergeSubAgentProgress(withoutLocalPending, progress)
-      })
+      if (displayProgress) {
+        setAgentProgress((prev) => {
+          const withoutLocalPending = prev.filter((item) => item.title !== AGENT_PENDING_TITLE)
+          return mergeSubAgentProgress(withoutLocalPending, progress)
+        })
+      }
       if (progress.stage === 'run_started') {
         setSubAgentProgress([])
       } else if (progress.stage === 'run_finished' || progress.stage === 'error') {
@@ -2237,7 +2252,7 @@ export default function AgentPage() {
     submitScopeRef.current = submitScope
     runIsPlanRef.current = planModeRef.current
     setAgentNotice('')
-    setAgentProgress([{ stage: 'run_started', title: AGENT_PENDING_TITLE, detail: '正在创建会话并准备上下文', at: Date.now() }])
+    setAgentProgress([])
     setAgentRunPending(true)
     setSubAgentProgress([])
 
@@ -2280,7 +2295,7 @@ export default function AgentPage() {
 
     stopSpeakingMessage()
     setAgentNotice('')
-    setAgentProgress([{ stage: 'run_started', title: AGENT_PENDING_TITLE, detail: '正在重新生成回答', at: Date.now() }])
+    setAgentProgress([])
     setAgentRunPending(true)
     setSubAgentProgress([])
     runIsPlanRef.current = planModeRef.current
@@ -2301,7 +2316,7 @@ export default function AgentPage() {
     runIsPlanRef.current = false
     setPlanMode(false)
     setAgentNotice('')
-    setAgentProgress([{ stage: 'run_started', title: AGENT_PENDING_TITLE, detail: '正在按计划执行', at: Date.now() }])
+    setAgentProgress([])
     setAgentRunPending(true)
     setSubAgentProgress([])
     submitScopeRef.current = activeScopeRef.current
