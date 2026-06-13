@@ -206,15 +206,6 @@ function SettingsLayout() {
     title: string
     message: string
   } | null>(null)
-  const [cacheSize, setCacheSize] = useState<{
-    images: number
-    emojis: number
-    databases: number
-    aiData: number
-    logs: number
-    total: number
-  } | null>(null)
-  const [isLoadingCacheSize, setIsLoadingCacheSize] = useState(false)
   const [sttLanguages, setSttLanguagesState] = useState<string[]>([])
   const [sttModelType, setSttModelType] = useState<'int8' | 'float32'>('int8')
   const [sttMode, setSttMode] = useState<'cpu' | 'gpu' | 'online'>('cpu')
@@ -352,7 +343,6 @@ function SettingsLayout() {
     loadConfig()
     loadDefaultExportPath()
     loadAppVersion()
-    loadCacheSize()
     loadLogFiles()
     void window.electronAPI.app.getPlatformInfo().then(setPlatformInfo).catch(() => {
       // ignore
@@ -505,20 +495,6 @@ function SettingsLayout() {
     }
   }
 
-  const loadCacheSize = async () => {
-    setIsLoadingCacheSize(true)
-    try {
-      const result = await window.electronAPI.cache.getCacheSize()
-      if (result.success && result.size) {
-        setCacheSize(result.size)
-      }
-    } catch (e) {
-      console.error('获取缓存大小失败:', e)
-    } finally {
-      setIsLoadingCacheSize(false)
-    }
-  }
-
   const loadLogFiles = async () => {
     setIsLoadingLogs(true)
     try {
@@ -574,7 +550,6 @@ function SettingsLayout() {
         setLogContent('')
         setSelectedLogFile('')
         setLogSize(0)
-        await loadCacheSize() // 重新加载缓存大小
       } else {
         showMessage(result.error || '日志清除失败', false)
       }
@@ -759,8 +734,6 @@ function SettingsLayout() {
           showMessage(`${showClearDialog.title}成功`, true)
           if (showClearDialog.type === 'currentAccount' || showClearDialog.type === 'allAccounts') {
             await loadConfig()
-          } else {
-            await loadCacheSize()
           }
       } else {
         showMessage(result.error || `${showClearDialog.title}失败`, false)

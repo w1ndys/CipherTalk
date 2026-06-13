@@ -1,5 +1,5 @@
 import { join } from 'path'
-import { existsSync, rmSync, readdirSync, statSync } from 'fs'
+import { existsSync, rmSync, promises as fsp } from 'fs'
 import { app } from 'electron'
 import { ConfigService } from './config'
 import { getUserDataPath } from './runtimePaths'
@@ -288,19 +288,19 @@ export class CacheService {
       // 图片（所有可能路径）
       let imagesSize = 0
       for (const imgPath of this.getImagesCachePaths()) {
-        imagesSize += this.getFolderSize(imgPath)
+        imagesSize += await this.getFolderSize(imgPath)
       }
 
       // 表情包（新目录 + 旧 CipherTalk 目录）
-      let emojisSize = this.getFolderSize(join(cachePath, 'Emojis'))
-      emojisSize += this.getFolderSize(join(documentsPath, 'CipherTalk', 'Emojis'))
+      let emojisSize = await this.getFolderSize(join(cachePath, 'Emojis'))
+      emojisSize += await this.getFolderSize(join(documentsPath, 'CipherTalk', 'Emojis'))
 
       // 日志
-      const logsSize = this.getFolderSize(join(cachePath, 'logs'))
+      const logsSize = await this.getFolderSize(join(cachePath, 'logs'))
 
       // 数据库项不再统计
       const databasesSize = 0
-      const aiDataSize = this.getAIDataSize()
+      const aiDataSize = await this.getAIDataSize()
 
       const size = {
         images: imagesSize,
@@ -318,27 +318,26 @@ export class CacheService {
   }
 
   /**
-   * 获取文件夹大小（递归）
+   * 获取文件夹大小（递归，异步）。
+   * 用 fs/promises 让出事件循环，避免同步遍历大目录（图片/表情/AI 缓存可达数 GB）时阻塞主进程。
    */
-  private getFolderSize(folderPath: string): number {
-    if (!existsSync(folderPath)) return 0
-
-    let totalSize = 0
+  private async getFolderSize(folderPath: string): Promise<number> {
+    let entries
     try {
-      const files = readdirSync(folderPath)
-      for (const file of files) {
-        const filePath = join(folderPath, file)
-        const stat = statSync(filePath)
-        if (stat.isDirectory()) {
-          totalSize += this.getFolderSize(filePath)
-        } else {
-          totalSize += stat.size
-        }
-      }
+      entries = await fsp.readdir(folderPath, { withFileTypes: true })
     } catch {
-      // 忽略权限错误等
+      return 0 // 目录不存在或无权限
     }
-    return totalSize
+    const sizes = await Promise.all(entries.map(async (entry) => {
+      const filePath = join(folderPath, entry.name)
+      try {
+        if (entry.isDirectory()) return await this.getFolderSize(filePath)
+        return (await fsp.stat(filePath)).size
+      } catch {
+        return 0 // 忽略权限错误等
+      }
+    }))
+    return sizes.reduce((sum, size) => sum + size, 0)
   }
 
   private getAIDataDbPaths(): string[] {
@@ -372,21 +371,19 @@ export class CacheService {
     ]
   }
 
-  private getAIDataSize(): number {
+  private async getAIDataSize(): Promise<number> {
     let total = 0
     for (const dbPath of this.getAIDataDbPaths()) {
       for (const filePath of this.getSqliteFileSet(dbPath)) {
         try {
-          if (existsSync(filePath)) {
-            total += statSync(filePath).size
-          }
+          total += (await fsp.stat(filePath)).size
         } catch {
-          // ignore
+          // 文件不存在/无权限：忽略
         }
       }
     }
     for (const dirPath of this.getAIDataDirs()) {
-      total += this.getFolderSize(dirPath)
+      total += await this.getFolderSize(dirPath)
     }
     return total
   }
