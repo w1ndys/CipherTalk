@@ -10,6 +10,8 @@ export interface VolcengineTtsOptions {
   text: string
   instructions?: string
   speed?: number
+  audioFormat?: 'mp3' | 'pcm' | 'ogg_opus'
+  onAudioChunk?: (chunk: Uint8Array) => void
   signal?: AbortSignal
 }
 
@@ -64,7 +66,7 @@ interface VolcengineMessage {
 }
 
 const VOLCENGINE_TTS_ENDPOINT = 'wss://openspeech.bytedance.com/api/v3/tts/bidirection'
-const VOLCENGINE_AUDIO_FORMAT = 'mp3'
+const VOLCENGINE_AUDIO_FORMAT: VolcengineTtsOptions['audioFormat'] = 'mp3'
 const VOLCENGINE_SAMPLE_RATE = 24000
 const VOLCENGINE_TIMEOUT_ERROR = '火山引擎 TTS 请求超时'
 
@@ -412,7 +414,7 @@ function createRequestTemplate(options: VolcengineTtsOptions): Record<string, un
   }
 
   const audioParams: Record<string, unknown> = {
-    format: VOLCENGINE_AUDIO_FORMAT,
+    format: options.audioFormat || VOLCENGINE_AUDIO_FORMAT,
     sample_rate: VOLCENGINE_SAMPLE_RATE,
   }
   const speechRate = volcengineSpeechRate(options.speed)
@@ -503,6 +505,7 @@ export async function synthesizeViaVolcengineBidirectional(
       }
       if (message.type === MsgType.AudioOnlyServer && message.payload.length > 0) {
         chunks.push(message.payload)
+        options.onAudioChunk?.(message.payload)
       }
       if (message.event === EventType.SessionFinished) {
         break
@@ -520,7 +523,7 @@ export async function synthesizeViaVolcengineBidirectional(
     return {
       success: true,
       audioBase64: Buffer.from(audio).toString('base64'),
-      mimeType: mimeTypeForFormat(VOLCENGINE_AUDIO_FORMAT),
+      mimeType: mimeTypeForFormat(options.audioFormat || VOLCENGINE_AUDIO_FORMAT),
     }
   } catch (error) {
     return {

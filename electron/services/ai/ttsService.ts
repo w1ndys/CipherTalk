@@ -2,7 +2,7 @@
  * 文字转语音服务 —— 独立的 TTS 配置（朗读 AI 回复/微信消息/角色语音回复用），与聊天模型分开。
  * 配置存 ConfigService.ttsConfig，仅保留两类服务：
  * - xiaomi-mimo-tts：小米 MiMo V2.5 TTS 专用 /chat/completions，按 api-key + audio 参数直连 fetch
- * - volcengine-bidirectional：火山引擎/豆包 V3 WebSocket 双向流式接口，按文档二进制协议合成后回传完整音频
+ * - volcengine-bidirectional：火山引擎/豆包 V3 WebSocket 双向流式接口，普通合成返回完整音频，播放链路可边收边播
  * 每个服务商配置独立保存在 providers 下，切换服务商不会覆盖另一套 key/model/voice。
  * 可在主进程与 AI 子进程复用（ConfigService 在两边都能解析路径）。
  */
@@ -45,12 +45,28 @@ export interface TtsSynthesisResult {
   errorCode?: 'NOT_CONFIGURED' | 'SYNTHESIS_FAILED'
 }
 
+export interface TtsAudioStreamChunk {
+  data: Uint8Array
+  format: 'pcm16'
+  sampleRate: number
+  channels: number
+}
+
+export interface TtsStreamingSynthesisResult extends TtsSynthesisResult {
+  streamed?: boolean
+  streamFormat?: 'pcm16'
+  sampleRate?: number
+  channels?: number
+}
+
 /** 单次合成的文本上限，超长截断，避免长消息造成 TTS 请求过大。 */
 const MAX_TTS_INPUT_CHARS = 4000
 const TTS_CHAT_TIMEOUT_MS = 90000
 const TTS_CACHE_DB_NAME = 'tts-cache.db'
 const TTS_CACHE_AUDIO_DIR = 'tts-audio'
 const TTS_CACHE_VERSION = 2
+const TTS_STREAM_SAMPLE_RATE = 24000
+const TTS_STREAM_CHANNELS = 1
 
 let cacheDb: Database.Database | null = null
 let cacheDbPath: string | null = null
@@ -483,6 +499,27 @@ function stripBase64DataUrl(value: string): string {
   return String(value || '').trim().replace(/^data:[^;]+;base64,/i, '')
 }
 
+function buildPcm16Wav(pcm: Buffer, sampleRate = TTS_STREAM_SAMPLE_RATE, channels = TTS_STREAM_CHANNELS): Buffer {
+  const bitsPerSample = 16
+  const byteRate = sampleRate * channels * (bitsPerSample / 8)
+  const blockAlign = channels * (bitsPerSample / 8)
+  const header = Buffer.alloc(44)
+  header.write('RIFF', 0)
+  header.writeUInt32LE(36 + pcm.length, 4)
+  header.write('WAVE', 8)
+  header.write('fmt ', 12)
+  header.writeUInt32LE(16, 16)
+  header.writeUInt16LE(1, 20)
+  header.writeUInt16LE(channels, 22)
+  header.writeUInt32LE(sampleRate, 24)
+  header.writeUInt32LE(byteRate, 28)
+  header.writeUInt16LE(blockAlign, 32)
+  header.writeUInt16LE(bitsPerSample, 34)
+  header.write('data', 36)
+  header.writeUInt32LE(pcm.length, 40)
+  return Buffer.concat([header, pcm])
+}
+
 function createTtsCacheKey(text: string, cfg: TtsConfig): string {
   return createHash('sha256').update(JSON.stringify({
     version: TTS_CACHE_VERSION,
@@ -682,6 +719,122 @@ async function synthesizeViaXiaomiMimoApi(text: string, cfg: TtsConfig, signal?:
   return { success: false, error: `小米接口返回成功但没有音频数据（message.audio.data/url 均为空）：${preview}`, errorCode: 'SYNTHESIS_FAILED' }
 }
 
+function canUseLowLatencyStreaming(cfg: TtsConfig): boolean {
+  if (cfg.protocol === 'volcengine-bidirectional') return true
+  return cfg.protocol === 'xiaomi-mimo-tts' && String(cfg.model || '').trim() === XIAOMI_MIMO_DEFAULT_MODEL
+}
+
+async function readSseJsonStream(
+  response: Response,
+  onJson: (payload: any) => void,
+): Promise<void> {
+  const reader = response.body?.getReader()
+  if (!reader) throw new Error('流式响应缺少 body')
+
+  const decoder = new TextDecoder()
+  let buffer = ''
+
+  const consumeBlock = (block: string) => {
+    const data = block
+      .split('\n')
+      .filter((line) => line.startsWith('data:'))
+      .map((line) => line.slice(5).trimStart())
+      .join('\n')
+      .trim()
+    if (!data || data === '[DONE]') return
+    try {
+      onJson(JSON.parse(data))
+    } catch {
+      throw new Error(`小米流式响应 JSON 解析失败: ${data.slice(0, 300)}`)
+    }
+  }
+
+  while (true) {
+    const { done, value } = await reader.read()
+    if (done) break
+    buffer += decoder.decode(value, { stream: true }).replace(/\r\n/g, '\n')
+    let index = buffer.indexOf('\n\n')
+    while (index >= 0) {
+      consumeBlock(buffer.slice(0, index))
+      buffer = buffer.slice(index + 2)
+      index = buffer.indexOf('\n\n')
+    }
+  }
+
+  buffer += decoder.decode()
+  if (buffer.trim()) consumeBlock(buffer.replace(/\r\n/g, '\n'))
+}
+
+/** 小米 MiMo 标准 TTS 低延迟流式：官方要求 stream=true + audio.format=pcm16。 */
+async function synthesizeViaXiaomiMimoStreamingApi(
+  text: string,
+  cfg: TtsConfig,
+  onAudioChunk: (chunk: TtsAudioStreamChunk) => void,
+  signal?: AbortSignal,
+): Promise<TtsStreamingSynthesisResult> {
+  const fetchImpl = createProxyFetch(getResolvedProxyUrl()) || fetch
+  const endpoint = getChatCompletionsEndpoint(cfg.baseURL || XIAOMI_MIMO_DEFAULT_BASE_URL)
+  const instructions = normalizeTtsInstructions(cfg.instructions)
+  const speedInstruction = getXiaomiMimoSpeedInstruction(cfg.speed)
+  const userInstruction = [instructions, speedInstruction].filter(Boolean).join('\n')
+  const messages: Array<{ role: 'user' | 'assistant'; content: string }> = []
+  if (userInstruction) messages.push({ role: 'user', content: userInstruction })
+  messages.push({ role: 'assistant', content: text })
+
+  const response = await fetchImpl(endpoint, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      'api-key': cfg.apiKey,
+    },
+    body: JSON.stringify({
+      model: XIAOMI_MIMO_DEFAULT_MODEL,
+      messages,
+      audio: {
+        format: 'pcm16',
+        voice: cfg.voice || XIAOMI_MIMO_DEFAULT_VOICE,
+      },
+      stream: true,
+    }),
+    signal,
+  }) as Response
+
+  if (!response.ok) {
+    const detail = await response.text().catch(() => '')
+    return { success: false, error: `HTTP ${response.status} · ${detail.slice(0, 300) || response.statusText}`, errorCode: 'SYNTHESIS_FAILED' }
+  }
+
+  const chunks: Buffer[] = []
+  await readSseJsonStream(response, (payload) => {
+    const audio = payload?.choices?.[0]?.delta?.audio
+    const data = stripBase64DataUrl(String(audio?.data || ''))
+    if (!data) return
+    const bytes = Buffer.from(data, 'base64')
+    if (bytes.length === 0) return
+    chunks.push(bytes)
+    onAudioChunk({
+      data: bytes,
+      format: 'pcm16',
+      sampleRate: TTS_STREAM_SAMPLE_RATE,
+      channels: TTS_STREAM_CHANNELS,
+    })
+  })
+
+  if (chunks.length === 0) {
+    return { success: false, error: '小米流式接口未返回音频数据', errorCode: 'SYNTHESIS_FAILED' }
+  }
+
+  return {
+    success: true,
+    streamed: true,
+    streamFormat: 'pcm16',
+    sampleRate: TTS_STREAM_SAMPLE_RATE,
+    channels: TTS_STREAM_CHANNELS,
+    audioBase64: buildPcm16Wav(Buffer.concat(chunks)).toString('base64'),
+    mimeType: 'audio/wav',
+  }
+}
+
 /** volcengine-bidirectional：火山引擎/豆包 V3 WebSocket 双向流式 TTS。 */
 async function synthesizeViaVolcengineApi(text: string, cfg: TtsConfig, signal?: AbortSignal): Promise<TtsSynthesisResult> {
   return synthesizeViaVolcengineBidirectional({
@@ -694,6 +847,46 @@ async function synthesizeViaVolcengineApi(text: string, cfg: TtsConfig, signal?:
     speed: cfg.speed,
     signal,
   })
+}
+
+/** 豆包 WebSocket 流式播放路径：请求 PCM 分片，结束后包装成 WAV 供缓存复用。 */
+async function synthesizeViaVolcengineStreamingApi(
+  text: string,
+  cfg: TtsConfig,
+  onAudioChunk: (chunk: TtsAudioStreamChunk) => void,
+  signal?: AbortSignal,
+): Promise<TtsStreamingSynthesisResult> {
+  const result = await synthesizeViaVolcengineBidirectional({
+    apiKey: cfg.apiKey,
+    endpoint: getVolcengineEndpoint(cfg),
+    resourceId: cfg.model,
+    speaker: cfg.voice,
+    text,
+    instructions: cfg.instructions,
+    speed: cfg.speed,
+    audioFormat: 'pcm',
+    onAudioChunk: (chunk) => {
+      onAudioChunk({
+        data: chunk,
+        format: 'pcm16',
+        sampleRate: TTS_STREAM_SAMPLE_RATE,
+        channels: TTS_STREAM_CHANNELS,
+      })
+    },
+    signal,
+  })
+
+  if (!result.success || !result.audioBase64) return { ...result, streamed: false }
+  const pcm = Buffer.from(stripBase64DataUrl(result.audioBase64), 'base64')
+  return {
+    ...result,
+    streamed: true,
+    streamFormat: 'pcm16',
+    sampleRate: TTS_STREAM_SAMPLE_RATE,
+    channels: TTS_STREAM_CHANNELS,
+    audioBase64: buildPcm16Wav(pcm).toString('base64'),
+    mimeType: 'audio/wav',
+  }
 }
 
 /** 合成语音。cfg 缺省读持久化配置（试听时传 overrides）。 */
@@ -756,6 +949,70 @@ export async function synthesizeSpeech(
 
   if (cacheKey) pendingSyntheses.set(cacheKey, task)
   return task
+}
+
+/** 流式合成语音。支持低延迟的 provider 会通过 onAudioChunk 推 PCM16 分片；否则回退完整合成。 */
+export async function synthesizeSpeechStream(
+  text: string,
+  options: {
+    config?: Partial<TtsConfig>
+    signal?: AbortSignal
+    useCache?: boolean
+    onAudioChunk: (chunk: TtsAudioStreamChunk) => void
+  },
+): Promise<TtsStreamingSynthesisResult> {
+  const cfg: TtsConfig = normalizeTtsConfig({ ...getTtsConfig(), ...options.config })
+  if (!options.config && !isTtsAvailable(cfg)) {
+    return { success: false, error: '未启用或未配置文字转语音', errorCode: 'NOT_CONFIGURED' }
+  }
+  const invalid = validateTtsConfig(cfg)
+  if (invalid) return { success: false, error: invalid, errorCode: 'NOT_CONFIGURED' }
+
+  const input = String(text || '').trim().slice(0, MAX_TTS_INPUT_CHARS)
+  if (!input) return { success: false, error: '朗读内容为空', errorCode: 'SYNTHESIS_FAILED' }
+
+  if (!isTtsAvailable(cfg) && options.useCache !== false) {
+    return { success: false, error: '未启用或未配置文字转语音', errorCode: 'NOT_CONFIGURED' }
+  }
+
+  const shouldUseCache = options.useCache ?? !options.config
+  const cacheKey = shouldUseCache ? createTtsCacheKey(input, cfg) : ''
+  if (cacheKey) {
+    const cached = readTtsCache(cacheKey)
+    if (cached) return { ...cached, streamed: false }
+  }
+
+  if (!canUseLowLatencyStreaming(cfg)) {
+    const complete = await synthesizeSpeech(input, {
+      config: options.config,
+      signal: options.signal,
+      useCache: options.useCache,
+    })
+    return { ...complete, streamed: false }
+  }
+
+  const controller = new AbortController()
+  const timeout = setTimeout(() => controller.abort(), TTS_CHAT_TIMEOUT_MS)
+  options.signal?.addEventListener('abort', () => controller.abort())
+
+  try {
+    const result = cfg.protocol === 'volcengine-bidirectional'
+      ? await synthesizeViaVolcengineStreamingApi(input, cfg, options.onAudioChunk, controller.signal)
+      : await synthesizeViaXiaomiMimoStreamingApi(input, cfg, options.onAudioChunk, controller.signal)
+
+    if (cacheKey && result.success && result.audioBase64) {
+      writeTtsCache(cacheKey, input, cfg, result)
+    }
+    return result
+  } catch (e) {
+    const detail = controller.signal.aborted && !options.signal?.aborted
+      ? '请求超时'
+      : describeTtsError(e)
+    console.error('[TTS] 流式合成失败:', detail)
+    return { success: false, streamed: false, error: detail, errorCode: 'SYNTHESIS_FAILED' }
+  } finally {
+    clearTimeout(timeout)
+  }
 }
 
 /** 只清理缺失音频文件的陈旧记录；供测试/维护调用。 */

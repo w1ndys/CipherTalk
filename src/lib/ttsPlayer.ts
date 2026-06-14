@@ -1,11 +1,11 @@
 /**
  * 全局 TTS 播放器 —— 朗读 AI 回复 / 微信消息 / 角色语音回复共用的单例。
- * 优先走主进程在线合成（tts:speak，见 electron/services/ai/ttsService）；
+ * 优先走主进程在线流式合成（tts:stream），不可流式时回退完整合成（tts:speak）；
  * 未启用/未配置时回退浏览器 speechSynthesis（系统朗读）。
  * 同一时刻只播一条：再次触发同 key 即停止，触发其他 key 则切换。
  */
 import { useEffect, useState } from 'react'
-import type { PersonaTtsVoiceBindingInfo, TtsConfig } from '@/types/electron'
+import type { PersonaTtsVoiceBindingInfo, TtsConfig, TtsSpeakOptions, TtsStreamEvent } from '@/types/electron'
 
 export type TtsSpeakingPhase = 'loading' | 'playing'
 
@@ -31,6 +31,8 @@ export interface SpeakOptions {
 }
 
 let currentAudio: HTMLAudioElement | null = null
+let currentStreamPlayer: PcmStreamPlayer | null = null
+let currentCancelStream: (() => void) | null = null
 /** 当前播放的清理回调（停止/切换时调用，保证 awaitEnd 的 Promise 不悬挂） */
 let currentOnStop: (() => void) | null = null
 let speakingState: TtsSpeakingState | null = null
@@ -45,7 +47,14 @@ function setSpeaking(state: TtsSpeakingState | null): void {
 
 function stopAudio(): void {
   const onStop = currentOnStop
+  const cancelStream = currentCancelStream
   currentOnStop = null
+  currentCancelStream = null
+  cancelStream?.()
+  if (currentStreamPlayer) {
+    currentStreamPlayer.stop()
+    currentStreamPlayer = null
+  }
   if (currentAudio) {
     currentAudio.onended = null
     currentAudio.onerror = null
@@ -99,6 +108,239 @@ function speakWithSystem(key: string, text: string, seq: number): { started: boo
   return { started: true, done }
 }
 
+type PcmStreamPlayer = {
+  readonly done: Promise<void>
+  enqueue: (audioBase64: string, sampleRate?: number, channels?: number) => void
+  finish: () => Promise<void>
+  stop: () => void
+}
+
+function makeStreamId(): string {
+  try {
+    return crypto.randomUUID()
+  } catch {
+    return `tts-${Date.now()}-${Math.random().toString(36).slice(2)}`
+  }
+}
+
+function decodePcm16Base64(audioBase64: string): Int16Array {
+  const binary = atob(audioBase64)
+  const bytes = new Uint8Array(binary.length)
+  for (let i = 0; i < binary.length; i += 1) {
+    bytes[i] = binary.charCodeAt(i)
+  }
+  return new Int16Array(bytes.buffer, bytes.byteOffset, Math.floor(bytes.byteLength / 2))
+}
+
+function createPcmStreamPlayer(key: string, onFirstChunk: () => void, onDone: () => void): PcmStreamPlayer | null {
+  const AudioContextCtor = window.AudioContext || (window as any).webkitAudioContext
+  if (!AudioContextCtor) return null
+
+  const ctx = new AudioContextCtor() as AudioContext
+  const sources = new Set<AudioBufferSourceNode>()
+  let nextTime = ctx.currentTime + 0.08
+  let finished = false
+  let stopped = false
+  let started = false
+  let resolveDone!: () => void
+  const done = new Promise<void>((resolve) => { resolveDone = resolve })
+
+  const settle = () => {
+    if (!finished || sources.size > 0) return
+    try { void ctx.close() } catch { /* ignore */ }
+    onDone()
+    resolveDone()
+  }
+
+  return {
+    done,
+    enqueue(audioBase64: string, sampleRate = 24000, channels = 1) {
+      if (stopped) return
+      const pcm = decodePcm16Base64(audioBase64)
+      if (pcm.length === 0) return
+      const frames = Math.floor(pcm.length / channels)
+      if (frames <= 0) return
+
+      const audioBuffer = ctx.createBuffer(channels, frames, sampleRate)
+      for (let channel = 0; channel < channels; channel += 1) {
+        const data = audioBuffer.getChannelData(channel)
+        for (let i = 0; i < frames; i += 1) {
+          data[i] = pcm[i * channels + channel] / 32768
+        }
+      }
+
+      const source = ctx.createBufferSource()
+      source.buffer = audioBuffer
+      source.connect(ctx.destination)
+      source.onended = () => {
+        sources.delete(source)
+        settle()
+      }
+      sources.add(source)
+      if (!started) {
+        started = true
+        onFirstChunk()
+      }
+      const startAt = Math.max(ctx.currentTime + 0.03, nextTime)
+      source.start(startAt)
+      nextTime = startAt + audioBuffer.duration
+      void ctx.resume()
+    },
+    finish() {
+      finished = true
+      settle()
+      return done
+    },
+    stop() {
+      if (stopped) return
+      stopped = true
+      finished = true
+      for (const source of Array.from(sources)) {
+        try { source.stop() } catch { /* ignore */ }
+      }
+      sources.clear()
+      try { void ctx.close() } catch { /* ignore */ }
+      onDone()
+      resolveDone()
+    },
+  }
+}
+
+function buildTtsSpeakOptions(options: SpeakOptions): TtsSpeakOptions | undefined {
+  const instructions = String(options.instructions || '').trim()
+  const config = {
+    ...(options.config || {}),
+    ...(instructions ? { instructions } : {}),
+  }
+  return Object.keys(config).length > 0 || options.personaVoice
+    ? {
+      config: Object.keys(config).length > 0 ? config : undefined,
+      personaVoice: options.personaVoice || undefined,
+    }
+    : undefined
+}
+
+async function playAudioBase64(
+  key: string,
+  audioBase64: string,
+  mimeType: string | undefined,
+  seq: number,
+  awaitEnd?: boolean,
+): Promise<SpeakResult> {
+  if (seq !== requestSeq) return { ok: true, stopped: true }
+
+  const audio = new Audio(`data:${mimeType || 'audio/mpeg'};base64,${audioBase64}`)
+  let resolveEnd: (() => void) | null = null
+  const ended = awaitEnd ? new Promise<void>((resolve) => { resolveEnd = resolve }) : null
+  let finished = false
+  const clear = () => {
+    if (finished) return
+    finished = true
+    if (currentAudio === audio) currentAudio = null
+    if (currentOnStop === clear) currentOnStop = null
+    setSpeaking(speakingState?.key === key ? null : speakingState)
+    resolveEnd?.()
+  }
+  audio.onended = clear
+  audio.onerror = clear
+  currentAudio = audio
+  currentOnStop = clear
+  try {
+    setSpeaking({ key, phase: 'playing' })
+    await audio.play()
+  } catch (e) {
+    clear()
+    return { ok: false, error: e instanceof Error ? e.message : String(e) }
+  }
+  if (ended) {
+    await ended
+    if (seq !== requestSeq) return { ok: true, stopped: true }
+  }
+  return { ok: true }
+}
+
+async function speakWithOnlineStream(
+  key: string,
+  text: string,
+  requestOptions: TtsSpeakOptions | undefined,
+  seq: number,
+  awaitEnd?: boolean,
+): Promise<SpeakResult | null> {
+  if (!window.electronAPI.tts.stream) return null
+  if (!(window.AudioContext || (window as any).webkitAudioContext)) return null
+
+  const streamId = makeStreamId()
+  const streamState: {
+    player: PcmStreamPlayer | null
+    completeEvent: Pick<TtsStreamEvent, 'audioBase64' | 'mimeType'> | null
+  } = {
+    player: null,
+    completeEvent: null,
+  }
+  let streamedChunks = 0
+  let settled = false
+
+  const cancel = () => {
+    void window.electronAPI.tts.cancelStream?.(streamId)
+  }
+  const clearStream = () => {
+    if (settled) return
+    settled = true
+    if (currentStreamPlayer === streamState.player) currentStreamPlayer = null
+    if (currentCancelStream === cancel) currentCancelStream = null
+    if (currentOnStop === clearStream) currentOnStop = null
+    if (speakingState?.key === key) setSpeaking(null)
+  }
+
+  currentCancelStream = cancel
+  currentOnStop = clearStream
+
+  try {
+    const result = await window.electronAPI.tts.stream(streamId, text, requestOptions, (event) => {
+      if (seq !== requestSeq) return
+      if (event.type === 'complete' && event.audioBase64) {
+        streamState.completeEvent = { audioBase64: event.audioBase64, mimeType: event.mimeType }
+        return
+      }
+      if (event.type !== 'chunk' || event.format !== 'pcm16' || !event.audioBase64) return
+      if (!streamState.player) {
+        streamState.player = createPcmStreamPlayer(
+          key,
+          () => setSpeaking({ key, phase: 'playing' }),
+          clearStream,
+        )
+        if (!streamState.player) return
+        currentStreamPlayer = streamState.player
+      }
+      streamedChunks += 1
+      streamState.player.enqueue(event.audioBase64, event.sampleRate || 24000, event.channels || 1)
+    })
+
+    if (seq !== requestSeq) return { ok: true, stopped: true }
+    if (streamedChunks > 0 && streamState.player) {
+      const done = streamState.player.finish()
+      if (awaitEnd) {
+        await done
+        if (seq !== requestSeq) return { ok: true, stopped: true }
+      }
+      return result.success ? { ok: true } : { ok: false, error: result.error || '流式朗读失败' }
+    }
+
+    const completeAudio = streamState.completeEvent?.audioBase64 || result.audioBase64
+    if (result.success && completeAudio) {
+      clearStream()
+      return playAudioBase64(key, completeAudio, streamState.completeEvent?.mimeType || result.mimeType, seq, awaitEnd)
+    }
+
+    clearStream()
+    return null
+  } catch {
+    if (seq !== requestSeq) return { ok: true, stopped: true }
+    clearStream()
+    return null
+  }
+}
+
 /**
  * 朗读一段文本。key 用于标识朗读对象（消息 id 等）：
  * 同 key 再次调用 = 停止（stopped: true）；不同 key = 切换。
@@ -118,19 +360,14 @@ export async function speakText(key: string, text: string, options: SpeakOptions
   stopAudio()
   setSpeaking({ key, phase: 'loading' })
 
+  const requestOptions = buildTtsSpeakOptions(options)
+  const streamResult = await speakWithOnlineStream(key, content, requestOptions, seq, options.awaitEnd)
+  if (streamResult) return streamResult
+  if (seq === requestSeq) setSpeaking({ key, phase: 'loading' })
+
   let result: { success: boolean; audioBase64?: string; mimeType?: string; error?: string; errorCode?: string } | null = null
   try {
-    const instructions = String(options.instructions || '').trim()
-    const config = {
-      ...(options.config || {}),
-      ...(instructions ? { instructions } : {}),
-    }
-    result = await window.electronAPI.tts.speak(
-      content,
-      Object.keys(config).length > 0 || options.personaVoice
-        ? { config: Object.keys(config).length > 0 ? config : undefined, personaVoice: options.personaVoice || undefined }
-        : undefined,
-    )
+    result = await window.electronAPI.tts.speak(content, requestOptions)
   } catch (e) {
     result = { success: false, error: e instanceof Error ? e.message : String(e), errorCode: 'SYNTHESIS_FAILED' }
   }
@@ -139,35 +376,7 @@ export async function speakText(key: string, text: string, options: SpeakOptions
   if (seq !== requestSeq) return { ok: true, stopped: true }
 
   if (result?.success && result.audioBase64) {
-    const audio = new Audio(`data:${result.mimeType || 'audio/mpeg'};base64,${result.audioBase64}`)
-    let resolveEnd: (() => void) | null = null
-    const ended = options.awaitEnd ? new Promise<void>((resolve) => { resolveEnd = resolve }) : null
-    let finished = false
-    const clear = () => {
-      if (finished) return
-      finished = true
-      if (currentAudio === audio) currentAudio = null
-      if (currentOnStop === clear) currentOnStop = null
-      setSpeaking(speakingState?.key === key ? null : speakingState)
-      resolveEnd?.()
-    }
-    audio.onended = clear
-    audio.onerror = clear
-    currentAudio = audio
-    currentOnStop = clear
-    try {
-      setSpeaking({ key, phase: 'playing' })
-      await audio.play()
-    } catch (e) {
-      clear()
-      return { ok: false, error: e instanceof Error ? e.message : String(e) }
-    }
-    if (ended) {
-      await ended
-      // 播完后区分自然结束与中途被停
-      if (seq !== requestSeq) return { ok: true, stopped: true }
-    }
-    return { ok: true }
+    return playAudioBase64(key, result.audioBase64, result.mimeType, seq, options.awaitEnd)
   }
 
   // 未配置在线 TTS：回退系统朗读；其他失败也尽量回退，保证“能读出声”

@@ -8,6 +8,7 @@ import type { PersonaNotes, PersonaRecord, PersonaTtsVoiceBinding } from '../../
 
 /** 进行中的 agent 运行：runId → AbortController，用于取消。 */
 const agentAborters = new Map<string, AbortController>()
+const ttsStreamAborters = new Map<string, AbortController>()
 const AGENT_RUN_PROXY_CACHE_TTL_MS = 5 * 60 * 1000
 // 准备阶段重排超时：超时直接走降级路径（不影响正确性），别让慢服务拖住首包。
 const AGENT_PREP_RERANK_TIMEOUT_MS = 800
@@ -682,6 +683,79 @@ export function registerAiHandlers(ctx: MainProcessContext): void {
       return await synthesizeSpeech(String(text || ''), config ? { config: config as any, useCache: true } : undefined)
     } catch (e) {
       return { success: false, error: e instanceof Error ? e.message : String(e), errorCode: 'SYNTHESIS_FAILED' }
+    }
+  })
+
+  ipcMain.handle('tts:streamCancel', async (_e, streamId: string) => {
+    const id = String(streamId || '')
+    const controller = ttsStreamAborters.get(id)
+    if (controller) {
+      controller.abort()
+      ttsStreamAborters.delete(id)
+    }
+    return { success: true }
+  })
+
+  ipcMain.handle('tts:stream', async (event, streamId: string, text: string, options?: { config?: Record<string, unknown>; personaVoice?: unknown }) => {
+    const id = String(streamId || '')
+    const controller = new AbortController()
+    if (id) ttsStreamAborters.set(id, controller)
+
+    const sendEvent = (payload: Record<string, unknown>) => {
+      if (!id || event.sender.isDestroyed()) return
+      event.sender.send('tts:streamEvent', { streamId: id, ...payload })
+    }
+
+    try {
+      const { resolvePersonaVoiceTtsConfig, synthesizeSpeechStream } = await import('../../services/ai/ttsService')
+      const configPatch = options?.config && typeof options.config === 'object' ? options.config : undefined
+      const config = options?.personaVoice && typeof options.personaVoice === 'object'
+        ? resolvePersonaVoiceTtsConfig(options.personaVoice as any, configPatch as any)
+        : configPatch
+
+      sendEvent({ type: 'start' })
+      const result = await synthesizeSpeechStream(String(text || ''), {
+        config: config as any,
+        useCache: true,
+        signal: controller.signal,
+        onAudioChunk: (chunk) => {
+          sendEvent({
+            type: 'chunk',
+            audioBase64: Buffer.from(chunk.data).toString('base64'),
+            format: chunk.format,
+            sampleRate: chunk.sampleRate,
+            channels: chunk.channels,
+          })
+        },
+      })
+
+      if (result.success && !result.streamed && result.audioBase64) {
+        sendEvent({
+          type: 'complete',
+          audioBase64: result.audioBase64,
+          mimeType: result.mimeType,
+          cached: result.cached,
+        })
+      }
+      sendEvent({
+        type: result.success ? 'end' : 'error',
+        success: result.success,
+        error: result.error,
+        errorCode: result.errorCode,
+        streamed: result.streamed,
+        cached: result.cached,
+        mimeType: result.mimeType,
+      })
+
+      return result.streamed ? { ...result, audioBase64: undefined } : result
+    } catch (e) {
+      const error = e instanceof Error ? e.message : String(e)
+      sendEvent({ type: 'error', success: false, error, errorCode: 'SYNTHESIS_FAILED' })
+      return { success: false, error, errorCode: 'SYNTHESIS_FAILED' }
+    } finally {
+      if (id && ttsStreamAborters.get(id) === controller) {
+        ttsStreamAborters.delete(id)
+      }
     }
   })
 

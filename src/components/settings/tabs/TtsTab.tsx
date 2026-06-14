@@ -202,6 +202,20 @@ function syncActiveProviderConfig(config: TtsConfig): TtsConfig {
   })
 }
 
+function switchActiveProviderConfig(config: TtsConfig, provider: TtsProviderId): TtsConfig {
+  const synced = syncActiveProviderConfig(config)
+  const nextProviderConfig = normalizeProviderConfig(provider, synced.providers[provider])
+  return normalizeTtsConfig({
+    ...synced,
+    activeProvider: provider,
+    ...nextProviderConfig,
+    providers: {
+      ...synced.providers,
+      [provider]: nextProviderConfig,
+    },
+  })
+}
+
 export default function TtsTab() {
   const [cfg, setCfg] = useState<TtsConfig>(DEFAULT_CFG)
   const [loaded, setLoaded] = useState(false)
@@ -243,20 +257,28 @@ export default function TtsTab() {
     })
   }
 
+  const persistConfig = async (nextCfg: TtsConfig, successText: string) => {
+    setSaving(true)
+    setStatus(null)
+    try {
+      const res = await window.electronAPI.tts.setConfig(nextCfg)
+      if (res.success && res.config) {
+        setCfg(normalizeTtsConfig(res.config))
+        setStatus({ ok: true, text: successText })
+      } else {
+        setStatus({ ok: false, text: res.error || '保存失败' })
+      }
+      return res
+    } finally {
+      setSaving(false)
+    }
+  }
+
   const handleProviderChange = (provider: TtsProviderId) => {
-    setCfg((current) => {
-      const synced = syncActiveProviderConfig(current)
-      const nextProviderConfig = normalizeProviderConfig(provider, synced.providers[provider])
-      return normalizeTtsConfig({
-        ...synced,
-        activeProvider: provider,
-        ...nextProviderConfig,
-        providers: {
-          ...synced.providers,
-          [provider]: nextProviderConfig,
-        },
-      })
-    })
+    if (provider === cfg.activeProvider) return
+    const nextCfg = switchActiveProviderConfig(cfg, provider)
+    setCfg(nextCfg)
+    void persistConfig(nextCfg, '已切换并保存语音服务')
   }
 
   const handleTest = async () => {
@@ -281,16 +303,9 @@ export default function TtsTab() {
   }
 
   const handleSave = async () => {
-    setSaving(true)
-    setStatus(null)
     const saveCfg = syncActiveProviderConfig(cfg)
     if (saveCfg !== cfg) setCfg(saveCfg)
-    try {
-      const res = await window.electronAPI.tts.setConfig(saveCfg)
-      setStatus(res.success ? { ok: true, text: '已保存' } : { ok: false, text: res.error || '保存失败' })
-    } finally {
-      setSaving(false)
-    }
+    await persistConfig(saveCfg, '已保存')
   }
 
   const openVolcengineConsole = () => {
@@ -360,7 +375,7 @@ export default function TtsTab() {
               variant="outline"
             >
               <ExternalLink size={16} />
-              获取密钥
+              豆包控制台
             </Button>
           )}
           <Switch
@@ -376,6 +391,7 @@ export default function TtsTab() {
       </Card.Header>
       <Card.Content className="space-y-5">
         <Select
+          isDisabled={saving}
           selectedKey={activeProvider}
           onSelectionChange={(key) => {
             if (key != null) handleProviderChange(String(key) as TtsProviderId)

@@ -56,6 +56,28 @@ export interface TtsSpeakResult {
   errorCode?: 'NOT_CONFIGURED' | 'SYNTHESIS_FAILED'
 }
 
+export interface TtsStreamEvent {
+  streamId: string
+  type: 'start' | 'chunk' | 'complete' | 'end' | 'error'
+  success?: boolean
+  audioBase64?: string
+  mimeType?: string
+  cached?: boolean
+  streamed?: boolean
+  format?: 'pcm16'
+  sampleRate?: number
+  channels?: number
+  error?: string
+  errorCode?: 'NOT_CONFIGURED' | 'SYNTHESIS_FAILED'
+}
+
+export interface TtsStreamResult extends TtsSpeakResult {
+  streamed?: boolean
+  streamFormat?: 'pcm16'
+  sampleRate?: number
+  channels?: number
+}
+
 export interface TtsSpeakOptions {
   config?: Partial<TtsConfig>
   personaVoice?: PersonaTtsVoiceBindingInfo | null
@@ -1247,6 +1269,8 @@ export interface ElectronAPI {
     setConfig: (patch: Partial<TtsConfig>) => Promise<{ success: boolean; config?: TtsConfig; error?: string }>
     test: (cfg: Partial<TtsConfig>) => Promise<TtsSpeakResult>
     speak: (text: string, options?: TtsSpeakOptions) => Promise<TtsSpeakResult>
+    stream?: (streamId: string, text: string, options: TtsSpeakOptions | undefined, callback: (event: TtsStreamEvent) => void) => Promise<TtsStreamResult>
+    cancelStream?: (streamId: string) => Promise<{ success: boolean }>
   }
   imageGen: {
     getConfig: () => Promise<{ success: boolean; config?: ImageGenConfig; available?: boolean; error?: string }>
