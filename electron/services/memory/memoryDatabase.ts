@@ -270,6 +270,11 @@ function formatDate(ms = nowMs()): string {
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`
 }
 
+function normalizeDiarySummaryHour(value: unknown): number {
+  const hour = Math.floor(Number(value))
+  return Number.isFinite(hour) ? Math.max(0, Math.min(23, hour)) : 2
+}
+
 function frontMatterValue(value: unknown): string {
   return JSON.stringify(value ?? null)
 }
@@ -1133,9 +1138,9 @@ export class MemoryDatabase {
     writeFileSync(file, current.endsWith('\n') ? current + block : `${current}\n${block}`, 'utf8')
   }
 
-  getDailyConsolidationTarget(timestamp = nowMs()): string | null {
+  getDailyConsolidationTarget(timestamp = nowMs(), summaryHour = 2): string | null {
     const hour = new Date(timestamp).getHours()
-    if (hour < 2) return null
+    if (hour < normalizeDiarySummaryHour(summaryHour)) return null
     const date = formatDate(timestamp)
     const meta = this.readMeta()
     return meta.lastConsolidatedDate === date ? null : date

@@ -105,6 +105,10 @@ interface ConfigSchema {
   // 窗口关闭行为
   closeToTray: boolean
 
+  // 日记相关
+  diarySummaryHour: number
+  diaryCustomPrompt: string
+
   // 性能相关
   hardwareAccelerationEnabled: boolean
 
@@ -283,6 +287,8 @@ const defaults: ConfigSchema = {
   httpApiToken: '',
   httpApiListenMode: 'localhost',
   closeToTray: true,  // 默认最小化到托盘
+  diarySummaryHour: 2,
+  diaryCustomPrompt: '',
   hardwareAccelerationEnabled: true,
   // AI 默认配置
   aiCurrentProvider: 'deepseek',

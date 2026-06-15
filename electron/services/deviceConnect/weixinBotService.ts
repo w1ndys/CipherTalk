@@ -4,9 +4,10 @@
  * 状态/二维码经 ctx.broadcastToWindows 推给渲染端。
  */
 import { existsSync, readFileSync, writeFileSync, unlinkSync } from 'fs'
+import { createDecipheriv } from 'crypto'
 import { join } from 'path'
 import QRCode from 'qrcode'
-import type { UIMessage, UIMessageChunk } from 'ai'
+import type { FileUIPart, UIMessage, UIMessageChunk } from 'ai'
 import { getUserDataPath } from '../runtimePaths'
 import type { MainProcessContext } from '../../main/context'
 import {
@@ -23,9 +24,9 @@ import {
   sendTyping,
   notifyStart,
   notifyStop,
-  extractText,
   isSessionExpiredError,
   type IlinkSession,
+  type IlinkMessage,
 } from './weixinIlinkClient'
 import { synthesizeWeixinVoice } from './weixinVoiceService'
 import type { PersonaTtsVoiceBinding } from '../agent/persona/personaTypes'
@@ -42,6 +43,9 @@ const PERSONA_PENDING_FLUSH_MAX_MS = 10_000
 const PERSONA_PENDING_AFTER_BUSY_MS = 1_200
 const WECHAT_TEXT_BUBBLE_SEPARATOR = '---wx-next---'
 const WECHAT_REPLY_FALLBACK_TEXT = '不好意思，我有点嘎了，等一会儿哈！'
+const WECHAT_INCOMING_MAX_FILES = 6
+const WECHAT_INCOMING_MAX_FILE_BYTES = 8 * 1024 * 1024
+const WECHAT_INCOMING_FETCH_TIMEOUT_MS = 15_000
 
 export type WechatBotStatus = 'disconnected' | 'connecting' | 'connected' | 'error'
 
@@ -75,6 +79,30 @@ type WechatBotMedia = {
   ttsInstructions?: string
   durationMs?: number
   sampleRate?: number
+}
+
+type WechatIncomingAttachment = {
+  kind: 'image' | 'file' | 'video'
+  label: string
+  filename?: string
+  mediaType: string
+  sizeBytes?: number
+  url?: string
+  aesKey?: string
+}
+
+type ParsedWechatIncomingMessage = {
+  textSegments: string[]
+  attachments: WechatIncomingAttachment[]
+}
+
+type PreparedWechatIncomingMessage = {
+  plainText: string
+  agentText: string
+  logText: string
+  fileParts: FileUIPart[]
+  attachmentCount: number
+  attachedFileCount: number
 }
 
 type WechatBotReply = {
@@ -164,6 +192,217 @@ function errorToLogData(error: unknown): Record<string, unknown> {
       : truncateLogText(e.cause, 800)
   }
   return data
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === 'object' ? value as Record<string, unknown> : null
+}
+
+function readString(record: Record<string, unknown> | null | undefined, key: string): string {
+  const value = record?.[key]
+  return typeof value === 'string' ? value.trim() : ''
+}
+
+function readNumber(record: Record<string, unknown> | null | undefined, key: string): number | undefined {
+  const value = record?.[key]
+  const num = typeof value === 'number'
+    ? value
+    : typeof value === 'string'
+      ? Number.parseInt(value, 10)
+      : NaN
+  return Number.isFinite(num) && num > 0 ? num : undefined
+}
+
+function normalizeIncomingMediaUrl(url: string): string {
+  return url.trim().replace(/&amp;/g, '&')
+}
+
+function guessMediaTypeFromFilename(filename: string): string {
+  const lower = filename.toLowerCase()
+  if (lower.endsWith('.jpg') || lower.endsWith('.jpeg')) return 'image/jpeg'
+  if (lower.endsWith('.png')) return 'image/png'
+  if (lower.endsWith('.gif')) return 'image/gif'
+  if (lower.endsWith('.webp')) return 'image/webp'
+  if (lower.endsWith('.pdf')) return 'application/pdf'
+  if (lower.endsWith('.txt')) return 'text/plain'
+  if (lower.endsWith('.md') || lower.endsWith('.markdown')) return 'text/markdown'
+  if (lower.endsWith('.json')) return 'application/json'
+  if (lower.endsWith('.csv')) return 'text/csv'
+  return 'application/octet-stream'
+}
+
+function detectMediaTypeFromBuffer(buffer: Buffer): string | null {
+  if (buffer.length < 4) return null
+  if (buffer[0] === 0xff && buffer[1] === 0xd8) return 'image/jpeg'
+  if (buffer[0] === 0x89 && buffer[1] === 0x50 && buffer[2] === 0x4e && buffer[3] === 0x47) return 'image/png'
+  if (buffer[0] === 0x47 && buffer[1] === 0x49 && buffer[2] === 0x46) return 'image/gif'
+  if (
+    buffer.length >= 12 &&
+    buffer[0] === 0x52 &&
+    buffer[1] === 0x49 &&
+    buffer[2] === 0x46 &&
+    buffer[3] === 0x46 &&
+    buffer[8] === 0x57 &&
+    buffer[9] === 0x45 &&
+    buffer[10] === 0x42 &&
+    buffer[11] === 0x50
+  ) {
+    return 'image/webp'
+  }
+  if (buffer[0] === 0x25 && buffer[1] === 0x50 && buffer[2] === 0x44 && buffer[3] === 0x46) return 'application/pdf'
+  return null
+}
+
+function normalizeMediaType(mediaType: string): string {
+  const normalized = mediaType.split(';')[0]?.trim().toLowerCase() || 'application/octet-stream'
+  return normalized === 'image/jpg' ? 'image/jpeg' : normalized
+}
+
+function isAgentReadableMediaType(mediaType: string): boolean {
+  const normalized = normalizeMediaType(mediaType)
+  return normalized.startsWith('image/') ||
+    normalized.startsWith('text/') ||
+    normalized === 'application/pdf' ||
+    normalized === 'application/json'
+}
+
+function formatIncomingBytes(bytes?: number): string {
+  if (!bytes || bytes <= 0) return ''
+  if (bytes < 1024) return `${bytes}B`
+  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)}KB`
+  return `${(bytes / 1024 / 1024).toFixed(bytes < 10 * 1024 * 1024 ? 1 : 0)}MB`
+}
+
+function normalizeWechatAesKey(value?: string): Buffer | null {
+  const trimmed = String(value || '').trim()
+  if (!trimmed) return null
+  if (/^[0-9a-f]{32}$/i.test(trimmed)) return Buffer.from(trimmed, 'hex')
+  try {
+    const decoded = Buffer.from(trimmed, 'base64')
+    const decodedText = decoded.toString('utf8').trim()
+    if (/^[0-9a-f]{32}$/i.test(decodedText)) return Buffer.from(decodedText, 'hex')
+    if (decoded.length === 16) return decoded
+  } catch {
+    return null
+  }
+  return null
+}
+
+function decryptWechatCdnBuffer(buffer: Buffer, aesKey?: string): Buffer | null {
+  const key = normalizeWechatAesKey(aesKey)
+  if (!key) return null
+  try {
+    const decipher = createDecipheriv('aes-128-ecb', key, null)
+    return Buffer.concat([decipher.update(buffer), decipher.final()])
+  } catch {
+    return null
+  }
+}
+
+function looksMostlyText(buffer: Buffer): boolean {
+  if (buffer.length === 0) return false
+  const sample = buffer.subarray(0, Math.min(buffer.length, 4096))
+  let control = 0
+  for (const byte of sample) {
+    if (byte === 0) return false
+    if (byte < 0x09 || (byte > 0x0d && byte < 0x20)) control += 1
+  }
+  return control / sample.length < 0.02
+}
+
+function decodeIncomingMediaBuffer(buffer: Buffer, attachment: WechatIncomingAttachment): Buffer {
+  if (!attachment.aesKey) return buffer
+  if (detectMediaTypeFromBuffer(buffer)) return buffer
+  const decrypted = decryptWechatCdnBuffer(buffer, attachment.aesKey)
+  if (!decrypted) return buffer
+  const decryptedMediaType = detectMediaTypeFromBuffer(decrypted)
+  if (decryptedMediaType) return decrypted
+  if ((attachment.mediaType.startsWith('text/') || attachment.mediaType === 'application/json') && looksMostlyText(decrypted)) {
+    return decrypted
+  }
+  if (attachment.kind === 'image') return decrypted
+  return buffer
+}
+
+function buildIncomingDataUrl(buffer: Buffer, mediaType: string): string {
+  return `data:${mediaType};base64,${buffer.toString('base64')}`
+}
+
+function attachmentLine(attachment: WechatIncomingAttachment, status: string): string {
+  const name = attachment.filename ? `：${attachment.filename}` : ''
+  const size = formatIncomingBytes(attachment.sizeBytes)
+  const sizeText = size ? `，${size}` : ''
+  return `[微信${attachment.label}${name}${sizeText}，${status}]`
+}
+
+function parseWechatIncomingMessage(msg: IlinkMessage): ParsedWechatIncomingMessage {
+  const textSegments: string[] = []
+  const attachments: WechatIncomingAttachment[] = []
+
+  for (const [index, rawItem] of (msg.item_list ?? []).entries()) {
+    const item = asRecord(rawItem)
+    const type = readNumber(item, 'type')
+
+    if (type === 1) {
+      const text = readString(asRecord(item?.text_item), 'text')
+      if (text) textSegments.push(text)
+      continue
+    }
+
+    if (type === 3) {
+      const voice = asRecord(item?.voice_item)
+      const transcript = readString(voice, 'text')
+      textSegments.push(transcript ? `[语音] ${transcript}` : '[语音]')
+      continue
+    }
+
+    if (type === 2) {
+      const image = asRecord(item?.image_item)
+      const media = asRecord(image?.media)
+      attachments.push({
+        kind: 'image',
+        label: '图片',
+        filename: `wechat-image-${index + 1}.jpg`,
+        mediaType: 'image/jpeg',
+        sizeBytes: readNumber(image, 'hd_size') || readNumber(image, 'mid_size') || readNumber(image, 'thumb_size'),
+        url: normalizeIncomingMediaUrl(readString(media, 'full_url')),
+        aesKey: readString(image, 'aeskey') || readString(image, 'aes_key') || readString(media, 'aes_key'),
+      })
+      continue
+    }
+
+    if (type === 4) {
+      const file = asRecord(item?.file_item)
+      const media = asRecord(file?.media)
+      const filename = readString(file, 'file_name') || `wechat-file-${index + 1}`
+      attachments.push({
+        kind: 'file',
+        label: '文件',
+        filename,
+        mediaType: guessMediaTypeFromFilename(filename),
+        sizeBytes: readNumber(file, 'len'),
+        url: normalizeIncomingMediaUrl(readString(media, 'full_url')),
+        aesKey: readString(file, 'aeskey') || readString(file, 'aes_key') || readString(media, 'aes_key'),
+      })
+      continue
+    }
+
+    if (type === 5) {
+      const video = asRecord(item?.video_item)
+      const media = asRecord(video?.media)
+      attachments.push({
+        kind: 'video',
+        label: '视频',
+        filename: `wechat-video-${index + 1}.mp4`,
+        mediaType: 'video/mp4',
+        sizeBytes: readNumber(video, 'video_size'),
+        url: normalizeIncomingMediaUrl(readString(media, 'full_url')),
+        aesKey: readString(video, 'aeskey') || readString(video, 'aes_key') || readString(media, 'aes_key'),
+      })
+    }
+  }
+
+  return { textSegments, attachments }
 }
 
 function rememberToolNameFromChunk(chunk: UIMessageChunk, toolNames: Map<string, string>): void {
@@ -568,6 +807,120 @@ class WeixinBotService {
     }
   }
 
+  private async prepareIncomingMessage(msg: IlinkMessage): Promise<PreparedWechatIncomingMessage> {
+    const parsed = parseWechatIncomingMessage(msg)
+    const fileParts: FileUIPart[] = []
+    const attachmentLines: string[] = []
+
+    for (const attachment of parsed.attachments) {
+      if (fileParts.length >= WECHAT_INCOMING_MAX_FILES) {
+        attachmentLines.push(attachmentLine(attachment, `未传给模型：附件数量超过 ${WECHAT_INCOMING_MAX_FILES} 个`))
+        continue
+      }
+      if (attachment.kind === 'video') {
+        attachmentLines.push(attachmentLine(attachment, '未传给模型：暂不支持视频输入'))
+        continue
+      }
+      if (!attachment.url) {
+        attachmentLines.push(attachmentLine(attachment, '未传给模型：微信未返回下载地址'))
+        continue
+      }
+      if (attachment.sizeBytes && attachment.sizeBytes > WECHAT_INCOMING_MAX_FILE_BYTES) {
+        attachmentLines.push(attachmentLine(attachment, `未传给模型：超过 ${formatIncomingBytes(WECHAT_INCOMING_MAX_FILE_BYTES)}`))
+        continue
+      }
+      if (!isAgentReadableMediaType(attachment.mediaType)) {
+        attachmentLines.push(attachmentLine(attachment, `未传给模型：不支持 ${attachment.mediaType}`))
+        continue
+      }
+
+      try {
+        fileParts.push(await this.downloadIncomingAttachmentAsFilePart(attachment))
+        attachmentLines.push(attachmentLine(attachment, '已随消息上传给模型'))
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error)
+        attachmentLines.push(attachmentLine(attachment, `未传给模型：${message}`))
+        this.logger?.warn('WechatBot', '微信入站附件准备失败', {
+          kind: attachment.kind,
+          filename: attachment.filename,
+          sizeBytes: attachment.sizeBytes,
+          mediaType: attachment.mediaType,
+          error: message,
+        })
+      }
+    }
+
+    const plainText = parsed.textSegments.join('\n').trim()
+    const agentText = [...parsed.textSegments, ...attachmentLines].join('\n').trim()
+    const logText = agentText || (parsed.attachments.length > 0 ? parsed.attachments.map((item) => `[${item.label}]`).join(' ') : '')
+    return {
+      plainText,
+      agentText,
+      logText,
+      fileParts,
+      attachmentCount: parsed.attachments.length,
+      attachedFileCount: fileParts.length,
+    }
+  }
+
+  private async downloadIncomingAttachmentAsFilePart(attachment: WechatIncomingAttachment): Promise<FileUIPart> {
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), WECHAT_INCOMING_FETCH_TIMEOUT_MS)
+    try {
+      const response = await fetch(attachment.url || '', {
+        headers: {
+          Accept: '*/*',
+          'User-Agent': 'Mozilla/5.0 MicroMessenger CipherTalk',
+        },
+        signal: controller.signal,
+      })
+      if (!response.ok) {
+        throw new Error(`下载失败 HTTP ${response.status}`)
+      }
+      const contentLength = readNumber({ value: response.headers.get('content-length') || '' }, 'value')
+      if (contentLength && contentLength > WECHAT_INCOMING_MAX_FILE_BYTES) {
+        throw new Error(`超过 ${formatIncomingBytes(WECHAT_INCOMING_MAX_FILE_BYTES)}`)
+      }
+      const rawBuffer = Buffer.from(await response.arrayBuffer())
+      if (rawBuffer.length === 0) throw new Error('下载内容为空')
+      if (rawBuffer.length > WECHAT_INCOMING_MAX_FILE_BYTES) {
+        throw new Error(`超过 ${formatIncomingBytes(WECHAT_INCOMING_MAX_FILE_BYTES)}`)
+      }
+
+      const buffer = decodeIncomingMediaBuffer(rawBuffer, attachment)
+      const detectedMediaType = detectMediaTypeFromBuffer(buffer)
+      const headerMediaType = normalizeMediaType(response.headers.get('content-type') || '')
+      const mediaType = normalizeMediaType(detectedMediaType || (headerMediaType !== 'application/octet-stream' ? headerMediaType : attachment.mediaType))
+      const expectedMediaType = normalizeMediaType(attachment.mediaType)
+      if ((expectedMediaType.startsWith('image/') || attachment.kind === 'image') && !detectedMediaType?.startsWith('image/')) {
+        throw new Error('图片解密失败或格式不支持')
+      }
+      if ((expectedMediaType === 'application/pdf' || headerMediaType === 'application/pdf') && detectedMediaType !== 'application/pdf') {
+        throw new Error('PDF 解密失败或格式不支持')
+      }
+      if ((expectedMediaType.startsWith('text/') || expectedMediaType === 'application/json') && !looksMostlyText(buffer)) {
+        throw new Error('文本文件解码失败')
+      }
+      if (!isAgentReadableMediaType(mediaType)) {
+        throw new Error(`不支持 ${mediaType}`)
+      }
+
+      return {
+        type: 'file',
+        mediaType,
+        filename: attachment.filename,
+        url: buildIncomingDataUrl(buffer, mediaType),
+      }
+    } catch (error) {
+      if (error instanceof Error && error.name === 'AbortError') {
+        throw new Error('下载超时')
+      }
+      throw error
+    } finally {
+      clearTimeout(timer)
+    }
+  }
+
   private async runLoop(signal: AbortSignal): Promise<void> {
     let buf = ''
     const initialSession = this.session
@@ -610,12 +963,12 @@ class WeixinBotService {
             continue // 只处理用户发来的
           }
           const from = msg.from_user_id || ''
-          const text = extractText(msg)
-          if (!from || !text) {
-            console.log('[WechatBot] 跳过空消息', { from, text })
+          const incoming = await this.prepareIncomingMessage(msg)
+          if (!from || (!incoming.agentText && incoming.fileParts.length === 0)) {
+            console.log('[WechatBot] 跳过空消息', { from, text: incoming.logText })
             continue
           }
-          await this.handleMessage(from, text, msg.context_token)
+          await this.handleMessage(from, incoming, msg.context_token)
         }
       } catch (e) {
         if (signal.aborted) break
@@ -634,13 +987,20 @@ class WeixinBotService {
     }
   }
 
-  private async handleMessage(from: string, text: string, contextToken?: string): Promise<void> {
+  private async handleMessage(from: string, incoming: PreparedWechatIncomingMessage, contextToken?: string): Promise<void> {
     if (!this.session) return
-    this.logger?.warn('WechatBot', '收到微信消息', { from, textLength: text.length })
-    console.log(`[WechatBot] 收到消息 from=${from} text="${text}" 开始调用 Agent...`)
+    const text = incoming.agentText
+    const commandText = incoming.plainText || text
+    this.logger?.warn('WechatBot', '收到微信消息', {
+      from,
+      textLength: text.length,
+      attachmentCount: incoming.attachmentCount,
+      attachedFileCount: incoming.attachedFileCount,
+    })
+    console.log(`[WechatBot] 收到消息 from=${from} text="${incoming.logText}" attachments=${incoming.attachmentCount} files=${incoming.attachedFileCount} 开始调用 Agent...`)
     let typing: TypingIndicator | null = null
     try {
-      if (await this.handleWechatCommand(from, text, contextToken)) return
+      if (await this.handleWechatCommand(from, commandText, contextToken)) return
       const personaMode = this.getConversationMode(from)
       if (personaMode?.mode === 'persona') {
         await this.handlePersonaModeMessage(from, text, personaMode, contextToken)
@@ -654,12 +1014,15 @@ class WeixinBotService {
         externalId: from,
         title: `微信 · ${text.slice(0, 16)}`,
       })
-      const userMsg: UIMessage = { id: `wx-u-${Date.now()}`, role: 'user', parts: [{ type: 'text', text }] }
+      const parts: UIMessage['parts'] = []
+      if (text) parts.push({ type: 'text', text })
+      parts.push(...incoming.fileParts)
+      const userMsg: UIMessage = { id: `wx-u-${Date.now()}`, role: 'user', parts }
       agentConversationStore.append(conv.id, [userMsg])
 
       const history = agentConversationStore.load(conv.id)?.messages ?? [userMsg]
       typing = await this.startTypingIndicator(from, contextToken)
-      const forceVoice = wantsVoiceReply(text)
+      const forceVoice = wantsVoiceReply(commandText)
       console.log(`[WechatBot] 开始调用普通 Agent history=${history.length} forceVoice=${forceVoice}`)
       const rawReply = await this.runAgent(history)
       console.log(`[WechatBot] 普通 Agent 原始回复 textLength=${rawReply.text.length} bubbles=${rawReply.textBubbles?.length || 0} media=${rawReply.media.length}`)
@@ -692,11 +1055,13 @@ class WeixinBotService {
       this.logger?.error('WechatBot', '生成或发送回复失败，准备发送兜底回复', {
         from,
         textLength: text.length,
+        attachmentCount: incoming.attachmentCount,
+        attachedFileCount: incoming.attachedFileCount,
         mode: this.getConversationMode(from)?.mode || 'agent',
         fallbackText: WECHAT_REPLY_FALLBACK_TEXT,
         ...errorData,
       })
-      console.error('[WechatBot] 生成或发送回复失败，准备发送兜底回复：', JSON.stringify({ from, textLength: text.length, ...errorData }))
+      console.error('[WechatBot] 生成或发送回复失败，准备发送兜底回复：', JSON.stringify({ from, textLength: text.length, attachmentCount: incoming.attachmentCount, attachedFileCount: incoming.attachedFileCount, ...errorData }))
       console.error('[WechatBot] 原始错误对象：', e)
       try {
         await typing?.stop()

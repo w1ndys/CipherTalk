@@ -45,6 +45,8 @@ export const CONFIG_KEYS = {
   AUTH_PASSWORD_SALT: 'authPasswordSalt',
   CLOSE_TO_TRAY: 'closeToTray',
   HARDWARE_ACCELERATION_ENABLED: 'hardwareAccelerationEnabled',
+  DIARY_SUMMARY_HOUR: 'diarySummaryHour',
+  DIARY_CUSTOM_PROMPT: 'diaryCustomPrompt',
   AI_PROVIDER_MODEL_CACHE: 'aiProviderModelCache',
   AI_ACTIVE_CONFIG_PRESET_ID: 'aiActiveConfigPresetId',
   AGENT_CODE_WORKSPACE_ROOT: 'agentCodeWorkspaceRoot'
@@ -479,6 +481,38 @@ export async function getAuthPasswordSalt(): Promise<string | null> {
 // 设置密码盐值
 export async function setAuthPasswordSalt(salt: string | null): Promise<void> {
   await config.set(CONFIG_KEYS.AUTH_PASSWORD_SALT, salt)
+}
+
+// --- 日记配置 ---
+
+export const DEFAULT_DIARY_SUMMARY_HOUR = 2
+export const MAX_DIARY_CUSTOM_PROMPT_LENGTH = 4000
+
+export function normalizeDiarySummaryHour(hour: unknown): number {
+  const numberValue = Math.floor(Number(hour))
+  return Number.isFinite(numberValue) ? Math.max(0, Math.min(23, numberValue)) : DEFAULT_DIARY_SUMMARY_HOUR
+}
+
+export function normalizeDiaryCustomPrompt(prompt: unknown): string {
+  return String(prompt || '').trim().slice(0, MAX_DIARY_CUSTOM_PROMPT_LENGTH)
+}
+
+export async function getDiarySummaryHour(): Promise<number> {
+  const value = await config.get(CONFIG_KEYS.DIARY_SUMMARY_HOUR)
+  return normalizeDiarySummaryHour(value)
+}
+
+export async function setDiarySummaryHour(hour: number): Promise<void> {
+  await config.set(CONFIG_KEYS.DIARY_SUMMARY_HOUR, normalizeDiarySummaryHour(hour))
+}
+
+export async function getDiaryCustomPrompt(): Promise<string> {
+  const value = await config.get(CONFIG_KEYS.DIARY_CUSTOM_PROMPT)
+  return normalizeDiaryCustomPrompt(value)
+}
+
+export async function setDiaryCustomPrompt(prompt: string): Promise<void> {
+  await config.set(CONFIG_KEYS.DIARY_CUSTOM_PROMPT, normalizeDiaryCustomPrompt(prompt))
 }
 
 // --- AI 接入配置 ---

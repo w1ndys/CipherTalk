@@ -106,6 +106,8 @@ class NightlyMemoryService {
     if (!String(config.get('myWxid') || '').trim()) return
     const provider = config.getAICurrentProvider()
     if (!String(config.getAIProviderConfig(provider)?.apiKey || '').trim()) return
+    const summaryHour = Number(config.get('diarySummaryHour') ?? 2)
+    const customPrompt = String(config.get('diaryCustomPrompt') || '').trim()
     this.running = true
     try {
       const [{ resolveProviderConfig }, { maybeRunDailyConsolidation }] = await Promise.all([
@@ -113,7 +115,7 @@ class NightlyMemoryService {
         import('../agent/tools/memory')
       ])
       const unreadMessages = await readUnreadDiarySource().catch(() => '')
-      await maybeRunDailyConsolidation(resolveProviderConfig(), undefined, { unreadMessages })
+      await maybeRunDailyConsolidation(resolveProviderConfig(), undefined, { unreadMessages, summaryHour, customPrompt })
       this.ctx?.getLogService()?.info('NightlyMemory', '夜间记忆整理检查完成')
     } catch (error) {
       this.ctx?.getLogService()?.warn('NightlyMemory', '夜间记忆整理跳过', { error: error instanceof Error ? error.message : String(error) })

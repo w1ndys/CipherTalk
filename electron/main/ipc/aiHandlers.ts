@@ -960,8 +960,9 @@ export function registerAiHandlers(ctx: MainProcessContext): void {
         import('../../services/agent/tools/memory'),
         import('../../services/memory/nightlyMemoryService')
       ])
+      const customPrompt = String(ctx.getConfigService()?.get('diaryCustomPrompt' as any) || '').trim()
       const unreadMessages = await readUnreadDiarySource().catch(() => '')
-      await runDailyDiaryConsolidation(date, resolveProviderConfig(), undefined, { unreadMessages })
+      await runDailyDiaryConsolidation(date, resolveProviderConfig(), undefined, { unreadMessages, customPrompt })
       const diary = memoryDatabase.readDiary(date)
       return diary ? { success: true, alreadyExists: false, diary } : { success: false, error: '日记生成后未找到文件' }
     } catch (e) {

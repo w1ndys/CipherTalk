@@ -1,12 +1,27 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Button, Card, Label, ListBox, Modal, Popover, ScrollShadow, Spinner, Toolbar } from '@heroui/react'
-import { BookOpen, Check, Copy, Download, PenLine, RefreshCw, Trash2, Type } from 'lucide-react'
+import { Button, Card, Description, InputGroup, Label, ListBox, Modal, NumberField, Popover, ScrollShadow, Spinner, TextField, Toolbar } from '@heroui/react'
+import { BookOpen, Check, Clock3, Copy, Download, PenLine, RefreshCw, RotateCcw, Save, Settings, Trash2, Type } from 'lucide-react'
 import { marked } from 'marked'
 import DOMPurify from 'dompurify'
 import type { MemoryDiaryEntryInfo } from '../types/electron'
+import {
+  DEFAULT_DIARY_SUMMARY_HOUR,
+  MAX_DIARY_CUSTOM_PROMPT_LENGTH,
+  getDiaryCustomPrompt,
+  getDiarySummaryHour,
+  normalizeDiaryCustomPrompt,
+  normalizeDiarySummaryHour,
+  setDiaryCustomPrompt,
+  setDiarySummaryHour,
+} from '../services/config'
 
 type DiaryFontMode = 'hand' | 'song' | 'native'
 type DiaryExportMemoryMode = 'with-memory' | 'without-memory'
+
+type DiarySettingsDraft = {
+  summaryHour: number
+  customPrompt: string
+}
 
 function formatDiaryDate(date: string): string {
   const [year, month, day] = date.split('-')
@@ -260,7 +275,34 @@ export default function DiaryPage() {
   const [downloadingDiary, setDownloadingDiary] = useState(false)
   const [deletePopoverDate, setDeletePopoverDate] = useState('')
   const [deletingDiary, setDeletingDiary] = useState(false)
+  const [settingsOpen, setSettingsOpen] = useState(false)
+  const [settingsLoading, setSettingsLoading] = useState(false)
+  const [settingsSaving, setSettingsSaving] = useState(false)
+  const [settingsDraft, setSettingsDraft] = useState<DiarySettingsDraft>({
+    summaryHour: DEFAULT_DIARY_SUMMARY_HOUR,
+    customPrompt: '',
+  })
+  const [settingsError, setSettingsError] = useState('')
   const diaryExportRef = useRef<HTMLDivElement | null>(null)
+
+  const loadDiarySettings = useCallback(async () => {
+    setSettingsLoading(true)
+    setSettingsError('')
+    try {
+      const [summaryHour, customPrompt] = await Promise.all([
+        getDiarySummaryHour(),
+        getDiaryCustomPrompt(),
+      ])
+      setSettingsDraft({
+        summaryHour,
+        customPrompt,
+      })
+    } catch (err) {
+      setSettingsError(err instanceof Error ? err.message : '读取日记设置失败')
+    } finally {
+      setSettingsLoading(false)
+    }
+  }, [])
 
   const loadDiary = useCallback(async (date: string) => {
     if (!date) return
@@ -309,6 +351,10 @@ export default function DiaryPage() {
   useEffect(() => {
     void loadDiaries()
   }, [loadDiaries])
+
+  useEffect(() => {
+    if (settingsOpen) void loadDiarySettings()
+  }, [loadDiarySettings, settingsOpen])
 
   useEffect(() => {
     if (!summarizing) return
@@ -412,6 +458,41 @@ export default function DiaryPage() {
     }
   }, [downloadingDiary, selectedDiary])
 
+  const updateSettingsDraft = useCallback((patch: Partial<DiarySettingsDraft>) => {
+    setSettingsDraft((draft) => ({
+      ...draft,
+      ...patch,
+    }))
+  }, [])
+
+  const resetSettingsDraft = useCallback(() => {
+    setSettingsDraft({
+      summaryHour: DEFAULT_DIARY_SUMMARY_HOUR,
+      customPrompt: '',
+    })
+    setSettingsError('')
+  }, [])
+
+  const saveDiarySettings = useCallback(async () => {
+    if (settingsSaving) return
+    setSettingsSaving(true)
+    setSettingsError('')
+    try {
+      const summaryHour = normalizeDiarySummaryHour(settingsDraft.summaryHour)
+      const customPrompt = normalizeDiaryCustomPrompt(settingsDraft.customPrompt)
+      await Promise.all([
+        setDiarySummaryHour(summaryHour),
+        setDiaryCustomPrompt(customPrompt),
+      ])
+      setSettingsDraft({ summaryHour, customPrompt })
+      setSettingsOpen(false)
+    } catch (err) {
+      setSettingsError(err instanceof Error ? err.message : '保存日记设置失败')
+    } finally {
+      setSettingsSaving(false)
+    }
+  }, [settingsDraft.customPrompt, settingsDraft.summaryHour, settingsSaving])
+
   return (
     <div className="flex h-full min-h-0 flex-col bg-(--bg-primary)">
       <header className="flex shrink-0 items-center justify-between gap-4 px-7 py-5">
@@ -426,6 +507,9 @@ export default function DiaryPage() {
           <Button isDisabled={summarizing} variant="primary" onPress={() => void summarizeToday()}>
             <PenLine className="size-4" />
             总结日记
+          </Button>
+          <Button isIconOnly aria-label="日记设置" variant="ghost" onPress={() => setSettingsOpen(true)}>
+            <Settings className="size-4" />
           </Button>
           <Button isIconOnly aria-label="刷新日记" variant="ghost" onPress={() => void loadDiaries()}>
             <RefreshCw className="size-4" />
@@ -542,6 +626,104 @@ export default function DiaryPage() {
           </div>
         </ScrollShadow>
       )}
+
+      <Modal.Backdrop isOpen={settingsOpen} onOpenChange={(open) => {
+        if (!settingsSaving) setSettingsOpen(open)
+      }} variant="blur">
+        <Modal.Container placement="center" size="lg">
+          <Modal.Dialog className="bg-transparent p-0 shadow-none">
+            <Card className="w-full gap-0 p-0">
+              <Modal.CloseTrigger />
+              <Card.Header className="flex-row items-start gap-3 border-b border-border p-5">
+                <div className="flex size-10 shrink-0 items-center justify-center rounded-lg bg-accent-soft text-accent-soft-foreground">
+                  <Settings className="size-5" />
+                </div>
+                <div className="min-w-0">
+                  <Card.Title>日记设置</Card.Title>
+                  <Card.Description>调整自动总结时间和日记输出方式。</Card.Description>
+                </div>
+              </Card.Header>
+
+              <Card.Content className="space-y-5 p-5">
+                {settingsLoading ? (
+                  <div className="flex h-48 items-center justify-center">
+                    <Spinner />
+                  </div>
+                ) : (
+                  <>
+                    {settingsError && (
+                      <div className="rounded-lg bg-danger-soft px-3 py-2 text-sm text-danger-soft-foreground">
+                        {settingsError}
+                      </div>
+                    )}
+
+                    <NumberField
+                      aria-label="自动总结时间"
+                      className="w-full"
+                      maxValue={23}
+                      minValue={0}
+                      step={1}
+                      value={settingsDraft.summaryHour}
+                      variant="secondary"
+                      onChange={(value) => updateSettingsDraft({ summaryHour: normalizeDiarySummaryHour(value) })}
+                    >
+                      <Label>自动总结时间</Label>
+                      <NumberField.Group>
+                        <NumberField.DecrementButton />
+                        <NumberField.Input />
+                        <NumberField.IncrementButton />
+                      </NumberField.Group>
+                      <Description className="flex items-center gap-1.5">
+                        <Clock3 className="size-3.5" />
+                        每天 {String(settingsDraft.summaryHour).padStart(2, '0')}:00 后整理当天内容。
+                      </Description>
+                    </NumberField>
+
+                    <TextField
+                      fullWidth
+                      value={settingsDraft.customPrompt}
+                      onChange={(value) => updateSettingsDraft({ customPrompt: normalizeDiaryCustomPrompt(value) })}
+                    >
+                      <Label>用户提示词</Label>
+                      <InputGroup fullWidth variant="secondary">
+                        <InputGroup.TextArea
+                          placeholder="例如：请写成工作日报，包含今日进展、风险、明日计划，语言简洁。"
+                          rows={8}
+                        />
+                      </InputGroup>
+                      <Description>
+                        留空使用默认日记规则；记忆线索会继续作为内部索引保留。{settingsDraft.customPrompt.length}/{MAX_DIARY_CUSTOM_PROMPT_LENGTH}
+                      </Description>
+                    </TextField>
+                  </>
+                )}
+              </Card.Content>
+
+              <Card.Footer className="flex justify-end gap-2 border-t border-border p-5">
+                <Button
+                  isDisabled={settingsLoading || settingsSaving}
+                  type="button"
+                  variant="tertiary"
+                  onPress={resetSettingsDraft}
+                >
+                  <RotateCcw className="size-4" />
+                  恢复默认
+                </Button>
+                <Button
+                  isDisabled={settingsLoading}
+                  isPending={settingsSaving}
+                  type="button"
+                  variant="primary"
+                  onPress={() => void saveDiarySettings()}
+                >
+                  <Save className="size-4" />
+                  保存
+                </Button>
+              </Card.Footer>
+            </Card>
+          </Modal.Dialog>
+        </Modal.Container>
+      </Modal.Backdrop>
 
       <Modal.Backdrop isOpen={readerOpen} onOpenChange={setReaderOpen} variant="blur">
         <Modal.Container className="py-10" size="cover" placement="center" scroll="inside">

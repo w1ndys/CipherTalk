@@ -130,14 +130,19 @@ interface IlinkCdnMedia {
   encrypt_query_param?: string
   aes_key?: string
   encrypt_type?: number
+  full_url?: string
 }
 
 interface IlinkImageItem {
+  aeskey?: string
   media?: IlinkCdnMedia
   mid_size?: number
+  thumb_size?: number
+  hd_size?: number
 }
 
 interface IlinkVoiceItem {
+  aeskey?: string
   media?: IlinkCdnMedia
   encode_type?: number
   bits_per_sample?: number
@@ -147,12 +152,14 @@ interface IlinkVoiceItem {
 }
 
 interface IlinkFileItem {
+  aeskey?: string
   media?: IlinkCdnMedia
   file_name?: string
   len?: string
 }
 
 interface IlinkVideoItem {
+  aeskey?: string
   media?: IlinkCdnMedia
   video_size?: number
   play_length?: number
