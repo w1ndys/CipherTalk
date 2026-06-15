@@ -4,17 +4,23 @@
   left: 0;
   right: 0;
   bottom: 0;
-  z-index: 9999;
+  z-index: 2147483647;
   /* Highest priority */
   background: var(--bg-primary);
   /* Adapt to theme */
   display: flex;
   align-items: center;
   justify-content: center;
+  pointer-events: auto;
+  -webkit-app-region: no-drag;
   backdrop-filter: blur(20px);
   -webkit-backdrop-filter: blur(20px);
 
   /* Fallback for transparency if needed, though usually opaque */
+}
+
+.lock-screen-overlay * {
+  -webkit-app-region: no-drag;
 }
 
 [data-theme='dark'] .lock-screen-overlay {

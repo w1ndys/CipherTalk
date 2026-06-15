@@ -694,6 +694,7 @@ function App() {
   const edgeToEdgeRoutes: string[] = []
   const isEdgeToEdge = edgeToEdgeRoutes.includes(location.pathname)
   const isAgentPage = location.pathname === '/agent'
+  const pendingMemoryMigrationStatus = !isLocked && memoryMigrationStatus?.needed ? memoryMigrationStatus : null
 
   return (
     <div className={`app-container${navLayout === 'sidebar' ? ' app-container--sidebar' : ''}`}>
@@ -701,7 +702,7 @@ function App() {
       {navLayout === 'sidebar' && <Sidebar autoCollapse={isAgentPage} />}
       <div className="app-shell">
       <TitleBar showTitle={false} />
-      {memoryMigrationStatus?.needed && (
+      {pendingMemoryMigrationStatus && (
         <Modal.Backdrop
           isDismissable={!memoryMigrating}
           isKeyboardDismissDisabled={memoryMigrating}
@@ -724,11 +725,11 @@ function App() {
               </Modal.Header>
               <Modal.Body>
                 <Typography.Paragraph color="muted" size="sm">
-                  检测到旧版记忆库里有 {memoryMigrationStatus.itemCount} 条记忆。新版会迁移到缓存目录下的 memory-bank Markdown 文件夹，迁移完成后会尝试删除旧版记忆数据库文件。
+                  检测到旧版记忆库里有 {pendingMemoryMigrationStatus.itemCount} 条记忆。新版会迁移到缓存目录下的 memory-bank Markdown 文件夹，迁移完成后会尝试删除旧版记忆数据库文件。
                 </Typography.Paragraph>
                 <div className="grid gap-2 rounded-lg bg-surface p-3 text-xs text-muted">
-                  <div className="break-all">旧库：{memoryMigrationStatus.legacyDbPath}</div>
-                  <div className="break-all">新目录：{memoryMigrationStatus.memoryBankPath}</div>
+                  <div className="break-all">旧库：{pendingMemoryMigrationStatus.legacyDbPath}</div>
+                  <div className="break-all">新目录：{pendingMemoryMigrationStatus.memoryBankPath}</div>
                 </div>
                 {memoryMigrationError && (
                   <Typography.Paragraph className="rounded-lg bg-danger-soft p-3 text-danger-soft-foreground" size="sm">

@@ -430,7 +430,38 @@ export class MemoryDatabase {
       ''
     ].join('\n'))
     this.rootPath = root
+    this.pruneLegacyIndexFilesOnce()
     return root
+  }
+
+  /**
+   * 一次性清理旧版被写坏的「逐条消息索引」文件：早期破损的迁移会把 message/conversation_block/
+   * timeline_summary/media 也全量落成 .md，几万个文件会让之后每次 listMemoryItems readdir+解析卡死。
+   * 按文件名（id-sourceType-uid.md）廉价判定，不解析文件内容；用 meta 标记保证只跑一次。
+   */
+  private pruneLegacyIndexFilesOnce(): void {
+    const meta = this.readMeta()
+    if (meta.prunedLegacyIndexFiles === 'true') return
+    const removed = this.pruneNonMigratableItemFiles()
+    this.writeMeta({ prunedLegacyIndexFiles: true, ...(removed > 0 ? { prunedLegacyIndexCount: removed } : {}) })
+  }
+
+  private pruneNonMigratableItemFiles(): number {
+    const allowed = new Set<string>(MIGRATABLE_SOURCE_TYPES)
+    const itemsDir = join(this.getMemoryBankPath(), ITEMS_DIR)
+    let removed = 0
+    for (const name of readdirSync(itemsDir)) {
+      if (!name.endsWith('.md')) continue
+      const sourceType = /^\d+-([^-]+)-/.exec(name)?.[1]
+      if (!sourceType || allowed.has(sourceType)) continue
+      try {
+        unlinkSync(join(itemsDir, name))
+        removed += 1
+      } catch {
+        // 单个文件删除失败不阻塞初始化
+      }
+    }
+    return removed
   }
 
   private migrateLegacySelfReferenceDir(root: string): void {
