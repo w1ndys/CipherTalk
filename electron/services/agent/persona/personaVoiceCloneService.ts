@@ -1,6 +1,6 @@
 /**
  * 数字分身声音复刻：从好友历史语音取样，按当前 TTS 服务商绑定专属音色。
- * 豆包会创建远端 speaker；小米 MiMo 按官方 voiceclone 方式保存本地样本，合成时作为 audio.voice Data URL 传入。
+ * 豆包会创建远端 speaker；小米MiMo 按官方 voiceclone 方式保存本地样本，合成时作为 audio.voice Data URL 传入。
  */
 import { createHash, randomUUID } from 'crypto'
 import { mkdirSync, writeFileSync } from 'fs'
@@ -9,6 +9,12 @@ import { chatService } from '../../chatService'
 import { createProxyFetch, getResolvedProxyUrl } from '../../ai/proxyFetch'
 import { getTtsConfig, type TtsConfig } from '../../ai/ttsService'
 import { ConfigService } from '../../config'
+import {
+  ALIYUN_QWEN_DEFAULT_REALTIME_ENDPOINT,
+  ALIYUN_QWEN_VOICE_CLONE_MODEL,
+  ALIYUN_QWEN_VOICE_CLONE_TARGET_MODEL,
+  resolveAliyunQwenCustomizationEndpoint,
+} from '../../ai/aliyunQwenTtsProtocol'
 import { VOLCENGINE_DEFAULT_TTS_ENDPOINT } from '../../ai/volcengineTtsProtocol'
 import type { PersonaRecord, PersonaTtsVoiceBinding } from './personaTypes'
 import { personaStore } from './personaStore'
@@ -26,7 +32,7 @@ export interface PersonaVoiceCloneInput {
 }
 
 export type PersonaVoiceCloneResult =
-  | { success: true; persona: PersonaRecord; voice: PersonaTtsVoiceBinding }
+  | { success: true; persona: PersonaRecord; voice: PersonaTtsVoiceBinding; warning?: string }
   | { success: false; error: string }
 
 export interface PersonaVoiceSampleExportInput {
@@ -67,12 +73,27 @@ interface CloneResult {
   status: CloneStatus
 }
 
+interface AliyunQwenCloneResult {
+  voice: string
+  targetModel: string
+  fallbackMode: boolean
+  fallbackReason?: string
+}
+
 interface VolcengineVoiceCloneLogContext {
   logger?: PersonaVoiceCloneLogger | null
   operation: 'clone' | 'status'
   sessionId?: string
   displayName?: string
   speakerId?: string
+  sample?: Pick<VoiceSample, 'audioBytes' | 'sampleCount' | 'sampleSeconds'>
+}
+
+interface AliyunQwenVoiceCloneLogContext {
+  logger?: PersonaVoiceCloneLogger | null
+  sessionId?: string
+  displayName?: string
+  preferredName?: string
   sample?: Pick<VoiceSample, 'audioBytes' | 'sampleCount' | 'sampleSeconds'>
 }
 
@@ -87,13 +108,14 @@ const XIAOMI_MIMO_VOICE_CLONE_MODEL = 'mimo-v2.5-tts-voiceclone'
 const XIAOMI_MIMO_VOICE_SAMPLE_DIR = 'persona-voices'
 const XIAOMI_MIMO_VOICE_SAMPLE_MIME = 'audio/wav'
 const XIAOMI_MIMO_MAX_SAMPLE_BASE64_BYTES = 10 * 1024 * 1024
+const ALIYUN_QWEN_VOICE_SAMPLE_MIME = 'audio/wav'
 const VOICE_CLONE_MIN_SECONDS = 8
 const VOICE_CLONE_TARGET_SECONDS = 18
 const VOICE_CLONE_MAX_MESSAGES = 30
 const VOICE_CLONE_POLL_INTERVAL_MS = 2_000
 const VOICE_CLONE_TIMEOUT_MS = 180_000
 
-type VoiceCloneProvider = 'xiaomi' | 'volcengine'
+type VoiceCloneProvider = 'xiaomi' | 'volcengine' | 'aliyun-qwen'
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))
@@ -108,6 +130,12 @@ function makeCustomSpeakerId(sessionId: string): string {
 function makeXiaomiVoiceId(sessionId: string, sampleHash: string): string {
   const sessionDigest = createHash('sha1').update(sessionId).digest('hex').slice(0, 12)
   return `mimo_clone_${sessionDigest}_${sampleHash.slice(0, 10)}`
+}
+
+function makeAliyunQwenVoiceName(sessionId: string): string {
+  const digest = createHash('sha1').update(sessionId).digest('hex').slice(0, 8)
+  const nonce = Date.now().toString(36).slice(-5)
+  return `ct_${digest}_${nonce}`.replace(/[^a-zA-Z0-9_]/g, '').slice(0, 16)
 }
 
 function getPersonaVoiceSampleDir(): string {
@@ -140,14 +168,19 @@ function persistXiaomiVoiceSample(sessionId: string, sample: VoiceSample): {
 }
 
 function pickVoiceCloneProvider(cfg: TtsConfig): VoiceCloneProvider | null {
-  const active = cfg.activeProvider === 'volcengine' ? 'volcengine' : 'xiaomi'
-  return active
+  if (cfg.activeProvider === 'volcengine') return 'volcengine'
+  if (cfg.activeProvider === 'aliyun-qwen') return 'aliyun-qwen'
+  return 'xiaomi'
 }
 
 function getMissingProviderKeyMessage(provider: VoiceCloneProvider): string {
-  return provider === 'xiaomi'
-    ? '当前 TTS 服务商是小米，但未配置小米 MiMo API Key，请先在 TTS 设置里填写并保存'
-    : '当前 TTS 服务商是豆包，但未配置火山引擎/豆包 API Key，请先在 TTS 设置里填写并保存'
+  if (provider === 'xiaomi') {
+    return '当前 TTS 服务商是小米MiMo，但未配置 API Key，请先在 TTS 设置里填写并保存'
+  }
+  if (provider === 'aliyun-qwen') {
+    return '当前 TTS 服务商是通义千问，但未配置通义千问 API Key，请先在 TTS 设置里填写并保存'
+  }
+  return '当前 TTS 服务商是豆包，但未配置火山引擎/豆包 API Key，请先在 TTS 设置里填写并保存'
 }
 
 function parseWav(base64: string): ParsedWav {
@@ -333,6 +366,24 @@ function sanitizeVolcengineRequestBody(body: Record<string, unknown>): Record<st
   }
 }
 
+function sanitizeAliyunQwenRequestBody(body: Record<string, unknown>): Record<string, unknown> {
+  const input = body.input && typeof body.input === 'object' ? body.input as Record<string, unknown> : null
+  const audio = input?.audio && typeof input.audio === 'object' ? input.audio as Record<string, unknown> : null
+  return {
+    ...body,
+    input: input
+      ? {
+        ...input,
+        audio: audio
+          ? {
+            dataBase64Chars: typeof audio.data === 'string' ? audio.data.length : 0,
+          }
+          : undefined,
+      }
+      : undefined,
+  }
+}
+
 function logInfo(logger: PersonaVoiceCloneLogger | null | undefined, message: string, data?: unknown): void {
   if (logger?.info) logger.info('PersonaVoice', message, data)
   else logger?.warn?.('PersonaVoice', message, data)
@@ -355,6 +406,14 @@ function formatVolcengineHttpError(status: number, statusText: string, payload: 
   }
   if (logId) hints.push(`X-Tt-Logid: ${logId}`)
   return [`豆包声音复刻 HTTP ${status}: ${detail}`, ...hints].join(' · ')
+}
+
+function formatAliyunQwenHttpError(status: number, statusText: string, payload: unknown): string {
+  const detail = formatApiError(payload) || statusText
+  const hints: string[] = []
+  if (status === 401 || status === 403) hints.push('请确认 DashScope/百炼 API Key 有效，且账号已开通声音复刻能力')
+  if (status === 429) hints.push('通义声音复刻触发限流或额度不足，请稍后重试或检查百炼额度')
+  return [`通义声音复刻 HTTP ${status}: ${detail}`, ...hints].join(' · ')
 }
 
 async function postVolcengineJson(
@@ -421,6 +480,58 @@ async function postVolcengineJson(
     })
     throw error
   }
+  return payload
+}
+
+async function postAliyunQwenJson(
+  url: string,
+  apiKey: string,
+  body: Record<string, unknown>,
+  logContext: AliyunQwenVoiceCloneLogContext,
+): Promise<any> {
+  const fetchImpl = createProxyFetch(getResolvedProxyUrl()) || fetch
+  const requestId = randomUUID()
+  const requestLog = {
+    sessionId: logContext.sessionId,
+    displayName: logContext.displayName,
+    endpoint: endpointPath(url),
+    requestId,
+    apiKeyLength: String(apiKey || '').length,
+    apiKeyHash: apiKeyFingerprint(apiKey),
+    preferredName: logContext.preferredName,
+    sample: logContext.sample,
+    body: sanitizeAliyunQwenRequestBody(body),
+  }
+  logInfo(logContext.logger, '通义声音复刻请求开始', requestLog)
+
+  const response = await fetchImpl(url, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      Authorization: `Bearer ${apiKey}`,
+    },
+    body: JSON.stringify(body),
+  }) as Response
+  const text = await response.text().catch(() => '')
+  let payload: any = null
+  try {
+    payload = text ? JSON.parse(text) : {}
+  } catch {
+    payload = { message: text }
+  }
+  const responseLog = {
+    ...requestLog,
+    httpStatus: response.status,
+    httpStatusText: response.statusText,
+    ok: response.ok,
+    responseBody: safeJsonPreview(payload),
+    responseText: text && typeof payload?.message === 'string' ? undefined : text.slice(0, 1200),
+  }
+  if (!response.ok) {
+    logContext.logger?.error?.('PersonaVoice', '通义声音复刻 HTTP 请求失败', responseLog)
+    throw new Error(formatAliyunQwenHttpError(response.status, response.statusText, payload))
+  }
+  logInfo(logContext.logger, '通义声音复刻 HTTP 请求完成', responseLog)
   return payload
 }
 
@@ -498,6 +609,50 @@ async function cloneVolcengineVoice(
   throw new Error(lastStatus.message || '豆包声音复刻超时，请稍后重试或到官方控制台查看状态')
 }
 
+async function cloneAliyunQwenVoice(
+  apiKey: string,
+  baseURL: string,
+  preferredName: string,
+  sample: VoiceSample,
+  logContext: Omit<AliyunQwenVoiceCloneLogContext, 'preferredName' | 'sample'>,
+): Promise<AliyunQwenCloneResult> {
+  const endpoint = resolveAliyunQwenCustomizationEndpoint(baseURL)
+  const payload = await postAliyunQwenJson(endpoint, apiKey, {
+    model: ALIYUN_QWEN_VOICE_CLONE_MODEL,
+    input: {
+      action: 'create',
+      target_model: ALIYUN_QWEN_VOICE_CLONE_TARGET_MODEL,
+      preferred_name: preferredName,
+      audio: {
+        data: `data:${ALIYUN_QWEN_VOICE_SAMPLE_MIME};base64,${sample.audioBase64}`,
+      },
+      language: 'zh',
+    },
+  }, {
+    ...logContext,
+    preferredName,
+    sample: {
+      audioBytes: sample.audioBytes,
+      sampleCount: sample.sampleCount,
+      sampleSeconds: sample.sampleSeconds,
+    },
+  })
+
+  const output = payload?.output || payload?.data?.output || payload?.data || {}
+  const voice = String(output.voice || payload?.voice || '').trim()
+  if (!voice) throw new Error(`通义声音复刻返回成功但缺少 output.voice：${safeJsonPreview(payload, 500)}`)
+  const targetModel = String(output.target_model || payload?.target_model || ALIYUN_QWEN_VOICE_CLONE_TARGET_MODEL).trim()
+  const fallbackValue = output.fallback_mode ?? payload?.fallback_mode
+  const fallbackMode = fallbackValue === true || fallbackValue === 1 || fallbackValue === 'true'
+  const fallbackReason = String(output.fallback_reason || payload?.fallback_reason || '').trim() || undefined
+  return {
+    voice,
+    targetModel: targetModel || ALIYUN_QWEN_VOICE_CLONE_TARGET_MODEL,
+    fallbackMode,
+    fallbackReason,
+  }
+}
+
 export async function exportPersonaVoiceSampleFromSession(input: PersonaVoiceSampleExportInput): Promise<PersonaVoiceSampleExportResult> {
   const sessionId = String(input.sessionId || '').trim()
   const outputPath = String(input.outputPath || '').trim()
@@ -550,7 +705,7 @@ export async function clonePersonaVoiceFromSession(input: PersonaVoiceCloneInput
     const cfg = getTtsConfig()
     const provider = pickVoiceCloneProvider(cfg)
     if (!provider) {
-      return { success: false, error: '未配置小米或豆包 TTS API Key，请先在 TTS 设置里填写至少一个服务商密钥' }
+      return { success: false, error: '未配置小米、豆包或通义 TTS API Key，请先在 TTS 设置里填写至少一个服务商密钥' }
     }
     if (!String(cfg.providers[provider]?.apiKey || '').trim()) {
       return { success: false, error: getMissingProviderKeyMessage(provider) }
@@ -579,6 +734,7 @@ export async function clonePersonaVoiceFromSession(input: PersonaVoiceCloneInput
     const now = Date.now()
 
     let voice: PersonaTtsVoiceBinding
+    let warning: string | undefined
     if (provider === 'xiaomi') {
       const xiaomi = cfg.providers.xiaomi
       const storedSample = persistXiaomiVoiceSample(sessionId, sample)
@@ -597,6 +753,41 @@ export async function clonePersonaVoiceFromSession(input: PersonaVoiceCloneInput
         samplePath: storedSample.samplePath,
         sampleHash: storedSample.sampleHash,
         createdAt: current.ttsVoice?.provider === 'xiaomi' ? current.ttsVoice.createdAt : now,
+        updatedAt: now,
+      }
+    } else if (provider === 'aliyun-qwen') {
+      const aliyun = cfg.providers['aliyun-qwen']
+      const cloneContext = {
+        logger,
+        sessionId,
+        displayName,
+      }
+      const preferredName = makeAliyunQwenVoiceName(sessionId)
+      const clone = await cloneAliyunQwenVoice(
+        aliyun.apiKey,
+        aliyun.baseURL || ALIYUN_QWEN_DEFAULT_REALTIME_ENDPOINT,
+        preferredName,
+        sample,
+        cloneContext,
+      )
+      if (clone.fallbackMode) {
+        warning = `通义声音复刻启用了降级模式${clone.fallbackReason ? `：${clone.fallbackReason}` : ''}`
+      }
+      voice = {
+        provider: 'aliyun-qwen',
+        protocol: 'aliyun-qwen-realtime',
+        source: 'aliyun-qwen-voice-clone',
+        baseURL: aliyun.baseURL || ALIYUN_QWEN_DEFAULT_REALTIME_ENDPOINT,
+        model: clone.targetModel || ALIYUN_QWEN_VOICE_CLONE_TARGET_MODEL,
+        voice: clone.voice,
+        displayName,
+        sampleCount: sample.sampleCount,
+        sampleSeconds: sample.sampleSeconds,
+        sampleBytes: sample.audioBytes,
+        sampleMimeType: ALIYUN_QWEN_VOICE_SAMPLE_MIME,
+        fallbackMode: clone.fallbackMode,
+        fallbackReason: clone.fallbackReason,
+        createdAt: current.ttsVoice?.provider === 'aliyun-qwen' ? current.ttsVoice.createdAt : now,
         updatedAt: now,
       }
     } else {
@@ -637,8 +828,10 @@ export async function clonePersonaVoiceFromSession(input: PersonaVoiceCloneInput
       sampleCount: sample.sampleCount,
       sampleSeconds: sample.sampleSeconds,
       modelType: voice.modelType,
+      fallbackMode: voice.fallbackMode,
+      fallbackReason: voice.fallbackReason,
     })
-    return { success: true, persona: updated, voice }
+    return { success: true, persona: updated, voice, warning }
   } catch (e) {
     const message = e instanceof Error ? e.message : String(e)
     logger?.error?.('PersonaVoice', '声音复刻失败', { sessionId, error: message })

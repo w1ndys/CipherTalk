@@ -28,8 +28,8 @@ export interface WebSearchConfig {
   maxResults: number
 }
 
-export type TtsProviderId = 'xiaomi' | 'volcengine'
-export type TtsProtocol = 'xiaomi-mimo-tts' | 'volcengine-bidirectional'
+export type TtsProviderId = 'xiaomi' | 'volcengine' | 'aliyun-qwen'
+export type TtsProtocol = 'xiaomi-mimo-tts' | 'volcengine-bidirectional' | 'aliyun-qwen-realtime'
 
 export interface TtsProviderConfig {
   protocol: TtsProtocol
@@ -225,9 +225,9 @@ export interface PersonaProfileInfo {
 }
 
 export interface PersonaTtsVoiceBindingInfo {
-  provider: 'volcengine' | 'xiaomi'
-  protocol: 'volcengine-bidirectional' | 'xiaomi-mimo-tts'
-  source: 'volcengine-voice-clone' | 'xiaomi-mimo-voice-clone'
+  provider: 'volcengine' | 'xiaomi' | 'aliyun-qwen'
+  protocol: 'volcengine-bidirectional' | 'xiaomi-mimo-tts' | 'aliyun-qwen-realtime'
+  source: 'volcengine-voice-clone' | 'xiaomi-mimo-voice-clone' | 'aliyun-qwen-voice-clone'
   baseURL: string
   model: string
   voice: string
@@ -238,6 +238,8 @@ export interface PersonaTtsVoiceBindingInfo {
   sampleMimeType?: string
   sampleHash?: string
   modelType?: number
+  fallbackMode?: boolean
+  fallbackReason?: string
   createdAt: number
   updatedAt: number
 }
@@ -1222,7 +1224,7 @@ export interface ElectronAPI {
     get: (sessionId: string) => Promise<{ success: boolean; persona?: PersonaRecordInfo | null; error?: string }>
     list: () => Promise<{ success: boolean; personas?: PersonaRecordInfo[]; error?: string }>
     build: (payload: { sessionId: string; displayName?: string }) => Promise<{ success: boolean; persona?: PersonaRecordInfo; error?: string }>
-    cloneVoice: (payload: { sessionId: string; displayName?: string }) => Promise<{ success: boolean; persona?: PersonaRecordInfo; voice?: PersonaTtsVoiceBindingInfo; error?: string }>
+    cloneVoice: (payload: { sessionId: string; displayName?: string }) => Promise<{ success: boolean; persona?: PersonaRecordInfo; voice?: PersonaTtsVoiceBindingInfo; warning?: string; error?: string }>
     exportVoiceSample: (payload: { sessionId: string; displayName?: string; outputPath: string }) => Promise<{ success: boolean; outputPath?: string; sampleCount?: number; sampleSeconds?: number; audioBytes?: number; error?: string }>
     delete: (sessionId: string) => Promise<{ success: boolean; error?: string }>
     refreshIfStale: (sessionId: string) => Promise<{ success: boolean; refreshed?: boolean; persona?: PersonaRecordInfo | null; error?: string }>

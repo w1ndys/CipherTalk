@@ -1,8 +1,9 @@
 /**
  * 文字转语音服务 —— 独立的 TTS 配置（朗读 AI 回复/微信消息/角色语音回复用），与聊天模型分开。
- * 配置存 ConfigService.ttsConfig，仅保留两类服务：
+ * 配置存 ConfigService.ttsConfig，支持三类服务：
  * - xiaomi-mimo-tts：小米 MiMo V2.5 TTS 专用 /chat/completions，按 api-key + audio 参数直连 fetch
  * - volcengine-bidirectional：火山引擎/豆包 V3 WebSocket 双向流式接口，普通合成返回完整音频，播放链路可边收边播
+ * - aliyun-qwen-realtime：通义千问/百炼实时 WebSocket，接收 PCM 分片边播边收，结束后包装 WAV 缓存
  * 每个服务商配置独立保存在 providers 下，切换服务商不会覆盖另一套 key/model/voice。
  * 可在主进程与 AI 子进程复用（ConfigService 在两边都能解析路径）。
  */
@@ -13,10 +14,21 @@ import { join } from 'path'
 import { ConfigService } from '../config'
 import type { PersonaTtsVoiceBinding } from '../agent/persona/personaTypes'
 import { createProxyFetch, getResolvedProxyUrl } from './proxyFetch'
+import {
+  ALIYUN_QWEN_DEFAULT_REALTIME_ENDPOINT,
+  ALIYUN_QWEN_DEFAULT_REALTIME_MODEL,
+  ALIYUN_QWEN_DEFAULT_VOICE,
+  ALIYUN_QWEN_TTS_CHANNELS,
+  ALIYUN_QWEN_TTS_SAMPLE_RATE,
+  ALIYUN_QWEN_VOICE_CLONE_TARGET_MODEL,
+  isAliyunQwenInstructModel,
+  resolveAliyunQwenRealtimeEndpoint,
+  synthesizeViaAliyunQwenRealtime,
+} from './aliyunQwenTtsProtocol'
 import { VOLCENGINE_DEFAULT_TTS_ENDPOINT, synthesizeViaVolcengineBidirectional } from './volcengineTtsProtocol'
 
-export type TtsProviderId = 'xiaomi' | 'volcengine'
-export type TtsProtocol = 'xiaomi-mimo-tts' | 'volcengine-bidirectional'
+export type TtsProviderId = 'xiaomi' | 'volcengine' | 'aliyun-qwen'
+export type TtsProtocol = 'xiaomi-mimo-tts' | 'volcengine-bidirectional' | 'aliyun-qwen-realtime'
 
 export interface TtsProviderConfig {
   protocol: TtsProtocol
@@ -101,6 +113,14 @@ const XIAOMI_MIMO_MODEL_DEFAULT_VOICES: Record<string, string> = {
   'mimo-v2.5-tts-voiceclone': '',
 }
 
+const ALIYUN_QWEN_MODEL_DEFAULT_VOICES: Record<string, string> = {
+  [ALIYUN_QWEN_DEFAULT_REALTIME_MODEL]: ALIYUN_QWEN_DEFAULT_VOICE,
+  'qwen3-tts-flash-realtime': ALIYUN_QWEN_DEFAULT_VOICE,
+  [ALIYUN_QWEN_VOICE_CLONE_TARGET_MODEL]: '',
+}
+
+const ALIYUN_QWEN_SYSTEM_VOICES = new Set(['Cherry', 'Serena', 'Ethan', 'Chelsie'])
+
 const DEFAULT_XIAOMI_TTS_PROVIDER: TtsProviderConfig = {
   protocol: 'xiaomi-mimo-tts',
   apiKey: '',
@@ -121,9 +141,20 @@ const DEFAULT_VOLCENGINE_TTS_PROVIDER: TtsProviderConfig = {
   speed: 1,
 }
 
+const DEFAULT_ALIYUN_QWEN_TTS_PROVIDER: TtsProviderConfig = {
+  protocol: 'aliyun-qwen-realtime',
+  apiKey: '',
+  baseURL: ALIYUN_QWEN_DEFAULT_REALTIME_ENDPOINT,
+  model: ALIYUN_QWEN_DEFAULT_REALTIME_MODEL,
+  voice: ALIYUN_QWEN_DEFAULT_VOICE,
+  instructions: '',
+  speed: 1,
+}
+
 const DEFAULT_TTS_PROVIDERS: Record<TtsProviderId, TtsProviderConfig> = {
   xiaomi: DEFAULT_XIAOMI_TTS_PROVIDER,
   volcengine: DEFAULT_VOLCENGINE_TTS_PROVIDER,
+  'aliyun-qwen': DEFAULT_ALIYUN_QWEN_TTS_PROVIDER,
 }
 
 const DEFAULT_TTS_CONFIG: TtsConfig = {
@@ -133,6 +164,7 @@ const DEFAULT_TTS_CONFIG: TtsConfig = {
   providers: {
     xiaomi: { ...DEFAULT_XIAOMI_TTS_PROVIDER },
     volcengine: { ...DEFAULT_VOLCENGINE_TTS_PROVIDER },
+    'aliyun-qwen': { ...DEFAULT_ALIYUN_QWEN_TTS_PROVIDER },
   },
 }
 
@@ -191,12 +223,42 @@ function normalizeXiaomiMimoTtsConfig(cfg: TtsProviderConfig): TtsProviderConfig
   return { ...cfg, baseURL, model, voice }
 }
 
+function normalizeAliyunQwenTtsConfig(cfg: TtsProviderConfig): TtsProviderConfig {
+  if (cfg.protocol !== 'aliyun-qwen-realtime') return cfg
+
+  let baseURL = String(cfg.baseURL || '').trim() || ALIYUN_QWEN_DEFAULT_REALTIME_ENDPOINT
+  try {
+    const url = new URL(baseURL)
+    if (url.protocol === 'https:') url.protocol = 'wss:'
+    if (url.protocol === 'http:') url.protocol = 'ws:'
+    url.searchParams.delete('model')
+    baseURL = url.toString().replace(/\?$/, '')
+  } catch {
+    baseURL = String(cfg.baseURL || '').trim()
+  }
+  const model = String(cfg.model || '').trim() || ALIYUN_QWEN_DEFAULT_REALTIME_MODEL
+  const defaultVoice = ALIYUN_QWEN_MODEL_DEFAULT_VOICES[model]
+  const rawVoice = String(cfg.voice || '').trim()
+  const voice = model === ALIYUN_QWEN_VOICE_CLONE_TARGET_MODEL && ALIYUN_QWEN_SYSTEM_VOICES.has(rawVoice)
+    ? ''
+    : defaultVoice === undefined
+      ? rawVoice
+      : String(rawVoice || defaultVoice).trim()
+
+  if (baseURL === cfg.baseURL && model === cfg.model && voice === cfg.voice) return cfg
+  return { ...cfg, baseURL, model, voice }
+}
+
 function getProviderIdForProtocol(protocol: unknown): TtsProviderId {
-  return protocol === 'volcengine-bidirectional' ? 'volcengine' : 'xiaomi'
+  if (protocol === 'volcengine-bidirectional') return 'volcengine'
+  if (protocol === 'aliyun-qwen-realtime') return 'aliyun-qwen'
+  return 'xiaomi'
 }
 
 function normalizeProviderId(provider: unknown, fallback: TtsProviderId = 'xiaomi'): TtsProviderId {
-  return provider === 'volcengine' || provider === 'xiaomi' ? provider : fallback
+  return provider === 'volcengine' || provider === 'xiaomi' || provider === 'aliyun-qwen'
+    ? provider
+    : fallback
 }
 
 function normalizeProviderConfig(provider: TtsProviderId, config: Partial<TtsProviderConfig> = {}): TtsProviderConfig {
@@ -212,9 +274,9 @@ function normalizeProviderConfig(provider: TtsProviderId, config: Partial<TtsPro
     instructions: String(config.instructions ?? defaults.instructions ?? ''),
     speed: Number.isFinite(Number(config.speed)) && Number(config.speed) > 0 ? Number(config.speed) : defaults.speed,
   }
-  return provider === 'volcengine'
-    ? normalizeVolcengineTtsConfig(merged)
-    : normalizeXiaomiMimoTtsConfig(merged)
+  if (provider === 'volcengine') return normalizeVolcengineTtsConfig(merged)
+  if (provider === 'aliyun-qwen') return normalizeAliyunQwenTtsConfig(merged)
+  return normalizeXiaomiMimoTtsConfig(merged)
 }
 
 function hasFlatProviderPatch(value: Partial<TtsConfig>): boolean {
@@ -231,6 +293,7 @@ function normalizeTtsConfig(raw: Partial<TtsConfig> = {}): TtsConfig {
   const providers: Record<TtsProviderId, TtsProviderConfig> = {
     xiaomi: normalizeProviderConfig('xiaomi', rawProviders.xiaomi),
     volcengine: normalizeProviderConfig('volcengine', rawProviders.volcengine),
+    'aliyun-qwen': normalizeProviderConfig('aliyun-qwen', rawProviders['aliyun-qwen']),
   }
 
   if (hasFlatProviderPatch(raw)) {
@@ -302,6 +365,10 @@ export function isPersonaTtsVoiceAvailable(ttsVoice?: PersonaTtsVoiceBinding | n
       Boolean(getPersonaXiaomiSamplePath(ttsVoice) && existsSync(getPersonaXiaomiSamplePath(ttsVoice)))
     return Boolean(xiaomi?.apiKey && hasSample)
   }
+  if (ttsVoice.provider === 'aliyun-qwen') {
+    const aliyun = cfg.providers['aliyun-qwen']
+    return Boolean(aliyun?.apiKey && (ttsVoice.model || ALIYUN_QWEN_VOICE_CLONE_TARGET_MODEL) && ttsVoice.voice)
+  }
   if (ttsVoice.provider !== 'volcengine') return false
   const volcengine = cfg.providers.volcengine
   return Boolean(volcengine?.apiKey && (ttsVoice.model || 'seed-icl-2.0'))
@@ -331,6 +398,29 @@ export function resolvePersonaVoiceTtsConfig(
       baseURL: String(ttsVoice.baseURL || xiaomi.baseURL || XIAOMI_MIMO_DEFAULT_BASE_URL),
       model: String(ttsVoice.model || 'mimo-v2.5-tts-voiceclone'),
       voice: getPersonaXiaomiVoiceDataUrl(ttsVoice),
+      instructions,
+      speed,
+    }
+  }
+
+  if (ttsVoice.provider === 'aliyun-qwen') {
+    const aliyun = cfg.providers['aliyun-qwen']
+    const model = String(ttsVoice.model || ALIYUN_QWEN_VOICE_CLONE_TARGET_MODEL)
+    const instructions = isAliyunQwenInstructModel(model)
+      ? String(overrides.instructions ?? '').trim() || aliyun.instructions
+      : ''
+    const speed = Number.isFinite(Number(overrides.speed)) && Number(overrides.speed) > 0
+      ? Number(overrides.speed)
+      : aliyun.speed
+
+    return {
+      enabled: true,
+      activeProvider: 'aliyun-qwen',
+      protocol: 'aliyun-qwen-realtime',
+      apiKey: aliyun.apiKey,
+      baseURL: String(ttsVoice.baseURL || aliyun.baseURL || ALIYUN_QWEN_DEFAULT_REALTIME_ENDPOINT),
+      model,
+      voice: String(ttsVoice.voice || ''),
       instructions,
       speed,
     }
@@ -379,10 +469,12 @@ export function saveTtsConfig(patch: Partial<TtsConfig>): TtsConfig {
 export function isTtsAvailable(cfg: TtsConfig = getTtsConfig()): boolean {
   const needsXiaomiVoice = cfg.protocol === 'xiaomi-mimo-tts' &&
     cfg.model !== 'mimo-v2.5-tts-voicedesign'
+  const needsAliyunQwenVoice = cfg.protocol === 'aliyun-qwen-realtime'
   return cfg.enabled &&
     Boolean(cfg.apiKey) &&
     Boolean(cfg.model) &&
     (cfg.protocol !== 'volcengine-bidirectional' || Boolean(cfg.voice)) &&
+    (!needsAliyunQwenVoice || Boolean(cfg.voice)) &&
     (!needsXiaomiVoice || Boolean(cfg.voice))
 }
 
@@ -390,6 +482,7 @@ function validateTtsConfig(cfg: TtsConfig): string | null {
   if (!cfg.apiKey) return '未配置 TTS API Key'
   if (!cfg.model) return '未配置 TTS 模型'
   if (cfg.protocol === 'volcengine-bidirectional' && !cfg.voice) return '未配置火山引擎音色 Speaker'
+  if (cfg.protocol === 'aliyun-qwen-realtime' && !cfg.voice) return '未配置通义千问音色 voice'
   if (cfg.protocol === 'xiaomi-mimo-tts' && cfg.model !== 'mimo-v2.5-tts-voicedesign' && !cfg.voice) {
     return cfg.model === 'mimo-v2.5-tts-voiceclone'
       ? '未配置小米音色样本 Data URL'
@@ -410,6 +503,10 @@ function validateTtsConfig(cfg: TtsConfig): string | null {
 
 function getVolcengineEndpoint(cfg: TtsConfig): string {
   return normalizeTtsBaseURL(cfg.baseURL) || VOLCENGINE_DEFAULT_TTS_ENDPOINT
+}
+
+function getAliyunQwenEndpoint(cfg: TtsConfig): string {
+  return resolveAliyunQwenRealtimeEndpoint(cfg.baseURL || ALIYUN_QWEN_DEFAULT_REALTIME_ENDPOINT, cfg.model)
 }
 
 /** 把各种异常拼成带 HTTP 状态/响应体的可诊断信息（AI SDK 的 APICallError 自带这些字段）。 */
@@ -495,6 +592,21 @@ function getXiaomiMimoSpeedInstruction(speed: number): string {
   return ''
 }
 
+function getAliyunQwenSpeedInstruction(speed: number): string {
+  const normalized = normalizeTtsSpeed(speed)
+  if (normalized <= 0.85) return '请用偏慢语速朗读，停顿更从容。'
+  if (normalized >= 1.15) return '请用偏快语速朗读，表达更轻快。'
+  return ''
+}
+
+function getAliyunQwenInstructions(cfg: TtsConfig): string {
+  if (!isAliyunQwenInstructModel(cfg.model)) return ''
+  return [
+    normalizeTtsInstructions(cfg.instructions),
+    getAliyunQwenSpeedInstruction(cfg.speed),
+  ].filter(Boolean).join('\n')
+}
+
 function stripBase64DataUrl(value: string): string {
   return String(value || '').trim().replace(/^data:[^;]+;base64,/i, '')
 }
@@ -530,7 +642,7 @@ function createTtsCacheKey(text: string, cfg: TtsConfig): string {
     voice: cfg.voice || '',
     instructions: normalizeTtsInstructions(cfg.instructions),
     speed: normalizeTtsSpeed(cfg.speed),
-    format: cfg.protocol === 'xiaomi-mimo-tts' ? 'wav' : 'mp3',
+    format: cfg.protocol === 'volcengine-bidirectional' ? 'mp3' : 'wav',
   })).digest('hex')
 }
 
@@ -720,6 +832,7 @@ async function synthesizeViaXiaomiMimoApi(text: string, cfg: TtsConfig, signal?:
 }
 
 function canUseLowLatencyStreaming(cfg: TtsConfig): boolean {
+  if (cfg.protocol === 'aliyun-qwen-realtime') return true
   if (cfg.protocol === 'volcengine-bidirectional') return true
   return cfg.protocol === 'xiaomi-mimo-tts' && String(cfg.model || '').trim() === XIAOMI_MIMO_DEFAULT_MODEL
 }
@@ -849,6 +962,27 @@ async function synthesizeViaVolcengineApi(text: string, cfg: TtsConfig, signal?:
   })
 }
 
+/** aliyun-qwen-realtime：通义千问/百炼实时 WebSocket TTS，返回 PCM 后包装 WAV。 */
+async function synthesizeViaAliyunQwenApi(text: string, cfg: TtsConfig, signal?: AbortSignal): Promise<TtsSynthesisResult> {
+  const result = await synthesizeViaAliyunQwenRealtime({
+    apiKey: cfg.apiKey,
+    endpoint: getAliyunQwenEndpoint(cfg),
+    model: cfg.model,
+    voice: cfg.voice,
+    text,
+    instructions: getAliyunQwenInstructions(cfg),
+    signal,
+  })
+
+  if (!result.success || !result.audioBase64) return result
+  const pcm = Buffer.from(stripBase64DataUrl(result.audioBase64), 'base64')
+  return {
+    success: true,
+    audioBase64: buildPcm16Wav(pcm, result.sampleRate || ALIYUN_QWEN_TTS_SAMPLE_RATE, result.channels || ALIYUN_QWEN_TTS_CHANNELS).toString('base64'),
+    mimeType: 'audio/wav',
+  }
+}
+
 /** 豆包 WebSocket 流式播放路径：请求 PCM 分片，结束后包装成 WAV 供缓存复用。 */
 async function synthesizeViaVolcengineStreamingApi(
   text: string,
@@ -889,6 +1023,44 @@ async function synthesizeViaVolcengineStreamingApi(
   }
 }
 
+/** 通义 WebSocket 流式播放路径：response.audio.delta 是 PCM base64 分片。 */
+async function synthesizeViaAliyunQwenStreamingApi(
+  text: string,
+  cfg: TtsConfig,
+  onAudioChunk: (chunk: TtsAudioStreamChunk) => void,
+  signal?: AbortSignal,
+): Promise<TtsStreamingSynthesisResult> {
+  const result = await synthesizeViaAliyunQwenRealtime({
+    apiKey: cfg.apiKey,
+    endpoint: getAliyunQwenEndpoint(cfg),
+    model: cfg.model,
+    voice: cfg.voice,
+    text,
+    instructions: getAliyunQwenInstructions(cfg),
+    onAudioChunk: (chunk) => {
+      onAudioChunk({
+        data: chunk,
+        format: 'pcm16',
+        sampleRate: ALIYUN_QWEN_TTS_SAMPLE_RATE,
+        channels: ALIYUN_QWEN_TTS_CHANNELS,
+      })
+    },
+    signal,
+  })
+
+  if (!result.success || !result.audioBase64) return { ...result, streamed: false }
+  const pcm = Buffer.from(stripBase64DataUrl(result.audioBase64), 'base64')
+  return {
+    success: true,
+    streamed: true,
+    streamFormat: 'pcm16',
+    sampleRate: result.sampleRate || ALIYUN_QWEN_TTS_SAMPLE_RATE,
+    channels: result.channels || ALIYUN_QWEN_TTS_CHANNELS,
+    audioBase64: buildPcm16Wav(pcm, result.sampleRate || ALIYUN_QWEN_TTS_SAMPLE_RATE, result.channels || ALIYUN_QWEN_TTS_CHANNELS).toString('base64'),
+    mimeType: 'audio/wav',
+  }
+}
+
 /** 合成语音。cfg 缺省读持久化配置（试听时传 overrides）。 */
 export async function synthesizeSpeech(
   text: string,
@@ -922,6 +1094,9 @@ export async function synthesizeSpeech(
   options.signal?.addEventListener('abort', () => controller.abort())
 
   const runSynthesis = async (): Promise<TtsSynthesisResult> => {
+    if (cfg.protocol === 'aliyun-qwen-realtime') {
+      return synthesizeViaAliyunQwenApi(input, cfg, controller.signal)
+    }
     if (cfg.protocol === 'volcengine-bidirectional') {
       return synthesizeViaVolcengineApi(input, cfg, controller.signal)
     }
@@ -996,9 +1171,11 @@ export async function synthesizeSpeechStream(
   options.signal?.addEventListener('abort', () => controller.abort())
 
   try {
-    const result = cfg.protocol === 'volcengine-bidirectional'
-      ? await synthesizeViaVolcengineStreamingApi(input, cfg, options.onAudioChunk, controller.signal)
-      : await synthesizeViaXiaomiMimoStreamingApi(input, cfg, options.onAudioChunk, controller.signal)
+    const result = cfg.protocol === 'aliyun-qwen-realtime'
+      ? await synthesizeViaAliyunQwenStreamingApi(input, cfg, options.onAudioChunk, controller.signal)
+      : cfg.protocol === 'volcengine-bidirectional'
+        ? await synthesizeViaVolcengineStreamingApi(input, cfg, options.onAudioChunk, controller.signal)
+        : await synthesizeViaXiaomiMimoStreamingApi(input, cfg, options.onAudioChunk, controller.signal)
 
     if (cacheKey && result.success && result.audioBase64) {
       writeTtsCache(cacheKey, input, cfg, result)

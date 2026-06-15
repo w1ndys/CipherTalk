@@ -1,6 +1,6 @@
 /**
  * 文字转语音设置 —— 朗读 AI 回复、微信消息、克隆好友语音回复共用。
- * 仅保留小米 MiMo 与火山引擎/豆包，两套服务商配置分别保存。
+ * 小米MiMo、火山引擎/豆包、通义千问/百炼的服务商配置分别保存。
  * 自带 IPC（tts:getConfig/setConfig/test），未配置时各处朗读回退系统语音。
  */
 import { useEffect, useRef, useState } from 'react'
@@ -21,6 +21,17 @@ import {
   isLegacyVolcengineTtsVoice,
   isVolcengineVoiceCompatibleWithResource,
 } from '@/lib/volcengineTtsCatalog'
+import {
+  ALIYUN_QWEN_DEFAULT_TTS,
+  ALIYUN_QWEN_TTS_MODELS,
+  ALIYUN_QWEN_TTS_REALTIME_DOC_URL,
+  ALIYUN_QWEN_TTS_VOICE_CLONE_DOC_URL,
+  ALIYUN_QWEN_TTS_VOICES,
+  findAliyunQwenTtsModel,
+  findAliyunQwenTtsVoice,
+  getDefaultAliyunQwenVoice,
+  isAliyunQwenVoiceCloneModel,
+} from '@/lib/aliyunQwenTtsCatalog'
 import {
   XIAOMI_MIMO_DEFAULT_TTS,
   XIAOMI_MIMO_TTS_DOC_URL,
@@ -52,6 +63,16 @@ const DEFAULT_VOLCENGINE_CFG: TtsProviderConfig = {
   speed: 1,
 }
 
+const DEFAULT_ALIYUN_QWEN_CFG: TtsProviderConfig = {
+  protocol: 'aliyun-qwen-realtime',
+  apiKey: '',
+  baseURL: ALIYUN_QWEN_DEFAULT_TTS.baseURL,
+  model: ALIYUN_QWEN_DEFAULT_TTS.model,
+  voice: ALIYUN_QWEN_DEFAULT_TTS.voice,
+  instructions: '',
+  speed: 1,
+}
+
 const DEFAULT_CFG: TtsConfig = {
   enabled: false,
   activeProvider: 'xiaomi',
@@ -59,12 +80,14 @@ const DEFAULT_CFG: TtsConfig = {
   providers: {
     xiaomi: { ...DEFAULT_XIAOMI_CFG },
     volcengine: { ...DEFAULT_VOLCENGINE_CFG },
+    'aliyun-qwen': { ...DEFAULT_ALIYUN_QWEN_CFG },
   },
 }
 
 const PROVIDER_OPTIONS: Array<{ value: TtsProviderId; label: string; hint: string }> = [
-  { value: 'xiaomi', label: '小米 MiMo TTS v2.5', hint: '官方 MiMo V2.5 语音合成：api-key + /chat/completions + audio 参数，内置模型与预置音色' },
+  { value: 'xiaomi', label: '小米MiMo', hint: '小米MiMo 语音合成：api-key + /chat/completions + audio 参数，内置模型与预置音色' },
   { value: 'volcengine', label: '火山引擎 / 豆包', hint: '使用火山引擎 openspeech V3 双向流式协议：X-Api-Key + Resource ID + Speaker' },
+  { value: 'aliyun-qwen', label: '通义千问 / 百炼', hint: '使用百炼 Qwen-TTS Realtime WebSocket：Bearer API Key + response.audio.delta PCM 分片' },
 ]
 
 const VOLCENGINE_CLONE_SPEAKER_HINT_ID = '__volcengine_clone_speaker_hint__'
@@ -126,16 +149,41 @@ function normalizeXiaomiMimoTtsConfig(config: TtsProviderConfig): TtsProviderCon
   return { ...config, baseURL, model, voice }
 }
 
+function resolveAliyunQwenVoiceForModel(model: string, currentVoice: string): string {
+  const modelOption = findAliyunQwenTtsModel(model)
+  if (!modelOption) return currentVoice.trim()
+  if (!modelOption.requiresVoice) return ''
+  if (modelOption.kind === 'voice-clone') return findAliyunQwenTtsVoice(currentVoice) ? '' : currentVoice.trim()
+  return currentVoice.trim() || getDefaultAliyunQwenVoice(model, ALIYUN_QWEN_DEFAULT_TTS.voice)
+}
+
+function normalizeAliyunQwenTtsConfig(config: TtsProviderConfig): TtsProviderConfig {
+  if (config.protocol !== 'aliyun-qwen-realtime') return config
+
+  const baseURL = config.baseURL.trim() || ALIYUN_QWEN_DEFAULT_TTS.baseURL
+  const model = config.model.trim() || ALIYUN_QWEN_DEFAULT_TTS.model
+  const voice = resolveAliyunQwenVoiceForModel(model, config.voice)
+
+  if (baseURL === config.baseURL && model === config.model && voice === config.voice) return config
+  return { ...config, baseURL, model, voice }
+}
+
 function getProviderIdForProtocol(protocol: unknown): TtsProviderId {
-  return protocol === 'volcengine-bidirectional' ? 'volcengine' : 'xiaomi'
+  if (protocol === 'volcengine-bidirectional') return 'volcengine'
+  if (protocol === 'aliyun-qwen-realtime') return 'aliyun-qwen'
+  return 'xiaomi'
 }
 
 function normalizeProviderId(provider: unknown, fallback: TtsProviderId = 'xiaomi'): TtsProviderId {
-  return provider === 'xiaomi' || provider === 'volcengine' ? provider : fallback
+  return provider === 'xiaomi' || provider === 'volcengine' || provider === 'aliyun-qwen' ? provider : fallback
 }
 
 function normalizeProviderConfig(provider: TtsProviderId, config: Partial<TtsProviderConfig> = {}): TtsProviderConfig {
-  const defaults = provider === 'volcengine' ? DEFAULT_VOLCENGINE_CFG : DEFAULT_XIAOMI_CFG
+  const defaults = provider === 'volcengine'
+    ? DEFAULT_VOLCENGINE_CFG
+    : provider === 'aliyun-qwen'
+      ? DEFAULT_ALIYUN_QWEN_CFG
+      : DEFAULT_XIAOMI_CFG
   const merged: TtsProviderConfig = {
     ...defaults,
     ...config,
@@ -147,7 +195,9 @@ function normalizeProviderConfig(provider: TtsProviderId, config: Partial<TtsPro
     instructions: String(config.instructions ?? defaults.instructions ?? ''),
     speed: Number.isFinite(Number(config.speed)) && Number(config.speed) > 0 ? Number(config.speed) : defaults.speed,
   }
-  return provider === 'volcengine' ? normalizeVolcengineTtsConfig(merged) : normalizeXiaomiMimoTtsConfig(merged)
+  if (provider === 'volcengine') return normalizeVolcengineTtsConfig(merged)
+  if (provider === 'aliyun-qwen') return normalizeAliyunQwenTtsConfig(merged)
+  return normalizeXiaomiMimoTtsConfig(merged)
 }
 
 function normalizeTtsConfig(config: Partial<TtsConfig> = {}): TtsConfig {
@@ -156,6 +206,7 @@ function normalizeTtsConfig(config: Partial<TtsConfig> = {}): TtsConfig {
   const providers: Record<TtsProviderId, TtsProviderConfig> = {
     xiaomi: normalizeProviderConfig('xiaomi', rawProviders.xiaomi),
     volcengine: normalizeProviderConfig('volcengine', rawProviders.volcengine),
+    'aliyun-qwen': normalizeProviderConfig('aliyun-qwen', rawProviders['aliyun-qwen']),
   }
 
   if (config.protocol || config.apiKey != null || config.baseURL != null || config.model != null || config.voice != null || config.instructions != null || config.speed != null) {
@@ -316,12 +367,21 @@ export default function TtsTab() {
     void window.electronAPI.shell.openExternal(XIAOMI_MIMO_TTS_DOC_URL)
   }
 
+  const openAliyunQwenRealtimeDocs = () => {
+    void window.electronAPI.shell.openExternal(ALIYUN_QWEN_TTS_REALTIME_DOC_URL)
+  }
+
+  const openAliyunQwenVoiceCloneDocs = () => {
+    void window.electronAPI.shell.openExternal(ALIYUN_QWEN_TTS_VOICE_CLONE_DOC_URL)
+  }
+
   if (!loaded) return null
 
   const activeProvider = cfg.activeProvider || 'xiaomi'
   const providerOption = PROVIDER_OPTIONS.find((option) => option.value === activeProvider)
   const isVolcengine = activeProvider === 'volcengine'
   const isXiaomiMimo = activeProvider === 'xiaomi'
+  const isAliyunQwen = activeProvider === 'aliyun-qwen'
   const volcengineEndpointOption = findVolcengineEndpoint(cfg.baseURL)
   const volcengineResourceOption = findVolcengineResource(cfg.model)
   const volcengineVoiceOption = findVolcengineVoice(cfg.voice)
@@ -339,9 +399,14 @@ export default function TtsTab() {
   const xiaomiMimoVoiceReady = xiaomiMimoModelOption?.kind === 'voice-clone'
     ? isXiaomiMimoVoiceCloneSample(cfg.voice)
     : Boolean(cfg.voice)
+  const aliyunQwenModelOption = findAliyunQwenTtsModel(cfg.model)
+  const aliyunQwenVoiceOption = findAliyunQwenTtsVoice(cfg.voice)
+  const aliyunQwenNeedsVoice = isAliyunQwen && aliyunQwenModelOption?.requiresVoice !== false
+  const aliyunQwenVoiceReady = !aliyunQwenNeedsVoice || Boolean(cfg.voice.trim())
   const canTest = Boolean(cfg.apiKey && cfg.model) &&
     (!isVolcengine || Boolean(cfg.voice)) &&
-    (!xiaomiMimoNeedsVoice || xiaomiMimoVoiceReady)
+    (!xiaomiMimoNeedsVoice || xiaomiMimoVoiceReady) &&
+    aliyunQwenVoiceReady
 
   return (
     <Card>
@@ -350,13 +415,13 @@ export default function TtsTab() {
           <Card.Title>文字转语音（TTS）</Card.Title>
           <Card.Description>
             启用后，AI 助手回复、微信消息右键「朗读」和克隆好友的语音回复都会用这里的音色合成语音；
-            未启用时回退系统朗读。支持小米 MiMo 和火山引擎 / 豆包，两套配置会分别保存。
+            未启用时回退系统朗读。支持小米MiMo、火山引擎 / 豆包和通义千问 / 百炼，各服务商配置会分别保存。
           </Card.Description>
         </div>
-        <div className="flex shrink-0 items-center gap-2">
+        <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
           {isXiaomiMimo && (
             <Button
-              aria-label="打开小米 MiMo 语音合成文档"
+              aria-label="打开小米MiMo语音合成文档"
               onPress={openXiaomiMimoDocs}
               size="sm"
               type="button"
@@ -377,6 +442,30 @@ export default function TtsTab() {
               <ExternalLink size={16} />
               豆包控制台
             </Button>
+          )}
+          {isAliyunQwen && (
+            <>
+              <Button
+                aria-label="打开通义千问实时 TTS 文档"
+                onPress={openAliyunQwenRealtimeDocs}
+                size="sm"
+                type="button"
+                variant="outline"
+              >
+                <ExternalLink size={16} />
+                实时文档
+              </Button>
+              <Button
+                aria-label="打开通义千问声音复刻文档"
+                onPress={openAliyunQwenVoiceCloneDocs}
+                size="sm"
+                type="button"
+                variant="outline"
+              >
+                <ExternalLink size={16} />
+                复刻文档
+              </Button>
+            </>
           )}
           <Switch
             aria-label={cfg.enabled ? '关闭文字转语音' : '启用文字转语音'}
@@ -424,14 +513,16 @@ export default function TtsTab() {
           <Label>API Key</Label>
           <InputGroup fullWidth variant="secondary">
             <InputGroup.Input
-              placeholder={isVolcengine ? '火山引擎新版控制台 X-Api-Key' : 'MIMO_API_KEY'}
+              placeholder={isVolcengine ? '火山引擎新版控制台 X-Api-Key' : isAliyunQwen ? 'DASHSCOPE_API_KEY' : 'MIMO_API_KEY'}
               type="password"
             />
           </InputGroup>
           <Description>
             {isVolcengine
               ? '从豆包语音官方控制台获取 X-Api-Key，仅保存在本地。'
-              : '从小米 MiMo 控制台获取 API Key，请求时会使用 api-key 请求头，仅保存在本地。'}
+              : isAliyunQwen
+                ? '从阿里云百炼 / DashScope 获取 API Key，请求时使用 Authorization: Bearer，仅保存在本地。'
+                : '从小米MiMo控制台获取 API Key，请求时会使用 api-key 请求头，仅保存在本地。'}
           </Description>
         </TextField>
 
@@ -470,13 +561,23 @@ export default function TtsTab() {
               {volcengineEndpointOption?.scenario || '当前实现使用 V3 双向 WebSocket；其他 V3 接口已内置在 catalog，待协议实现后可直接放开。'}
             </Description>
           </ComboBox>
+        ) : isAliyunQwen ? (
+          <TextField fullWidth onChange={(v) => patch({ baseURL: v })} value={cfg.baseURL}>
+            <Label>实时 WebSocket 地址</Label>
+            <InputGroup fullWidth variant="secondary">
+              <InputGroup.Input placeholder={ALIYUN_QWEN_DEFAULT_TTS.baseURL} />
+            </InputGroup>
+            <Description>
+              北京地域默认使用 dashscope.aliyuncs.com；系统会自动追加 model 查询参数。新加坡地域可填写 workspace 专属 maas 地址。
+            </Description>
+          </TextField>
         ) : (
           <TextField fullWidth onChange={(v) => patch({ baseURL: v })} value={cfg.baseURL}>
             <Label>接口地址</Label>
             <InputGroup fullWidth variant="secondary">
               <InputGroup.Input placeholder={XIAOMI_MIMO_DEFAULT_TTS.baseURL} />
             </InputGroup>
-            <Description>填写小米 MiMo /v1 地址，系统会自动拼接 /chat/completions。</Description>
+            <Description>填写小米MiMo /v1 地址，系统会自动拼接 /chat/completions。</Description>
           </TextField>
         )}
 
@@ -523,6 +624,44 @@ export default function TtsTab() {
                 : '对应 X-Api-Resource-Id，可选择内置资源，也可手动填写控制台开通的资源 ID。'}
             </Description>
           </ComboBox>
+        ) : isAliyunQwen ? (
+          <ComboBox
+            allowsCustomValue
+            fullWidth
+            inputValue={cfg.model}
+            selectedKey={aliyunQwenModelOption?.id || null}
+            onInputChange={(value) => patch({ model: value, voice: resolveAliyunQwenVoiceForModel(value, cfg.voice) })}
+            onSelectionChange={(key) => {
+              if (key != null) {
+                const model = String(key)
+                patch({ model, voice: resolveAliyunQwenVoiceForModel(model, cfg.voice) })
+              }
+            }}
+            menuTrigger="focus"
+            variant="secondary"
+          >
+            <Label>模型</Label>
+            <ComboBox.InputGroup>
+              <Input placeholder={ALIYUN_QWEN_DEFAULT_TTS.model} variant="secondary" />
+              <ComboBox.Trigger />
+            </ComboBox.InputGroup>
+            <ComboBox.Popover>
+              <ListBox>
+                {ALIYUN_QWEN_TTS_MODELS.map((option) => (
+                  <ListBox.Item key={option.id} id={option.id} textValue={`${option.label} ${option.id} ${option.hint}`} className="shrink-0">
+                    <div className="min-w-0">
+                      <div>{option.label}</div>
+                      <div className="text-xs text-muted-foreground break-all">{option.id}</div>
+                    </div>
+                    <ListBox.ItemIndicator />
+                  </ListBox.Item>
+                ))}
+              </ListBox>
+            </ComboBox.Popover>
+            <Description>
+              {aliyunQwenModelOption?.hint || '通义千问实时语音合成模型 ID。'}
+            </Description>
+          </ComboBox>
         ) : (
           <ComboBox
             allowsCustomValue
@@ -558,7 +697,7 @@ export default function TtsTab() {
               </ListBox>
             </ComboBox.Popover>
             <Description>
-              {xiaomiMimoModelOption?.hint || '小米 MiMo V2.5 语音合成模型 ID。'}
+              {xiaomiMimoModelOption?.hint || '小米MiMo 语音合成模型 ID。'}
             </Description>
           </ComboBox>
         )}
@@ -610,6 +749,55 @@ export default function TtsTab() {
                 : '火山引擎音色 ID，也就是文档里的 req_params.speaker；可选内置音色或手动填写。'}
             </Description>
           </ComboBox>
+        ) : isAliyunQwen ? (
+          isAliyunQwenVoiceCloneModel(cfg.model) ? (
+            <TextField fullWidth onChange={(v) => patch({ voice: v })} value={cfg.voice}>
+              <Label>复刻 voice</Label>
+              <InputGroup fullWidth variant="secondary">
+                <InputGroup.Input placeholder="通义声音复刻返回的 voice" />
+              </InputGroup>
+              <Description>
+                声音复刻模型需要填写 Qwen 声音复刻 HTTP API 返回的 output.voice；数字分身会自动绑定该值。
+              </Description>
+            </TextField>
+          ) : (
+            <ComboBox
+              allowsCustomValue
+              fullWidth
+              inputValue={cfg.voice}
+              selectedKey={aliyunQwenVoiceOption?.id || null}
+              onInputChange={(value) => patch({ voice: value })}
+              onSelectionChange={(key) => {
+                if (key != null) patch({ voice: String(key) })
+              }}
+              menuTrigger="focus"
+              variant="secondary"
+            >
+              <Label>音色</Label>
+              <ComboBox.InputGroup>
+                <Input placeholder={ALIYUN_QWEN_DEFAULT_TTS.voice} variant="secondary" />
+                <ComboBox.Trigger />
+              </ComboBox.InputGroup>
+              <ComboBox.Popover>
+                <ListBox>
+                  {ALIYUN_QWEN_TTS_VOICES.map((option) => (
+                    <ListBox.Item key={option.id} id={option.id} textValue={`${option.label} ${option.id} ${option.language} ${option.gender}`} className="shrink-0">
+                      <div className="min-w-0">
+                        <div>{option.label}</div>
+                        <div className="text-xs text-muted-foreground break-all">{option.id}</div>
+                      </div>
+                      <ListBox.ItemIndicator />
+                    </ListBox.Item>
+                  ))}
+                </ListBox>
+              </ComboBox.Popover>
+              <Description>
+                {aliyunQwenVoiceOption
+                  ? `${aliyunQwenVoiceOption.language} · ${aliyunQwenVoiceOption.gender} · ${aliyunQwenVoiceOption.hint}`
+                  : '通义千问实时 TTS 的 voice 参数，可使用系统音色或手动填写可用 voice。'}
+              </Description>
+            </ComboBox>
+          )
         ) : xiaomiMimoModelOption?.kind === 'preset' ? (
           <ComboBox
             allowsCustomValue
@@ -674,7 +862,11 @@ export default function TtsTab() {
           <Description>
             {isXiaomiMimo
               ? '小米会把这里作为 user message 的自然语言控制；朗读文本会放在 assistant message。也可直接在正文里使用音频标签。'
-              : '支持该能力的语音模型会按这里的自然语言控制朗读；克隆好友语音会优先使用画像自动生成的指令。'}
+              : isAliyunQwen
+                ? (aliyunQwenModelOption?.supportsInstructions
+                  ? '仅 qwen3-tts-instruct-* 模型会发送 instructions/optimize_instructions；复刻模型和基础模型不会发送风格指令。'
+                  : '当前通义模型不发送风格指令；如需语气控制请切换到 qwen3-tts-instruct-flash-realtime。')
+                : '支持该能力的语音模型会按这里的自然语言控制朗读；克隆好友语音会优先使用画像自动生成的指令。'}
           </Description>
         </TextField>
 
@@ -693,7 +885,9 @@ export default function TtsTab() {
           <Description>
             {isVolcengine
               ? '1 = 正常语速；火山引擎会映射为 speech_rate，范围 0.5–2。'
-              : '1 = 正常语速；小米会转成自然语言风格提示，不发送独立 speed 参数。'}
+              : isAliyunQwen
+                ? '1 = 正常语速；通义实时模型不发送独立 speech_rate，会在 instruct 模型中转成自然语言风格提示。'
+                : '1 = 正常语速；小米会转成自然语言风格提示，不发送独立 speed 参数。'}
           </Description>
         </TextField>
 

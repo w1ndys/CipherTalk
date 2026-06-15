@@ -149,11 +149,11 @@ interface ConfigSchema {
     maxResults: number
   }
   // 文字转语音 —— 朗读 AI 回复/微信消息/角色语音回复，独立于聊天模型
-  // 仅保留小米 MiMo 与火山引擎/豆包；providers 持久化两套独立配置，切换服务商不会互相覆盖。
+  // providers 持久化各服务商独立配置，切换服务商不会互相覆盖。
   ttsConfig: {
     enabled: boolean
-    activeProvider: 'xiaomi' | 'volcengine'
-    protocol: 'xiaomi-mimo-tts' | 'volcengine-bidirectional'
+    activeProvider: 'xiaomi' | 'volcengine' | 'aliyun-qwen'
+    protocol: 'xiaomi-mimo-tts' | 'volcengine-bidirectional' | 'aliyun-qwen-realtime'
     apiKey: string
     baseURL: string
     model: string
@@ -162,7 +162,7 @@ interface ConfigSchema {
     speed: number
     providers: {
       xiaomi: {
-        protocol: 'xiaomi-mimo-tts' | 'volcengine-bidirectional'
+        protocol: 'xiaomi-mimo-tts' | 'volcengine-bidirectional' | 'aliyun-qwen-realtime'
         apiKey: string
         baseURL: string
         model: string
@@ -171,7 +171,16 @@ interface ConfigSchema {
         speed: number
       }
       volcengine: {
-        protocol: 'xiaomi-mimo-tts' | 'volcengine-bidirectional'
+        protocol: 'xiaomi-mimo-tts' | 'volcengine-bidirectional' | 'aliyun-qwen-realtime'
+        apiKey: string
+        baseURL: string
+        model: string
+        voice: string
+        instructions: string
+        speed: number
+      }
+      'aliyun-qwen': {
+        protocol: 'xiaomi-mimo-tts' | 'volcengine-bidirectional' | 'aliyun-qwen-realtime'
         apiKey: string
         baseURL: string
         model: string
@@ -325,6 +334,15 @@ const defaults: ConfigSchema = {
         baseURL: 'wss://openspeech.bytedance.com/api/v3/tts/bidirection',
         model: 'seed-tts-2.0',
         voice: 'zh_female_shuangkuaisisi_uranus_bigtts',
+        instructions: '',
+        speed: 1,
+      },
+      'aliyun-qwen': {
+        protocol: 'aliyun-qwen-realtime',
+        apiKey: '',
+        baseURL: 'wss://dashscope.aliyuncs.com/api-ws/v1/realtime',
+        model: 'qwen3-tts-instruct-flash-realtime',
+        voice: 'Cherry',
         instructions: '',
         speed: 1,
       },

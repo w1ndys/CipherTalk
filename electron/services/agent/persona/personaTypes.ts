@@ -97,13 +97,13 @@ export interface PersonaStats {
 
 /** 数字分身绑定的专属 TTS 音色。密钥不落库，合成时读取全局服务商配置。 */
 export interface PersonaTtsVoiceBinding {
-  provider: 'volcengine' | 'xiaomi'
-  protocol: 'volcengine-bidirectional' | 'xiaomi-mimo-tts'
-  source: 'volcengine-voice-clone' | 'xiaomi-mimo-voice-clone'
+  provider: 'volcengine' | 'xiaomi' | 'aliyun-qwen'
+  protocol: 'volcengine-bidirectional' | 'xiaomi-mimo-tts' | 'aliyun-qwen-realtime'
+  source: 'volcengine-voice-clone' | 'xiaomi-mimo-voice-clone' | 'aliyun-qwen-voice-clone'
   baseURL: string
-  /** 豆包为 X-Api-Resource-Id；小米为 TTS voiceclone 模型 ID。 */
+  /** 豆包为 X-Api-Resource-Id；小米为 TTS voiceclone 模型 ID；通义为 target_model。 */
   model: string
-  /** 豆包为 speaker_id；小米为本地样本 ID，合成时从 samplePath 组装 Data URL。 */
+  /** 豆包为 speaker_id；小米为本地样本 ID；通义为声音复刻返回的 voice。 */
   voice: string
   displayName?: string
   sampleCount?: number
@@ -113,6 +113,8 @@ export interface PersonaTtsVoiceBinding {
   samplePath?: string
   sampleHash?: string
   modelType?: number
+  fallbackMode?: boolean
+  fallbackReason?: string
   createdAt: number
   updatedAt: number
 }

@@ -167,7 +167,9 @@ function PersonaAvatar({ name, avatarUrl, size }: { name: string; avatarUrl?: st
 
 function getPersonaVoiceLabel(persona: PersonaRecordInfo | null): string {
   if (!persona?.ttsVoice) return ''
-  return persona.ttsVoice.provider === 'xiaomi' ? '专属小米音色' : '专属豆包音色'
+  if (persona.ttsVoice.provider === 'xiaomi') return '专属小米音色'
+  if (persona.ttsVoice.provider === 'aliyun-qwen') return '专属通义音色'
+  return '专属豆包音色'
 }
 
 export default function PersonaChatPage() {
@@ -418,8 +420,12 @@ export default function PersonaChatPage() {
       const res = await window.electronAPI.persona.cloneVoice({ sessionId, displayName })
       if (res.success && res.persona) {
         setPersona(res.persona)
-        const providerText = res.voice?.provider === 'xiaomi' ? '小米音色样本' : '豆包音色'
-        setVoiceCloneStatus({ ok: true, text: `已绑定专属${providerText}` })
+        const providerText = res.voice?.provider === 'xiaomi'
+          ? '小米音色样本'
+          : res.voice?.provider === 'aliyun-qwen'
+            ? '通义音色'
+            : '豆包音色'
+        setVoiceCloneStatus({ ok: true, text: `已绑定专属${providerText}${res.warning ? `（${res.warning}）` : ''}` })
       } else {
         setVoiceCloneStatus({ ok: false, text: res.error || '声音复刻失败' })
       }
