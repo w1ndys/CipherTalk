@@ -3,8 +3,6 @@ import { existsSync, readFileSync, writeFileSync, readdirSync, rmSync, mkdirSync
 import { join } from 'path'
 import AdmZip from 'adm-zip'
 import type { AgentSkillContextItem } from './agent/types'
-import { invalidateSkillSelectionCache } from './agent/runtimeCache'
-import { rerankCandidates } from './ai/rerankService'
 
 type AdmZipFull = InstanceType<typeof AdmZip> & {
   getEntries(): Array<{ entryName: string }>
@@ -26,10 +24,7 @@ type SkillDocument = {
 }
 
 const BUILTIN_SKILLS = new Set(['ct-mcp-copilot'])
-const DEFAULT_AGENT_SKILL_LIMIT = 3
-const DEFAULT_AGENT_SKILL_BUDGET = 9000
-const DEFAULT_AGENT_SKILL_CANDIDATES = 20
-const AGENT_PREP_RERANK_TIMEOUT_MS = 800
+const DEFAULT_AGENT_ALL_SKILL_BUDGET = 30_000
 const SKILL_DOCS_CACHE_TTL_MS = 5 * 60 * 1000
 
 function parseSkillFrontmatter(content: string): { name: string; version: string; description: string } {
@@ -161,47 +156,6 @@ function compactSkillContent(content: string, maxChars: number): string {
     .replace(/\n{3,}/g, '\n\n')
     .trim()
   return body.length > maxChars ? `${body.slice(0, Math.max(0, maxChars - 20)).trim()}\n...<truncated>` : body
-}
-
-function skillTokens(value: string): Set<string> {
-  const normalized = value.replace(/([a-z0-9])([A-Z])/g, '$1 $2').toLowerCase()
-  const tokens = new Set<string>()
-  for (const match of normalized.matchAll(/[a-z0-9][a-z0-9_-]{1,}/g)) {
-    tokens.add(match[0].replace(/[_-]+/g, ''))
-    for (const part of match[0].split(/[_-]+/)) {
-      if (part.length >= 2) tokens.add(part)
-    }
-  }
-  for (const match of value.matchAll(/[\u4e00-\u9fff]+/g)) {
-    const text = match[0]
-    for (let i = 0; i < text.length - 1; i += 1) tokens.add(text.slice(i, i + 2))
-    if (text.length === 1) tokens.add(text)
-  }
-  return tokens
-}
-
-function scoreSkillForQuery(query: string, skill: SkillInfo, content: string): number {
-  const queryText = query.trim()
-  if (!queryText) return 0
-  const queryTokens = skillTokens(queryText)
-  if (queryTokens.size === 0) return 0
-
-  const haystack = `${skill.name}\n${skill.description}\n${stripSkillFrontmatter(content).slice(0, 5000)}`
-  const haystackTokens = skillTokens(haystack)
-  let score = 0
-  for (const token of queryTokens) {
-    if (haystackTokens.has(token)) score += token.length >= 4 ? 3 : 1
-  }
-
-  const queryLower = queryText.toLowerCase()
-  const nameLower = skill.name.toLowerCase()
-  const descriptionLower = skill.description.toLowerCase()
-  if (queryLower.includes(nameLower) || nameLower.includes(queryLower)) score += 8
-  for (const token of queryTokens) {
-    if (nameLower.includes(token)) score += 3
-    if (descriptionLower.includes(token)) score += 2
-  }
-  return score
 }
 
 export class SkillManagerService {
@@ -358,13 +312,12 @@ export class SkillManagerService {
     }
   }
 
-  // 全量技能文档缓存：每条 Agent 消息都要选技能，同步重读全部 SKILL.md（含逐根目录 existsSync 探测）
+  // 全量技能文档缓存：每条 Agent 消息都要读取技能上下文，同步重读全部 SKILL.md（含逐根目录 existsSync 探测）
   // 会堵事件循环几百毫秒。技能增删改时失效，TTL 兜底外部直接改文件的情况。
   private skillDocsCache: { value: SkillDocument[]; at: number } | null = null
 
   private invalidateSkillCaches(): void {
     this.skillDocsCache = null
-    invalidateSkillSelectionCache()
   }
 
   private getSkillDocuments(): SkillDocument[] {
@@ -387,66 +340,32 @@ export class SkillManagerService {
     return docs
   }
 
-  async selectSkillsForAgent(
-    query: string,
-    limit = DEFAULT_AGENT_SKILL_LIMIT,
-    totalBudget = DEFAULT_AGENT_SKILL_BUDGET,
-  ): Promise<AgentSkillContextItem[]> {
-    const safeLimit = Math.max(0, Math.floor(limit))
-    if (!query.trim() || safeLimit === 0 || totalBudget <= 0) return []
+  getAllSkillsForAgentPrompt(totalBudget = DEFAULT_AGENT_ALL_SKILL_BUDGET): AgentSkillContextItem[] {
+    const docs = this.getSkillDocuments()
+    if (docs.length === 0) return []
+    const full = docs.map((doc) => ({
+      name: doc.name,
+      version: doc.version,
+      description: doc.description,
+      content: compactSkillContent(doc.content, Number.MAX_SAFE_INTEGER),
+    }))
+    const fullLength = full.reduce((sum, item) => sum + item.content.length, 0)
+    const safeBudget = Math.max(0, Math.floor(totalBudget))
+    if (fullLength <= safeBudget) return full
 
-    const scored = this.getSkillDocuments()
-      .map((doc) => {
-        const skill = {
-          name: doc.name,
-          version: doc.version,
-          description: doc.description,
-          builtin: BUILTIN_SKILLS.has(doc.name),
-        }
-        const score = scoreSkillForQuery(query, skill, '')
-        if (score <= 0) return null
-        return {
-          score,
-          skill: {
-            name: doc.name,
-            version: doc.version,
-            description: doc.description,
-            rawContent: doc.content,
-          },
-        }
-      })
-      .filter((item): item is NonNullable<typeof item> => Boolean(item))
-      .sort((a, b) => b.score - a.score || a.skill.name.localeCompare(b.skill.name))
-      .slice(0, DEFAULT_AGENT_SKILL_CANDIDATES)
-
-    const { items: reranked } = await rerankCandidates(query, scored.map((entry) => ({
-      item: entry,
-      text: [
-        `Skill ${entry.skill.name}`,
-        entry.skill.description,
-      ].filter(Boolean).join('\n'),
-    })), {
-      topN: safeLimit,
-      timeoutMsOverride: AGENT_PREP_RERANK_TIMEOUT_MS,
-    })
-
-    const selected: AgentSkillContextItem[] = []
-    let remaining = Math.max(0, Math.floor(totalBudget))
-    for (const item of reranked) {
-      if (remaining <= 0) break
-      const perSkillBudget = Math.max(1200, Math.floor(remaining / Math.max(1, safeLimit - selected.length)))
-      const content = compactSkillContent(item.skill.rawContent, Math.min(remaining, perSkillBudget))
-      if (!content) continue
-      remaining -= content.length
-      selected.push({
-        name: item.skill.name,
-        version: item.skill.version,
-        description: item.skill.description,
+    let remaining = safeBudget
+    return docs.map((doc, index) => {
+      const remainingDocs = Math.max(1, docs.length - index)
+      const perSkillBudget = remaining > 0 ? Math.floor(remaining / remainingDocs) : 0
+      const content = perSkillBudget > 0 ? compactSkillContent(doc.content, perSkillBudget) : ''
+      remaining = Math.max(0, remaining - content.length)
+      return {
+        name: doc.name,
+        version: doc.version,
+        description: doc.description,
         content,
-      })
-    }
-
-    return selected
+      }
+    })
   }
 
   private resolveUserSkillDir(skillName: string): string | null {
