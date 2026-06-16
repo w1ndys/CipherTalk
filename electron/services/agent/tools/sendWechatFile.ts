@@ -6,6 +6,7 @@ import { tool } from 'ai'
 import { z } from 'zod'
 import * as fs from 'fs'
 import * as path from 'path'
+import { ConfigService } from '../../config'
 
 const MAX_WECHAT_FILE_BYTES = 100 * 1024 * 1024
 
@@ -38,17 +39,36 @@ function normalizeRealPath(filePath: string): string | null {
   }
 }
 
+function isDesktopScreenshotPath(filePath: string): boolean {
+  const cs = new ConfigService()
+  try {
+    const root = fs.realpathSync(path.join(cs.getCacheBasePath(), 'desktop-screenshots'))
+    const target = fs.realpathSync(filePath)
+    const normalizedRoot = process.platform === 'win32' ? root.toLowerCase() : root
+    const normalizedTarget = process.platform === 'win32' ? target.toLowerCase() : target
+    return normalizedTarget === normalizedRoot || normalizedTarget.startsWith(`${normalizedRoot}${path.sep}`)
+  } catch {
+    return false
+  } finally {
+    cs.close()
+  }
+}
+
 export const sendWechatFile = tool({
   description:
     '仅在微信官方机器人场景下，把本地文件作为当前触发会话的回复附件。' +
-    'filePath 可以是电脑上可访问的任意本地文件绝对路径；不得指定联系人、群或 toUserId。',
+    'filePath 可以是电脑上可访问的任意本地文件绝对路径；不得指定联系人、群或 toUserId。桌面截图需要二次确认。',
   inputSchema: z.object({
     filePath: z.string().min(1).describe('要发送的本地文件绝对路径'),
+    confirmedDesktopScreenshot: z.boolean().default(false).describe('仅当 filePath 是 desktop_screenshot 生成的截图且用户已明确确认发送到当前微信会话时为 true'),
   }),
-  execute: async ({ filePath }) => {
+  execute: async ({ filePath, confirmedDesktopScreenshot }) => {
     try {
       const realFilePath = normalizeRealPath(filePath)
       if (!realFilePath) return { error: '文件不存在' }
+      if (isDesktopScreenshotPath(realFilePath) && !confirmedDesktopScreenshot) {
+        return { error: '桌面截图属于敏感附件。请先询问用户是否要把这张截图作为当前微信会话回复附件发送；用户明确确认后，再传 confirmedDesktopScreenshot=true。' }
+      }
       const stat = fs.statSync(realFilePath)
       if (!stat.isFile()) return { error: '路径不是文件' }
       if (stat.size <= 0) return { error: '文件为空' }

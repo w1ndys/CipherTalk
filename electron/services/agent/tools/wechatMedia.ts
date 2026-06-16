@@ -155,18 +155,41 @@ function validateLocalMedia(filePath: string): { filePath: string; mimeType: str
   return { filePath: realFilePath, mimeType, sizeBytes: stat.size, kind }
 }
 
+function isDesktopScreenshotPath(filePath: string): boolean {
+  const cs = new ConfigService()
+  try {
+    const root = fs.realpathSync(path.join(cs.getCacheBasePath(), 'desktop-screenshots'))
+    const target = fs.realpathSync(filePath)
+    const normalizedRoot = process.platform === 'win32' ? root.toLowerCase() : root
+    const normalizedTarget = process.platform === 'win32' ? target.toLowerCase() : target
+    return normalizedTarget === normalizedRoot || normalizedTarget.startsWith(`${normalizedRoot}${path.sep}`)
+  } catch {
+    return false
+  } finally {
+    cs.close()
+  }
+}
+
+function assertDesktopScreenshotConfirmed(filePath: string, confirmed: boolean): void {
+  if (!isDesktopScreenshotPath(filePath)) return
+  if (!confirmed) {
+    throw new Error('桌面截图属于敏感附件。请先用文字询问用户是否要把这张截图作为当前微信会话回复附件发送；用户明确确认后，再传 confirmedDesktopScreenshot=true。')
+  }
+}
+
 export const sendWechatMedia = tool({
   description:
     '仅在微信官方机器人场景下，把媒体作为当前触发会话的回复附件。支持电脑上可访问的任意本地文件绝对路径，或 http/https 远程媒体 URL。' +
     '会自动按 MIME 分流为图片、视频或文件。仅当用户明确要求发送媒体/文件/图片/视频到微信时使用。' +
-    'caption 可作为附件前的简短说明文字。不得指定联系人、群或 toUserId。',
+    'caption 可作为附件前的简短说明文字。不得指定联系人、群或 toUserId。桌面截图需要二次确认。',
   inputSchema: z.object({
     media: z.string().min(1).describe('本地文件绝对路径或 http/https 远程媒体 URL'),
     caption: z.string().optional().describe('媒体前要发送的简短说明文字'),
+    confirmedDesktopScreenshot: z.boolean().default(false).describe('仅当 media 是 desktop_screenshot 生成的截图且用户已明确确认发送到当前微信会话时为 true'),
   }),
-  execute: async ({ media, caption }) => {
+  execute: async ({ media, caption, confirmedDesktopScreenshot }) => {
     try {
-      const prepared = await prepareWechatMedia(media, caption)
+      const prepared = await prepareWechatMedia(media, caption, confirmedDesktopScreenshot)
       return {
         success: true,
         ...prepared,
@@ -178,12 +201,13 @@ export const sendWechatMedia = tool({
   },
 })
 
-export async function prepareWechatMedia(media: string, caption = ''): Promise<PreparedWechatMedia> {
+export async function prepareWechatMedia(media: string, caption = '', confirmedDesktopScreenshot = false): Promise<PreparedWechatMedia> {
   const source = media.trim()
   const info = /^https?:\/\//i.test(source)
     ? await downloadRemoteMedia(source)
     : validateLocalMedia(source)
   if ('error' in info) throw new Error(info.error)
+  assertDesktopScreenshotConfirmed(info.filePath, confirmedDesktopScreenshot)
   return {
     kind: info.kind,
     filePath: info.filePath,

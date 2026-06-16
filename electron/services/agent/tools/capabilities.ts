@@ -172,7 +172,9 @@ export function createAuditTools(): ToolSet {
 export function createDesktopTools(): ToolSet {
   return {
     desktop_screenshot: tool({
-      description: '截取当前屏幕/窗口并保存为本机 PNG 文件。首版只看桌面，不点击、不键入。',
+      description:
+        '截取当前屏幕/窗口并保存为本机 PNG 文件。首版只看桌面，不点击、不键入。' +
+        '截图只在当前软件内预览/保存，不会自动发送到微信；回答时不要说"发到微信"。',
       inputSchema: z.object({
         sourceId: z.string().optional().describe('可选 Electron desktopCapturer source id'),
         width: z.number().int().min(320).max(3840).default(1920),
@@ -182,7 +184,9 @@ export function createDesktopTools(): ToolSet {
     }),
 
     desktop_ocr: tool({
-      description: '对当前屏幕/窗口截图并尝试 OCR。首版不做点击、不键入；未配置 OCR 时返回截图路径和明确错误。',
+      description:
+        '对当前屏幕/窗口截图并尝试 OCR。首版不做点击、不键入；未配置 OCR 时返回截图路径和明确错误。' +
+        '不要承诺把截图发送到微信或其它联系人。',
       inputSchema: z.object({
         sourceId: z.string().optional(),
         width: z.number().int().min(320).max(3840).default(1920),

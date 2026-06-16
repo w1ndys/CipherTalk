@@ -881,7 +881,15 @@ export class AgentCapabilityService {
     const dir = ensureDir(path.join(getCacheBasePath(), 'desktop-screenshots'))
     const filePath = path.join(dir, `desktop-${Date.now()}.png`)
     fs.writeFileSync(filePath, source.thumbnail.toPNG())
-    return { success: true, sourceId: source.id, sourceName: source.name, filePath }
+    return {
+      success: true,
+      sourceId: source.id,
+      sourceName: source.name,
+      filePath,
+      sensitive: true,
+      delivery: 'local-preview-only',
+      note: '桌面截图已保存到本机并可在当前软件内预览；不要说已发送到微信。如需在微信机器人当前会话回复该截图，必须先让用户明确确认。',
+    }
   }
 
   private async desktopOcr(args: Record<string, unknown>): Promise<unknown> {
