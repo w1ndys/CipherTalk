@@ -7,6 +7,7 @@ import { ConfigService } from '../config'
 import type {
   CodeWorkspaceApprovalDecision,
   CodeWorkspaceApprovalKind,
+  CodeWorkspaceApprovalPolicy,
   CodeWorkspaceApprovalRequest,
   CodeWorkspaceApprovalRisk,
   CodeWorkspaceEvent,
@@ -18,6 +19,7 @@ import type {
 } from './codeWorkspaceTypes'
 
 const CONFIG_KEY = 'agentCodeWorkspaceRoot'
+const APPROVAL_POLICY_CONFIG_KEY = 'agentCodeWorkspaceApprovalPolicy'
 const MAX_READ_BYTES = 512 * 1024
 const MAX_READ_LINES = 1400
 const MAX_LIST_ITEMS = 600
@@ -163,6 +165,10 @@ function buildDiffPreview(displayPath: string, before: string, after: string): s
   return truncateText(lines.join('\n'))
 }
 
+function normalizeApprovalPolicy(value: unknown): CodeWorkspaceApprovalPolicy {
+  return value === 'risk-based' || value === 'full-access' ? value : 'on-request'
+}
+
 export class CodeWorkspaceService {
   private ctx: MainProcessContext | null = null
   private workspace: CodeWorkspaceRef | null = null
@@ -204,6 +210,17 @@ export class CodeWorkspaceService {
     this.workspace = null
     this.writeConfiguredWorkspaceRoot('')
     await this.ensureWorkspaceInitialized()
+    this.broadcast({ type: 'state', state: this.getState(), at: Date.now() })
+    return this.getState()
+  }
+
+  async setApprovalPolicy(policy: CodeWorkspaceApprovalPolicy): Promise<CodeWorkspaceState> {
+    const normalized = normalizeApprovalPolicy(policy)
+    this.writeConfiguredApprovalPolicy(normalized)
+    await this.ensureWorkspaceInitialized()
+    if (this.workspace) {
+      this.workspace = { ...this.workspace, approvalPolicy: normalized }
+    }
     this.broadcast({ type: 'state', state: this.getState(), at: Date.now() })
     return this.getState()
   }
@@ -295,6 +312,24 @@ export class CodeWorkspaceService {
     }
   }
 
+  private readConfiguredApprovalPolicy(): CodeWorkspaceApprovalPolicy {
+    const config = new ConfigService()
+    try {
+      return normalizeApprovalPolicy(config.get(APPROVAL_POLICY_CONFIG_KEY as any))
+    } finally {
+      config.close()
+    }
+  }
+
+  private writeConfiguredApprovalPolicy(policy: CodeWorkspaceApprovalPolicy): void {
+    const config = new ConfigService()
+    try {
+      config.set(APPROVAL_POLICY_CONFIG_KEY as any, normalizeApprovalPolicy(policy) as any)
+    } finally {
+      config.close()
+    }
+  }
+
   private async initializeWorkspace(): Promise<void> {
     const configured = this.readConfiguredWorkspaceRoot()
     if (configured) {
@@ -334,7 +369,7 @@ export class CodeWorkspaceService {
     this.workspace = {
       id: createHash('sha1').update(realRoot).digest('hex').slice(0, 12),
       root: realRoot,
-      approvalPolicy: 'on-request',
+      approvalPolicy: this.readConfiguredApprovalPolicy(),
     }
     this.writeConfiguredWorkspaceRoot(realRoot)
     this.appendLog(`[workspace] ${realRoot}`)
@@ -399,6 +434,8 @@ export class CodeWorkspaceService {
     summary: string
   }): Promise<boolean> {
     const workspace = this.requireWorkspace()
+    if (workspace.approvalPolicy === 'full-access') return true
+    if (workspace.approvalPolicy === 'risk-based' && input.risk !== 'high') return true
     const requestId = `approval-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
     const request: CodeWorkspaceApprovalRequest = {
       requestId,

@@ -1,11 +1,12 @@
 export type CodeWorkspaceApprovalKind = 'write' | 'delete' | 'command' | 'dev-server' | 'sensitive-read'
 export type CodeWorkspaceApprovalRisk = 'low' | 'medium' | 'high'
 export type CodeWorkspaceApprovalDecision = 'approved' | 'rejected'
+export type CodeWorkspaceApprovalPolicy = 'on-request' | 'risk-based' | 'full-access'
 
 export interface CodeWorkspaceRef {
   id: string
   root: string
-  approvalPolicy: 'on-request'
+  approvalPolicy: CodeWorkspaceApprovalPolicy
 }
 
 export interface CodeWorkspaceDevServerState {

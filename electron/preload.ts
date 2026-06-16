@@ -199,6 +199,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     clearWorkspace: () => ipcRenderer.invoke('agentWorkspace:clearWorkspace') as Promise<{ success: boolean; state?: unknown; error?: string }>,
     stopDevServer: () => ipcRenderer.invoke('agentWorkspace:stopDevServer') as Promise<{ success: boolean; state?: unknown; result?: unknown; error?: string }>,
     getState: () => ipcRenderer.invoke('agentWorkspace:getState') as Promise<{ success: boolean; state?: unknown; error?: string }>,
+    setApprovalPolicy: (policy: unknown) => ipcRenderer.invoke('agentWorkspace:setApprovalPolicy', policy) as Promise<{ success: boolean; state?: unknown; error?: string }>,
     listFiles: (payload: unknown) => ipcRenderer.invoke('agentWorkspace:listFiles', payload) as Promise<{ success: boolean; root?: string; items?: unknown[]; truncated?: boolean; error?: string }>,
     approve: (requestId: string) => ipcRenderer.invoke('agentWorkspace:approve', requestId) as Promise<{ success: boolean }>,
     reject: (requestId: string, _reason?: string) => ipcRenderer.invoke('agentWorkspace:reject', requestId) as Promise<{ success: boolean }>,

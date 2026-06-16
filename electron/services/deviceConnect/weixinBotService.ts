@@ -1640,9 +1640,12 @@ class WeixinBotService {
     const { refreshResolvedProxyUrl } = await import('../ai/proxyFetch')
     const { convertToModelMessages } = await import('ai')
     const { agentProcessService } = await import('../agent/agentProcessService')
+    const { codeWorkspaceService } = await import('../agent/codeWorkspaceService')
     agentProcessService.setLogger(this.logger as never)
     const providerConfig = resolveProviderConfig()
     await refreshResolvedProxyUrl()
+    await codeWorkspaceService.ensureWorkspaceInitialized()
+    const codeWorkspace = codeWorkspaceService.getState().workspace
     const messages = await convertToModelMessages(uiMessages)
     let reply = ''
     const textBlocks: string[] = []
@@ -1651,7 +1654,18 @@ class WeixinBotService {
     const personaActions: WechatPersonaAction[] = []
     const toolNames = new Map<string, string>()
     await agentProcessService.run(
-      { messages, providerConfig, scope: { kind: 'global' }, mcpTools: [], skills: [], toolMode: 'default', outputMode: 'wechat', planMode: false },
+      {
+        messages,
+        providerConfig,
+        scope: { kind: 'global' },
+        mcpTools: [],
+        skills: [],
+        toolMode: 'default',
+        outputMode: 'wechat',
+        planMode: false,
+        toolProfile: codeWorkspace ? 'hybrid' : 'chat',
+        codeWorkspace,
+      },
       (chunk) => {
         rememberToolNameFromChunk(chunk, toolNames)
         const c = chunk as { type?: string; id?: string; delta?: string; text?: string }

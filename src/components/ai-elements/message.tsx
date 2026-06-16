@@ -123,9 +123,9 @@ export const MessageActions = ({
       {groups.filter((group) => group.length > 0).map((group, index) => (
         <Fragment key={`group-${index}`}>
           {index > 0 && <HeroSeparator />}
-          <HeroButtonGroup size="sm" variant="tertiary">
+          <div className="flex items-center gap-1" role="group">
             {group}
-          </HeroButtonGroup>
+          </div>
         </Fragment>
       ))}
     </HeroToolbar>
@@ -179,11 +179,9 @@ function MessageFloatingToolbar({
   );
 }
 
-type HeroMessageActionProps = ComponentProps<typeof HeroButton>;
-
 export type MessageActionProps = Omit<
-  HeroMessageActionProps,
-  "children" | "className" | "isDisabled" | "isIconOnly" | "onPress" | "size"
+  ComponentProps<"button">,
+  "children" | "className" | "disabled" | "onClick" | "type"
 > & {
   children?: ReactNode;
   className?: string;
@@ -192,55 +190,57 @@ export type MessageActionProps = Omit<
   tooltip?: string;
   label?: string;
   onClick?: () => void;
-  onPress?: HeroMessageActionProps["onPress"];
+  onPress?: ComponentProps<"button">["onClick"];
   showGroupSeparator?: boolean;
   startsGroup?: boolean;
-  size?: HeroMessageActionProps["size"] | "icon-sm";
+  size?: "icon-sm" | "sm" | "md" | "lg";
+  variant?: string;
 };
 
 export const MessageAction = ({
   tooltip,
   children,
   label,
-  variant = "tertiary",
+  variant: _variant = "tertiary",
   size = "icon-sm",
   className,
   disabled,
   isDisabled,
   onClick,
   onPress,
-  showGroupSeparator,
+  showGroupSeparator: _showGroupSeparator,
   startsGroup: _startsGroup,
   ...props
 }: MessageActionProps) => {
   const isIconOnly = size === "icon-sm" || Children.count(children) === 1;
-  const heroSize = size === "icon-sm" ? "sm" : size;
-  const button = (
-    <HeroButton
+  const resolvedDisabled = isDisabled ?? disabled;
+  const renderedChildren = Children.map(children, (child) => {
+    if (!isValidElement<{ className?: string }>(child)) return child;
+    return cloneElement(child, {
+      className: cn(child.props.className, "size-4 stroke-[2.35]"),
+    });
+  });
+
+  return (
+    <button
       aria-label={props["aria-label"] ?? label ?? tooltip}
       className={cn(
-        isIconOnly && "size-8 p-0 [&_svg]:size-3.5",
-        "text-muted-foreground data-[hovered=true]:text-foreground",
+        "inline-flex shrink-0 items-center justify-center rounded-(--agent-radius,12px) bg-transparent text-muted-foreground outline-none transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/40 disabled:pointer-events-none disabled:opacity-45",
+        isIconOnly ? "size-6 p-0" : "h-7 gap-1 px-1.5 text-xs",
         className
       )}
-      isDisabled={isDisabled ?? disabled}
-      isIconOnly={isIconOnly}
-      onPress={(event) => {
+      disabled={resolvedDisabled}
+      onClick={(event) => {
         onPress?.(event);
         onClick?.();
       }}
-      size={heroSize}
       type="button"
-      variant={variant}
       {...props}
     >
-      {showGroupSeparator && <HeroButtonGroup.Separator />}
-      {children}
+      {renderedChildren}
       <span className="sr-only">{label || tooltip}</span>
-    </HeroButton>
+    </button>
   );
-
-  return button;
 };
 
 type MessageBranchContextType = {

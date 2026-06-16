@@ -37,6 +37,16 @@ export function registerAgentWorkspaceHandlers(ctx: MainProcessContext): void {
     }
   })
 
+  ipcMain.handle('agentWorkspace:setApprovalPolicy', async (_event, policy: unknown) => {
+    try {
+      const normalized = policy === 'risk-based' || policy === 'full-access' ? policy : 'on-request'
+      const state = await codeWorkspaceService.setApprovalPolicy(normalized)
+      return { success: true, state }
+    } catch (error: any) {
+      return { success: false, error: error?.message || String(error) }
+    }
+  })
+
   ipcMain.handle('agentWorkspace:listFiles', async (_event, payload: unknown) => {
     try {
       return await codeWorkspaceService.listFilesForUi(payload && typeof payload === 'object' ? payload as Record<string, unknown> : {})

@@ -5,8 +5,8 @@
 import { Fragment, memo, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type DragEvent, type ReactNode, type UIEvent } from 'react'
 import { useChat } from '@ai-sdk/react'
 import { isToolUIPart, type ChatStatus, type UIMessage } from 'ai'
-import { AlertDialog, Button as HeroButton, ButtonGroup, Dropdown, Header, Input, Label, Modal, Separator, Surface, Switch, Table, TextField, Toolbar } from '@heroui/react'
-import { AtSign, BarChart3, Braces, Brain, CheckIcon, ChevronDown, Clock3, Code2, Copy, FileText, Globe, History, Image as ImageIcon, Info, Link2, ListChecks, Monitor, PanelLeft, PenLine, Play, Quote, RefreshCcw, Search, Slash, SquarePen, Table2, Terminal, Trash2, Users, Volume2, Wrench, X, Sparkles } from 'lucide-react'
+import { AlertDialog, Button as HeroButton, ButtonGroup, Dropdown, Header, Input, Label, Modal, Separator, Surface, Switch, Table, TextField, Toolbar, Tooltip } from '@heroui/react'
+import { AtSign, BarChart3, Braces, Brain, CheckIcon, ChevronDown, Clock3, Code2, Copy, FileText, Globe, Hand, History, Image as ImageIcon, Info, Link2, ListChecks, Monitor, PanelLeft, PenLine, Play, Quote, RefreshCcw, Search, ShieldAlert, ShieldCheck, Slash, SquarePen, Table2, Terminal, Trash2, Users, Volume2, Wrench, X, Sparkles, type LucideIcon } from 'lucide-react'
 import { Sources, SourcesContent, SourcesTrigger } from '@/components/ai-elements/sources'
 import { HoverCard, HoverCardContent, HoverCardTrigger } from '@/components/ui/hover-card'
 import {
@@ -53,7 +53,7 @@ import { IpcChatTransport, type AgentModelConfig, type AgentProgressEvent, type 
 import { CODE_WORKSPACE_FILE_REF_MIME, CodeWorkspacePanel, CodeWorkspacePanelPopover, CodeWorkspaceSidebar, type CodeWorkspaceFileDragReference, type CodeWorkspacePanelTab } from './CodeWorkspacePanel'
 import * as configService from '@/services/config'
 import { useTtsSpeaker } from '@/lib/ttsPlayer'
-import type { CodeWorkspaceApprovalRequest, CodeWorkspaceEvent, CodeWorkspaceState } from '@/types/electron'
+import type { CodeWorkspaceApprovalPolicy, CodeWorkspaceApprovalRequest, CodeWorkspaceEvent, CodeWorkspaceState } from '@/types/electron'
 
 // 提示词预设：按 AI 助手的工具能力分组；需要限定联系人或群时，用户可在正文光标处用 @ 插入。
 const PROMPT_PRESET_GROUPS = [
@@ -244,9 +244,101 @@ const REASONING_EFFORT_OPTIONS: Array<{ value: AgentReasoningEffort; label: stri
   { value: 'high', label: '思考：高' },
 ]
 
+const CODE_WORKSPACE_APPROVAL_POLICY_OPTIONS: Array<{
+  value: CodeWorkspaceApprovalPolicy
+  label: string
+  description: string
+  icon: LucideIcon
+}> = [
+  {
+    value: 'on-request',
+    label: '请求批准',
+    description: '读敏感文件、编辑文件和运行命令时始终询问',
+    icon: Hand,
+  },
+  {
+    value: 'risk-based',
+    label: '替我审批',
+    description: '仅对高风险操作请求批准',
+    icon: ShieldAlert,
+  },
+  {
+    value: 'full-access',
+    label: '完全访问',
+    description: '代码工作区内不再请求批准',
+    icon: ShieldCheck,
+  },
+]
+
 function reasoningEffortLabel(value: AgentReasoningEffort, compact = false): string {
   const label = REASONING_EFFORT_OPTIONS.find((option) => option.value === value)?.label ?? '思考：自动'
   return compact ? label.replace(/^思考：/, '') : label
+}
+
+function codeWorkspaceApprovalPolicyOption(policy?: CodeWorkspaceApprovalPolicy) {
+  return CODE_WORKSPACE_APPROVAL_POLICY_OPTIONS.find((option) => option.value === policy)
+    ?? CODE_WORKSPACE_APPROVAL_POLICY_OPTIONS[0]
+}
+
+function codeWorkspaceApprovalPolicyToneClass(policy?: CodeWorkspaceApprovalPolicy) {
+  if (policy === 'risk-based') return 'text-blue-600 dark:text-blue-300'
+  if (policy === 'full-access') return 'text-amber-600 dark:text-amber-300'
+  return ''
+}
+
+function CodeWorkspaceApprovalPolicyDropdown({
+  policy,
+  onChange,
+}: {
+  policy: CodeWorkspaceApprovalPolicy
+  onChange: (policy: CodeWorkspaceApprovalPolicy) => void
+}) {
+  const current = codeWorkspaceApprovalPolicyOption(policy)
+  const CurrentIcon = current.icon
+  const currentToneClass = codeWorkspaceApprovalPolicyToneClass(current.value)
+
+  return (
+    <Dropdown>
+      <HeroButton
+        aria-label="设置代码工作区权限"
+        className={`gap-1 ${currentToneClass}`}
+        size="sm"
+        variant="tertiary"
+      >
+        <CurrentIcon className="size-3.5 shrink-0" />
+        <span className="max-w-24 truncate">{current.label}</span>
+        <ChevronDown className="size-3 shrink-0" />
+      </HeroButton>
+      <Dropdown.Popover className="w-80 max-w-[calc(100vw-2rem)]" placement="top start">
+        <div className="border-border/70 border-b px-3 py-2.5">
+          <div className="flex items-center justify-between gap-3">
+            <Label className="text-sm">如何批准代码操作？</Label>
+            <span className="text-muted-foreground text-xs">同步到微信</span>
+          </div>
+        </div>
+        <Dropdown.Menu
+          selectedKeys={new Set([current.value])}
+          selectionMode="single"
+          onAction={(key) => onChange(String(key) as CodeWorkspaceApprovalPolicy)}
+        >
+          {CODE_WORKSPACE_APPROVAL_POLICY_OPTIONS.map((option) => {
+            const Icon = option.icon
+            const toneClass = codeWorkspaceApprovalPolicyToneClass(option.value)
+            return (
+              <Dropdown.Item id={option.value} key={option.value} textValue={option.label}>
+                <Dropdown.ItemIndicator />
+                <Icon className={`size-4 shrink-0 ${toneClass || 'text-muted'}`} />
+                <div className="min-w-0 flex-1">
+                  <Label className={`block truncate ${toneClass}`}>{option.label}</Label>
+                  <span className="block truncate text-muted-foreground text-xs">{option.description}</span>
+                </div>
+              </Dropdown.Item>
+            )
+          })}
+        </Dropdown.Menu>
+      </Dropdown.Popover>
+    </Dropdown>
+  )
 }
 
 const MEMORY_INTRO_FALLBACK_SRTS = {
@@ -697,6 +789,24 @@ function AgentPromptSubmit({ busy, status, workspaceReferenceCount }: { busy: bo
   const { textInput, attachments } = usePromptInputController()
   const disabled = !busy && !textInput.value.trim() && attachments.files.length === 0 && workspaceReferenceCount === 0
   return <PromptInputSubmit disabled={disabled} status={status} />
+}
+
+function AgentPromptPrimaryAction({ busy, status, workspaceReferenceCount }: { busy: boolean; status: ChatStatus; workspaceReferenceCount: number }) {
+  const { textInput, attachments } = usePromptInputController()
+  const hasSubmitContent = textInput.value.trim().length > 0 || attachments.files.length > 0 || workspaceReferenceCount > 0
+
+  if (!busy && !hasSubmitContent) {
+    return (
+      <PromptInputSpeechButton
+        aria-label="语音输入"
+        language="zh-CN"
+        size="icon-sm"
+        variant="primary"
+      />
+    )
+  }
+
+  return <AgentPromptSubmit busy={busy} status={status} workspaceReferenceCount={workspaceReferenceCount} />
 }
 
 type AgentModelItem = {
@@ -1390,34 +1500,66 @@ function focusPromptTextareaAt(position: number) {
   })
 }
 
+function isAsciiWordChar(value: string): boolean {
+  return /^[A-Za-z0-9_]$/.test(value)
+}
+
 function getMentionQueryAtCursor(value: string): MentionQueryState | null {
   const textarea = getPromptTextareaElement()
   const cursor = textarea && textarea.value === value ? textarea.selectionStart : value.length
   const beforeCursor = value.slice(0, cursor)
-  const match = beforeCursor.match(/(?:^|\s)@([^\s@\[\]\r\n]{0,24})$/)
+  const match = beforeCursor.match(/@([^\s@\[\]\r\n]{0,24})$/)
   if (!match) return null
   const query = match[1] || ''
+  const start = cursor - query.length - 1
+  if (start > 0 && isAsciiWordChar(value[start - 1] || '')) return null
   return {
     end: cursor,
     query,
-    start: cursor - query.length - 1,
+    start,
   }
 }
 
-function insertTextAtPromptCursor(value: string, insertText: string): { nextValue: string; nextCursor: number } {
+function insertMentionTriggerAtPromptCursor(value: string): { nextValue: string; nextCursor: number } {
   const textarea = getPromptTextareaElement()
   const start = textarea && textarea.value === value ? textarea.selectionStart : value.length
   const end = textarea && textarea.value === value ? textarea.selectionEnd : value.length
-  const nextValue = `${value.slice(0, start)}${insertText}${value.slice(end)}`
-  return { nextValue, nextCursor: start + insertText.length }
+  const before = value.slice(0, start)
+  const after = value.slice(end)
+  const prefix = before && !/\s$/.test(before) ? ' ' : ''
+  const suffix = after && !/^\s/.test(after) ? ' ' : ''
+  const nextValue = `${before}${prefix}@${suffix}${after}`
+  return { nextValue, nextCursor: before.length + prefix.length + 1 }
 }
 
-function mentionToken(target: MentionTarget): string {
-  return `@${target.displayName}`
+function removePromptTextRange(value: string, start: number, end: number): { nextValue: string; nextCursor: number } {
+  const before = value.slice(0, start)
+  const after = value.slice(end)
+  const nextAfter = before && /\s$/.test(before) ? after.replace(/^\s+/, '') : after
+  const spacer = before && nextAfter && !/\s$/.test(before) && !/^\s/.test(nextAfter) ? ' ' : ''
+  let nextValue = `${before}${spacer}${nextAfter}`
+  let nextCursor = before.length + spacer.length
+
+  if (start === 0) {
+    const trimmed = nextValue.replace(/^[ \t]+/, '')
+    nextCursor = Math.max(0, nextCursor - (nextValue.length - trimmed.length))
+    nextValue = trimmed
+  }
+
+  return { nextValue, nextCursor }
 }
 
-function mentionAppearsInText(text: string, target: MentionTarget): boolean {
-  return text.includes(mentionToken(target))
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+function removeMentionTokenFromPromptText(text: string, target: MentionTarget): string {
+  const displayName = escapeRegExp(target.displayName)
+  const username = escapeRegExp(target.username)
+  return text
+    .replace(new RegExp(`(^|\\s)@${displayName}\\[${username}\\](?=\\s|$)`, 'g'), '$1')
+    .replace(new RegExp(`(^|\\s)@${displayName}(?=\\s|$)`, 'g'), '$1')
+    .replace(/^[ \t]+/, '')
 }
 
 function splitMentionPrefix(text: string): { mentions: MentionTarget[]; text: string } {
@@ -1535,6 +1677,44 @@ function MentionAvatar({ target, className = 'size-7' }: { target: MentionTarget
   )
 }
 
+function MentionTargetChips({
+  targets,
+  align = 'start',
+  onRemove,
+}: {
+  targets: MentionTarget[]
+  align?: 'start' | 'end'
+  onRemove?: (target: MentionTarget) => void
+}) {
+  if (targets.length === 0) return null
+  return (
+    <div className={`flex max-w-full flex-wrap gap-1.5 ${align === 'end' ? 'ml-auto justify-end' : ''}`}>
+      {targets.map((target) => (
+        <span
+          className="inline-flex h-7 max-w-56 items-center gap-1.5 rounded-full border border-primary/30 bg-primary/10 px-1.5 pr-2 font-medium text-primary text-xs"
+          key={target.username}
+          title={`${target.displayName} · ${target.username}`}
+        >
+          <MentionAvatar className="size-5" target={target} />
+          <span className="min-w-0 truncate">@{target.displayName}</span>
+          {target.kind === 'group' && <span className="shrink-0 text-[10px] opacity-75">群</span>}
+          {onRemove && (
+            <button
+              aria-label={`移除 ${target.displayName}`}
+              className="-mr-0.5 inline-flex size-4 shrink-0 items-center justify-center rounded-full opacity-65 transition hover:bg-primary/15 hover:opacity-100"
+              onClick={() => onRemove(target)}
+              onMouseDown={(event) => event.preventDefault()}
+              type="button"
+            >
+              <X className="size-3" />
+            </button>
+          )}
+        </span>
+      ))}
+    </div>
+  )
+}
+
 function WorkspaceFileReferenceChips({
   refs,
   align = 'start',
@@ -1582,7 +1762,7 @@ function AgentPromptAssetHeader({
   if (workspaceFileReferences.length === 0 && attachments.files.length === 0) return null
 
   return (
-    <PromptInputHeader className="flex-col items-stretch gap-2">
+    <PromptInputHeader className="flex-col items-stretch gap-1.5 px-3 pt-2 pb-0">
       <WorkspaceFileReferenceChips
         onRemove={onRemoveWorkspaceFileReference}
         refs={workspaceFileReferences}
@@ -1605,6 +1785,7 @@ function MentionField({
   isLoading,
   onAdd,
   onLoadMore,
+  onRemove,
   onSearch,
 }: {
   sessions: MentionTarget[]
@@ -1613,6 +1794,7 @@ function MentionField({
   isLoading: boolean
   onAdd: (m: MentionTarget) => void
   onLoadMore: () => void
+  onRemove: (m: MentionTarget) => void
   onSearch: (query: string) => void
 }) {
   const { textInput } = usePromptInputController()
@@ -1620,11 +1802,7 @@ function MentionField({
   const [queryState, setQueryState] = useState<MentionQueryState | null>(() => getMentionQueryAtCursor(value))
   const query = queryState?.query ?? null
   const [visibleLimit, setVisibleLimit] = useState(MENTION_RESULT_BATCH_SIZE)
-  const activeMentions = useMemo(
-    () => mentions.filter((m) => mentionAppearsInText(value, m)),
-    [mentions, value]
-  )
-  const picked = useMemo(() => new Set(activeMentions.map((m) => m.username)), [activeMentions])
+  const picked = useMemo(() => new Set(mentions.map((m) => m.username)), [mentions])
   const pickedKey = useMemo(() => mentions.map((m) => m.username).join('\n'), [mentions])
   const allResults = useMemo(() => {
     if (query === null) return []
@@ -1686,49 +1864,60 @@ function MentionField({
   const select = (s: MentionTarget) => {
     if (!queryState) return
     onAdd(s)
-    const token = `${mentionToken(s)} `
-    const nextValue = `${value.slice(0, queryState.start)}${token}${value.slice(queryState.end)}`
+    const { nextCursor, nextValue } = removePromptTextRange(value, queryState.start, queryState.end)
     textInput.setInput(nextValue)
-    focusPromptTextareaAt(queryState.start + token.length)
+    setQueryState(null)
+    focusPromptTextareaAt(nextCursor)
   }
 
-  if (query === null) return null
+  const removeSelectedMention = (target: MentionTarget) => {
+    onRemove(target)
+    const nextValue = removeMentionTokenFromPromptText(textInput.value, target)
+    if (nextValue !== textInput.value) textInput.setInput(nextValue)
+    focusPromptTextareaAt(nextValue.length)
+  }
 
   return (
-    <div className="relative h-0">
-      {query !== null && (
-        <div
-          className="absolute bottom-full left-0 z-50 mb-2 max-h-80 w-80 overflow-auto rounded-(--agent-radius,12px) border border-border bg-popover p-1 shadow-lg"
-          onScroll={handleResultsScroll}
-        >
-          {results.length > 0 ? (
-            <>
-              {results.map((s) => (
-                <button
-                  className="flex w-full items-center gap-2 rounded-(--agent-radius,12px) px-2 py-1.5 text-left text-sm hover:bg-accent"
-                  key={s.username}
-                  onClick={() => select(s)}
-                  onMouseDown={(event) => event.preventDefault()}
-                  type="button"
-                >
-                  <MentionAvatar target={s} />
-                  <span className="min-w-0 flex-1 truncate">{s.displayName}</span>
-                  {s.kind === 'group' && <span className="ml-auto shrink-0 text-muted-foreground text-xs">群</span>}
-                </button>
-              ))}
-              {(visibleLimit < allResults.length || hasMore || isLoading) && (
-                <button
-                  className="mt-1 w-full rounded-(--agent-radius,12px) px-2 py-2 text-center text-muted-foreground text-xs hover:bg-accent"
-                  disabled={isLoading}
-                  onClick={loadNextVisibleBatch}
-                  type="button"
-                >
-                  {isLoading ? '加载中…' : '加载更多会话'}
-                </button>
-              )}
-            </>
-          ) : (
-            <div className="px-2 py-3 text-center text-muted-foreground text-xs">
+    <>
+      {mentions.length > 0 && (
+        <div className="w-full px-3 pt-2">
+          <MentionTargetChips targets={mentions} onRemove={removeSelectedMention} />
+        </div>
+      )}
+      <div className="relative h-0 w-full self-stretch">
+        {query !== null && (
+          <div
+            className="absolute bottom-full left-3 z-50 mb-2 w-80 max-w-[calc(100%-1.5rem)] overflow-hidden rounded-(--agent-radius,12px) border border-border bg-popover p-1 shadow-lg"
+          >
+            <div className="max-h-80 overflow-y-auto pr-1 [scrollbar-gutter:stable]" onScroll={handleResultsScroll}>
+              {results.length > 0 ? (
+                <>
+                  {results.map((s) => (
+                    <button
+                      className="flex w-full items-center gap-2 rounded-(--agent-radius,12px) px-2 py-1.5 text-left text-sm hover:bg-accent"
+                      key={s.username}
+                      onClick={() => select(s)}
+                      onMouseDown={(event) => event.preventDefault()}
+                      type="button"
+                    >
+                      <MentionAvatar target={s} />
+                      <span className="min-w-0 flex-1 truncate">{s.displayName}</span>
+                      {s.kind === 'group' && <span className="ml-auto shrink-0 text-muted-foreground text-xs">群</span>}
+                    </button>
+                  ))}
+                  {(visibleLimit < allResults.length || hasMore || isLoading) && (
+                    <button
+                      className="mt-1 w-full rounded-(--agent-radius,12px) px-2 py-2 text-center text-muted-foreground text-xs hover:bg-accent"
+                      disabled={isLoading}
+                      onClick={loadNextVisibleBatch}
+                      type="button"
+                    >
+                      {isLoading ? '加载中…' : '加载更多会话'}
+                    </button>
+                  )}
+                </>
+              ) : (
+                <div className="px-2 py-3 text-center text-muted-foreground text-xs">
                   {isLoading
                     ? '联系人加载中…'
                     : hasMore || sessions.length === 0
@@ -1738,11 +1927,13 @@ function MentionField({
                         </button>
                       )
                       : '未找到匹配的联系人'}
+                </div>
+              )}
             </div>
-          )}
-        </div>
-      )}
-    </div>
+          </div>
+        )}
+      </div>
+    </>
   )
 }
 
@@ -1755,7 +1946,7 @@ function MentionTriggerButton({ showGroupSeparator = false }: { showGroupSeparat
       isIconOnly
       onPress={() => {
         const v = textInput.value
-        const { nextCursor, nextValue } = insertTextAtPromptCursor(v, '@')
+        const { nextCursor, nextValue } = insertMentionTriggerAtPromptCursor(v)
         textInput.setInput(nextValue)
         focusPromptTextareaAt(nextCursor)
       }}
@@ -2767,6 +2958,16 @@ export default function AgentPage() {
       setAgentNotice(`代码工作区选择失败：${result.error || '未知错误'}`)
     }
   }, [])
+  const handleCodeWorkspaceApprovalPolicyChange = useCallback(async (policy: CodeWorkspaceApprovalPolicy) => {
+    const result = await window.electronAPI.agentWorkspace.setApprovalPolicy(policy)
+    if (result.success && result.state) {
+      setCodeWorkspaceState(result.state)
+      setCodeWorkspaceLogs(result.state.recentLogs || [])
+      setAgentNotice('')
+    } else {
+      setAgentNotice(`代码权限设置失败：${result.error || '未知错误'}`)
+    }
+  }, [])
   const handleApproveCodeWorkspace = useCallback((requestId: string) => {
     setCodeWorkspaceApproval(null)
     void window.electronAPI.agentWorkspace.approve(requestId)
@@ -2911,6 +3112,9 @@ export default function AgentPage() {
     (m: MentionTarget) => setMentions((prev) => (prev.some((x) => x.username === m.username) ? prev : [...prev, m])),
     []
   )
+  const removeMention = useCallback((m: MentionTarget) => {
+    setMentions((prev) => prev.filter((item) => item.username !== m.username))
+  }, [])
   const addWorkspaceFileReference = useCallback((ref: CodeWorkspaceFileDragReference) => {
     setWorkspaceFileReferences((prev) => (prev.some((item) => item.path === ref.path) ? prev : [...prev, ref]))
   }, [])
@@ -3665,7 +3869,7 @@ export default function AgentPage() {
       setSubAgentProgress([])
       return
     }
-    const currentMentions = mentions.filter((m) => mentionAppearsInText(message.text, m))
+    const currentMentions = mentions
     if (message.files.length === 0 && currentMentions.length === 0 && workspaceFileReferences.length === 0 && await runSlashCommandText(message.text)) {
       return
     }
@@ -3864,23 +4068,27 @@ export default function AgentPage() {
       style={{ '--agent-radius': '12px' } as CSSProperties}
       variant="transparent"
     >
-      <div className="flex h-12 shrink-0 items-center justify-between border-b border-border/60 px-3">
-        <div className="flex min-w-0 flex-1 items-center gap-2 pr-3">
-          <HeroButton
-            aria-label="工作区文件树"
-            className="size-8 p-0"
-            isIconOnly
-            onPress={() => setWorkspaceSidebarOpen((open) => !open)}
-            size="sm"
-            variant={workspaceSidebarOpen ? 'secondary' : 'tertiary'}
-          >
-            <PanelLeft className="size-4" />
-          </HeroButton>
-          <div className="min-w-0 flex-1">
+      <div className="relative flex h-14 shrink-0 items-center justify-center border-b border-border/60 px-3">
+        <div className="absolute left-3 top-1/2 flex -translate-y-1/2 items-center">
+          <Tooltip delay={0}>
+            <HeroButton
+              aria-label="工作区文件树"
+              className="size-9 p-0"
+              isIconOnly
+              onPress={() => setWorkspaceSidebarOpen((open) => !open)}
+              size="md"
+              variant={workspaceSidebarOpen ? 'secondary' : 'tertiary'}
+            >
+              <PanelLeft className="size-[18px]" />
+            </HeroButton>
+            <Tooltip.Content placement="bottom">{workspaceSidebarOpen ? '隐藏工作区文件树' : '显示工作区文件树'}</Tooltip.Content>
+          </Tooltip>
+        </div>
+        <div className="absolute left-1/2 top-1/2 min-w-0 max-w-[min(36rem,calc(100%_-_14rem))] -translate-x-1/2 -translate-y-1/2">
           {titleEditing ? (
             <input
               aria-label="编辑对话名称"
-              className="h-8 w-full max-w-90 rounded-(--agent-radius,12px) border border-border bg-background px-2 font-medium text-foreground text-sm outline-none focus:border-ring focus:ring-[3px] focus:ring-ring/30"
+              className="h-9 w-90 max-w-[calc(100vw_-_14rem)] rounded-(--agent-radius,12px) border border-border bg-background px-3 text-center font-medium text-foreground text-sm outline-none focus:border-ring focus:ring-[3px] focus:ring-ring/30"
               disabled={titleSaving}
               onBlur={() => {
                 if (titleIgnoreBlurRef.current) {
@@ -3903,22 +4111,25 @@ export default function AgentPage() {
               value={titleDraft}
             />
           ) : (
-            <button
-              className="group inline-flex min-w-0 max-w-full items-center gap-1.5 rounded-(--agent-radius,12px) px-1 py-1 text-left hover:bg-accent/40"
-              onClick={beginTitleEdit}
-              title="编辑对话名称"
-              type="button"
-            >
-              <span className="truncate font-medium text-sm text-foreground">
-                {titleSaving ? '保存中...' : titleLoading ? '生成标题中...' : conversationTitle}
-              </span>
-              <PenLine className="size-3.5 shrink-0 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100" />
-            </button>
+            <Tooltip delay={0}>
+              <button
+                className="group inline-flex h-9 min-w-0 max-w-full items-center justify-center gap-1.5 rounded-(--agent-radius,12px) px-3 text-center hover:bg-accent/40"
+                onClick={beginTitleEdit}
+                type="button"
+              >
+                <span className="truncate font-medium text-sm text-foreground">
+                  {titleSaving ? '保存中...' : titleLoading ? '生成标题中...' : conversationTitle}
+                </span>
+                <PenLine className="size-4 shrink-0 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100" />
+              </button>
+              <Tooltip.Content placement="bottom">
+                {titleLoading ? '正在生成标题' : `编辑对话名称：${conversationTitle}`}
+              </Tooltip.Content>
+            </Tooltip>
           )}
-          </div>
         </div>
-        <div className="relative">
-          <Toolbar aria-label="对话操作" className="gap-1 p-0">
+        <div className="absolute right-3 top-1/2 -translate-y-1/2">
+          <Toolbar aria-label="对话操作" className="gap-1.5 p-0">
             <CodeWorkspacePanelPopover
               activeTab={codeWorkspacePanelTab}
               isOpen={codeWorkspacePanelOpen}
@@ -3928,16 +4139,17 @@ export default function AgentPage() {
               onStopDevServer={handleStopCodeDevServer}
               state={codeWorkspaceState}
             />
-            <ButtonGroup size="sm" variant="tertiary">
+            <div className="flex items-center gap-1.5">
               <Dropdown isOpen={recordsOpen} onOpenChange={setRecordsOpen}>
                 <HeroButton
                   aria-label="对话记录"
-                  className="size-8 p-0"
+                  className="size-9 p-0"
                   isIconOnly
-                  size="sm"
+                  render={(buttonProps) => <button {...buttonProps} title="对话记录" />}
+                  size="md"
                   variant="tertiary"
                 >
-                  <History className="size-4" />
+                  <History className="size-[18px]" />
                 </HeroButton>
                 <Dropdown.Popover className="w-[min(28rem,calc(100vw-2rem))]" placement="bottom end">
                   <Dropdown.Menu
@@ -4001,16 +4213,20 @@ export default function AgentPage() {
                   </Dropdown.Menu>
                 </Dropdown.Popover>
               </Dropdown>
-              <HeroButton
-                aria-label="新建对话"
-                className="size-8 p-0"
-                isIconOnly
-                onPress={handleNewConversation}
-              >
-                <ButtonGroup.Separator />
-                <SquarePen className="size-4" />
-              </HeroButton>
-            </ButtonGroup>
+              <Tooltip delay={0}>
+                <HeroButton
+                  aria-label="新建对话"
+                  className="size-9 p-0"
+                  isIconOnly
+                  onPress={handleNewConversation}
+                  size="md"
+                  variant="tertiary"
+                >
+                  <SquarePen className="size-[18px]" />
+                </HeroButton>
+                <Tooltip.Content placement="bottom">新建对话</Tooltip.Content>
+              </Tooltip>
+            </div>
           </Toolbar>
         </div>
       </div>
@@ -4194,6 +4410,7 @@ export default function AgentPage() {
               )
               return (
                 <Message from={message.role} key={message.id}>
+                  {userDisplay && <MentionTargetChips align="end" targets={userDisplay.mentions} />}
                   {userDisplay && <WorkspaceFileReferenceChips align="end" refs={userDisplay.workspaceFiles} />}
                   {userFileParts.length > 0 && (
                     <MessageAttachments className="justify-end">
@@ -4264,7 +4481,7 @@ export default function AgentPage() {
                       {message.role === 'assistant' && (
                         <MessageSources items={extractSources(message.parts)} nameOf={sessionNameOf} />
                       )}
-                      {message.role === 'assistant' && (
+                      {message.role === 'assistant' && !(isLastMessage && busy) && (
                         <MessageUsageStats
                           canRegenerate={selectedModelSupportsTools}
                           copied={copiedMessageId === message.id}
@@ -4358,10 +4575,14 @@ export default function AgentPage() {
                 mentions={mentions}
                 onAdd={addMention}
                 onLoadMore={loadMentionSessions}
+                onRemove={removeMention}
                 onSearch={searchMentionSessions}
                 sessions={sessions}
               />
-              <PromptInputTextarea placeholder="问问你的聊天记录，Enter 发送，Shift + Enter 换行…" />
+              <PromptInputTextarea
+                className="pt-1.5 pb-2"
+                placeholder="问问你的聊天记录，Enter 发送，Shift + Enter 换行…"
+              />
             </PromptInputBody>
 
             <PromptInputFooter>
@@ -4409,7 +4630,6 @@ export default function AgentPage() {
                     showGroupSeparator
                   />
                   <MentionTriggerButton showGroupSeparator />
-                  <PromptInputSpeechButton aria-label="语音输入" language="zh-CN" showGroupSeparator variant="tertiary" />
                 </ButtonGroup>
 
                 {planMode && (
@@ -4440,71 +4660,74 @@ export default function AgentPage() {
                   </HeroButton>
                 )}
 
-                <Separator orientation="vertical" variant="tertiary" />
-
-                <ButtonGroup size="sm" variant="tertiary">
-                  <Dropdown isOpen={modelOpen} onOpenChange={setModelOpen}>
-                    <HeroButton aria-label="选择模型" className="max-w-56" size="sm" variant="tertiary">
-                      {selectedModelData?.chefSlug && (
-                        <AIProviderLogo providerId={selectedModelData.chefSlug} alt={selectedModelData.chef} className="shrink-0" size={18} />
-                      )}
-                      {selectedModelData?.name && (
-                        <span className="min-w-0 flex-1 truncate text-left">{selectedModelData.name}</span>
-                      )}
-                      <ChevronDown className="size-3.5 shrink-0" />
-                    </HeroButton>
-                    <Dropdown.Popover className="max-h-96 min-w-72 overflow-y-auto" placement="top start">
-                      <Dropdown.Menu
-                        disabledKeys={disabledModelKeys}
-                        selectedKeys={selectedModelKeys}
-                        selectionMode="single"
-                        onAction={(key) => handleModelSelect(String(key))}
-                      >
-                        <Dropdown.SubmenuTrigger>
-                          <Dropdown.Item id="reasoning-effort" textValue="思考强度">
-                            <Brain className="size-4 shrink-0 text-muted" />
-                            <Label className="min-w-0 flex-1 text-left">思考强度</Label>
-                            <span className="shrink-0 text-muted-foreground text-xs">
-                              {reasoningEffortLabel(reasoningEffort, true)}
-                            </span>
-                            <Dropdown.SubmenuIndicator />
-                          </Dropdown.Item>
-                          <Dropdown.Popover className="min-w-44" placement="right top">
-                            <Dropdown.Menu
-                              selectedKeys={new Set([reasoningEffort])}
-                              selectionMode="single"
-                              onAction={(key) => handleReasoningEffortSelect(String(key))}
-                            >
-                              {REASONING_EFFORT_OPTIONS.map((option) => (
-                                <Dropdown.Item id={option.value} key={option.value} textValue={option.label}>
-                                  <Dropdown.ItemIndicator />
-                                  <Label>{option.label}</Label>
-                                </Dropdown.Item>
-                              ))}
-                            </Dropdown.Menu>
-                          </Dropdown.Popover>
-                        </Dropdown.SubmenuTrigger>
-                        <Separator />
-                        {chefs.map((chef) => (
-                          <Dropdown.Section key={chef}>
-                            <Header>{chef}</Header>
-                            {models
-                              .filter((model) => model.chef === chef)
-                              .map((model) => (
-                                <ModelItem key={model.id} model={model} />
-                              ))}
-                          </Dropdown.Section>
-                        ))}
-                      </Dropdown.Menu>
-                    </Dropdown.Popover>
-                  </Dropdown>
-                </ButtonGroup>
-
+                {codeWorkspaceState?.workspace && (
+                  <CodeWorkspaceApprovalPolicyDropdown
+                    policy={codeWorkspaceState.workspace.approvalPolicy}
+                    onChange={handleCodeWorkspaceApprovalPolicyChange}
+                  />
+                )}
               </PromptInputTools>
 
-              <ButtonGroup size="sm">
-                <AgentPromptSubmit busy={busy} status={status} workspaceReferenceCount={workspaceFileReferences.length} />
-              </ButtonGroup>
+              <div className="flex items-center gap-2">
+                <Dropdown isOpen={modelOpen} onOpenChange={setModelOpen}>
+                  <HeroButton aria-label="选择模型" className="max-w-56" size="sm" variant="tertiary">
+                    {selectedModelData?.chefSlug && (
+                      <AIProviderLogo providerId={selectedModelData.chefSlug} alt={selectedModelData.chef} className="shrink-0" size={18} />
+                    )}
+                    {selectedModelData?.name && (
+                      <span className="min-w-0 flex-1 truncate text-left">{selectedModelData.name}</span>
+                    )}
+                    <ChevronDown className="size-3.5 shrink-0" />
+                  </HeroButton>
+                  <Dropdown.Popover className="max-h-96 min-w-72 overflow-y-auto" placement="top end">
+                    <Dropdown.Menu
+                      disabledKeys={disabledModelKeys}
+                      selectedKeys={selectedModelKeys}
+                      selectionMode="single"
+                      onAction={(key) => handleModelSelect(String(key))}
+                    >
+                      <Dropdown.SubmenuTrigger>
+                        <Dropdown.Item id="reasoning-effort" textValue="思考强度">
+                          <Brain className="size-4 shrink-0 text-muted" />
+                          <Label className="min-w-0 flex-1 text-left">思考强度</Label>
+                          <span className="shrink-0 text-muted-foreground text-xs">
+                            {reasoningEffortLabel(reasoningEffort, true)}
+                          </span>
+                          <Dropdown.SubmenuIndicator />
+                        </Dropdown.Item>
+                        <Dropdown.Popover className="min-w-44" placement="right top">
+                          <Dropdown.Menu
+                            selectedKeys={new Set([reasoningEffort])}
+                            selectionMode="single"
+                            onAction={(key) => handleReasoningEffortSelect(String(key))}
+                          >
+                            {REASONING_EFFORT_OPTIONS.map((option) => (
+                              <Dropdown.Item id={option.value} key={option.value} textValue={option.label}>
+                                <Dropdown.ItemIndicator />
+                                <Label>{option.label}</Label>
+                              </Dropdown.Item>
+                            ))}
+                          </Dropdown.Menu>
+                        </Dropdown.Popover>
+                      </Dropdown.SubmenuTrigger>
+                      <Separator />
+                      {chefs.map((chef) => (
+                        <Dropdown.Section key={chef}>
+                          <Header>{chef}</Header>
+                          {models
+                            .filter((model) => model.chef === chef)
+                            .map((model) => (
+                              <ModelItem key={model.id} model={model} />
+                            ))}
+                        </Dropdown.Section>
+                      ))}
+                    </Dropdown.Menu>
+                  </Dropdown.Popover>
+                </Dropdown>
+                <ButtonGroup size="sm">
+                  <AgentPromptPrimaryAction busy={busy} status={status} workspaceReferenceCount={workspaceFileReferences.length} />
+                </ButtonGroup>
+              </div>
             </PromptInputFooter>
           </PromptInput>
         </PromptInputProvider>

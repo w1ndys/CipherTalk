@@ -49,7 +49,8 @@ export const CONFIG_KEYS = {
   DIARY_CUSTOM_PROMPT: 'diaryCustomPrompt',
   AI_PROVIDER_MODEL_CACHE: 'aiProviderModelCache',
   AI_ACTIVE_CONFIG_PRESET_ID: 'aiActiveConfigPresetId',
-  AGENT_CODE_WORKSPACE_ROOT: 'agentCodeWorkspaceRoot'
+  AGENT_CODE_WORKSPACE_ROOT: 'agentCodeWorkspaceRoot',
+  AGENT_CODE_WORKSPACE_APPROVAL_POLICY: 'agentCodeWorkspaceApprovalPolicy'
 } as const
 
 export type { AccountProfile, AccountProfileInput, AccountProfilePatch }

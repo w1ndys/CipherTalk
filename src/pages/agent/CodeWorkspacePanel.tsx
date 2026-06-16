@@ -400,12 +400,18 @@ export function CodeWorkspacePanelPopover(props: CodeWorkspacePanelPopoverProps)
     <Popover isOpen={props.isOpen} onOpenChange={props.onOpenChange}>
       <HeroButton
         aria-label="代码工作区面板"
-        className="relative size-8 p-0"
+        className="relative size-9 p-0"
         isIconOnly
-        size="sm"
+        render={(buttonProps) => (
+          <button
+            {...buttonProps}
+            title={devServerRunning ? '代码工作区面板 · 预览运行中' : '代码工作区面板'}
+          />
+        )}
+        size="md"
         variant={devServerRunning ? 'secondary' : 'tertiary'}
       >
-        <Monitor className="size-4" />
+        <Monitor className="size-[18px]" />
         {devServerRunning && (
           <span className="absolute right-1.5 top-1.5 size-1.5 rounded-full bg-emerald-500" />
         )}
