@@ -1651,6 +1651,34 @@ type AgentConversationLoaded = AgentConversationRecord & {
   messages: UIMessage[]
 }
 
+const ACTIVE_AGENT_CONVERSATION_KEY = 'ciphertalk.agent.activeConversationId'
+const NEW_AGENT_CONVERSATION_MARKER = 'new'
+const STREAMING_AGENT_SAVE_INTERVAL_MS = 2000
+
+function readStoredActiveAgentConversation(): number | 'new' | null {
+  if (typeof window === 'undefined') return null
+  try {
+    const raw = window.sessionStorage.getItem(ACTIVE_AGENT_CONVERSATION_KEY)
+    if (raw === NEW_AGENT_CONVERSATION_MARKER) return 'new'
+    const id = Number(raw)
+    return Number.isFinite(id) && id > 0 ? id : null
+  } catch {
+    return null
+  }
+}
+
+function storeActiveAgentConversation(id: number | null): void {
+  if (typeof window === 'undefined') return
+  try {
+    window.sessionStorage.setItem(
+      ACTIVE_AGENT_CONVERSATION_KEY,
+      id && id > 0 ? String(id) : NEW_AGENT_CONVERSATION_MARKER,
+    )
+  } catch {
+    // 某些受限渲染上下文可能禁用 sessionStorage。
+  }
+}
+
 function MentionAvatar({ target, className = 'size-7' }: { target: MentionTarget; className?: string }) {
   const [avatarUrl, setAvatarUrl] = useState(target.avatarUrl || '')
   const [imageError, setImageError] = useState(false)
@@ -2257,6 +2285,25 @@ function attachToolElapsedToMessages(messages: UIMessage[], toolElapsedByKey: Re
     } as UIMessage
   })
   return changed ? next : messages
+}
+
+function prepareAgentMessagesForPersist(
+  messages: UIMessage[],
+  subAgentProgress: AgentProgressEvent[],
+  toolElapsedByKey: Record<string, number>,
+): UIMessage[] {
+  return attachToolElapsedToMessages(
+    attachSubAgentProgressToLastAssistant(messages, subAgentProgress),
+    toolElapsedByKey,
+  )
+}
+
+function signatureAgentMessages(messages: UIMessage[]): string {
+  try {
+    return JSON.stringify(messages)
+  } catch {
+    return `${messages.length}:${Date.now()}`
+  }
 }
 
 function finiteNumber(value: unknown): number | undefined {
@@ -3122,6 +3169,10 @@ export default function AgentPage() {
   const [agentProgress, setAgentProgress] = useState<AgentProgressEvent[]>([])
   const [agentRunPending, setAgentRunPending] = useState(false)
   const [subAgentProgress, setSubAgentProgress] = useState<AgentProgressEvent[]>([])
+  const toolElapsedByKeyRef = useRef(toolElapsedByKey)
+  toolElapsedByKeyRef.current = toolElapsedByKey
+  const subAgentProgressRef = useRef(subAgentProgress)
+  subAgentProgressRef.current = subAgentProgress
   const [agentNotice, setAgentNotice] = useState('')
   const [usageDetailsModal, setUsageDetailsModal] = useState<AgentMessageMetadata | null>(null)
   const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null)
@@ -3308,6 +3359,12 @@ export default function AgentPage() {
   const [conversationId, setConversationId] = useState<number | null>(null)
   const conversationIdRef = useRef(conversationId)
   conversationIdRef.current = conversationId
+  const applyConversationId = useCallback((nextId: number | null) => {
+    const normalized = nextId && nextId > 0 ? nextId : null
+    setConversationId(normalized)
+    conversationIdRef.current = normalized
+    storeActiveAgentConversation(normalized)
+  }, [])
   const transport = useMemo(
     () => new IpcChatTransport(
       () => submitScopeRef.current ?? scopeRef.current,
@@ -3322,6 +3379,11 @@ export default function AgentPage() {
   )
   // 流式 chunk 合并到每 50ms 更新一次 UI，避免 token 级高频重渲染拖卡滚动
   const { messages, sendMessage, setMessages, status, stop } = useChat({ transport, experimental_throttle: 50 })
+  const messagesRef = useRef<UIMessage[]>(messages)
+  messagesRef.current = messages
+  const lastSavedMessagesRef = useRef('')
+  const streamingSaveTimerRef = useRef<number | null>(null)
+  const lastStreamingSaveAtRef = useRef(0)
   const [modelOpen, setModelOpen] = useState(false)
   const busy = status === 'submitted' || status === 'streaming'
   const [memoryIntroStatus, setMemoryIntroStatus] = useState<AgentMemoryIntroStatus>('checking')
@@ -3602,22 +3664,57 @@ export default function AgentPage() {
     if (open) void refreshConversationRecords()
   }, [refreshConversationRecords])
 
-  const persistConversationMessages = useCallback(async (
+  const saveConversationMessages = useCallback((
     targetId: number | null,
     nextMessages: UIMessage[],
     nextScope: AgentScope,
   ) => {
-    if (!targetId || nextMessages.length === 0) return
+    if (!targetId || nextMessages.length === 0) return null
     const config = selectedModelConfigRef.current
-    const result = await window.electronAPI.agent.saveConversationMessages({
+    return window.electronAPI.agent.saveConversationMessages({
       id: targetId,
       messages: nextMessages,
       scope: nextScope,
       modelProvider: modelConfigProvider(config),
       modelId: modelConfigId(config),
     })
-    if (result.success) void refreshConversationRecords()
-  }, [refreshConversationRecords])
+  }, [])
+
+  const persistConversationMessages = useCallback(async (
+    targetId: number | null,
+    nextMessages: UIMessage[],
+    nextScope: AgentScope,
+  ) => {
+    const result = await saveConversationMessages(targetId, nextMessages, nextScope)
+    if (result?.success) void refreshConversationRecords()
+  }, [refreshConversationRecords, saveConversationMessages])
+
+  const flushConversationMessagesToStorage = useCallback((options: { refreshRecords?: boolean } = {}) => {
+    const targetId = conversationIdRef.current
+    const currentMessages = messagesRef.current
+    if (!targetId || currentMessages.length === 0) return false
+
+    const messagesToPersist = prepareAgentMessagesForPersist(
+      currentMessages,
+      subAgentProgressRef.current,
+      toolElapsedByKeyRef.current,
+    )
+    if (messagesToPersist !== currentMessages) {
+      setMessages(messagesToPersist)
+      messagesRef.current = messagesToPersist
+    }
+
+    const signature = signatureAgentMessages(messagesToPersist)
+    if (signature === lastSavedMessagesRef.current) return false
+    lastSavedMessagesRef.current = signature
+
+    if (options.refreshRecords) {
+      void persistConversationMessages(targetId, messagesToPersist, activeScopeRef.current)
+    } else {
+      void saveConversationMessages(targetId, messagesToPersist, activeScopeRef.current)
+    }
+    return true
+  }, [persistConversationMessages, saveConversationMessages, setMessages])
 
   const createConversation = useCallback(async (scope: AgentScope, title: string): Promise<number | null> => {
     const config = selectedModelConfigRef.current
@@ -3629,12 +3726,47 @@ export default function AgentPage() {
     })
     const record = result.success ? normalizeConversationRecord(result.conversation) : null
     if (!record) return null
-    setConversationId(record.id)
-    conversationIdRef.current = record.id
+    applyConversationId(record.id)
     setConversationTitle(record.title)
     void refreshConversationRecords()
     return record.id
-  }, [refreshConversationRecords])
+  }, [applyConversationId, refreshConversationRecords])
+
+  const restoreLoadedConversation = useCallback((
+    loaded: AgentConversationLoaded,
+    options: { closeRecords?: boolean } = {},
+  ) => {
+    setMessages(loaded.messages)
+    messagesRef.current = loaded.messages
+    lastSavedMessagesRef.current = signatureAgentMessages(loaded.messages)
+    applyConversationId(loaded.id)
+    setConversationTitle(loaded.title)
+    setTitleEditing(false)
+    setTitleDraft('')
+    activeScopeRef.current = loaded.scope || { kind: 'global' }
+    setMentions([])
+    const restoredToolElapsed: Record<string, number> = {}
+    for (const message of loaded.messages) Object.assign(restoredToolElapsed, readToolElapsedFromMessage(message))
+    setToolElapsedByKey(restoredToolElapsed)
+    setAgentProgress([])
+    setAgentRunPending(false)
+    setSubAgentProgress([])
+    setAgentNotice('')
+    setTitleLoading(false)
+    titleRequestSeqRef.current += 1
+    if (options.closeRecords !== false) setRecordsOpen(false)
+  }, [applyConversationId, setMessages])
+
+  const loadConversationById = useCallback(async (
+    id: number,
+    options: { closeRecords?: boolean } = {},
+  ): Promise<boolean> => {
+    const result = await window.electronAPI.agent.loadConversation(id)
+    const loaded = result.success ? normalizeLoadedConversation(result.conversation) : null
+    if (!loaded) return false
+    restoreLoadedConversation(loaded, options)
+    return true
+  }, [restoreLoadedConversation])
 
   const generateTitleFromFirstMessage = useCallback((firstMessage: string) => {
     const fallback = buildFallbackConversationTitle(firstMessage)
@@ -3664,6 +3796,7 @@ export default function AgentPage() {
   const handleNewConversation = useCallback(() => {
     if (busy) void stop()
     setMessages([])
+    messagesRef.current = []
     setMentions([])
     setConversationTitle('新对话')
     setTitleEditing(false)
@@ -3677,39 +3810,14 @@ export default function AgentPage() {
     activeScopeRef.current = { kind: 'global' }
     lastSavedMessagesRef.current = ''
     titleRequestSeqRef.current += 1
-    setConversationId(null)
+    applyConversationId(null)
     setRecordsOpen(false)
-  }, [busy, setMessages, stop])
+  }, [applyConversationId, busy, setMessages, stop])
 
   const handleOpenRecord = useCallback((record: AgentConversationRecord) => {
     if (busy) void stop()
-    void window.electronAPI.agent.loadConversation(record.id).then((result) => {
-      const loaded = result.success ? normalizeLoadedConversation(result.conversation) : null
-      if (!loaded) return
-      setMessages(loaded.messages)
-      try {
-        lastSavedMessagesRef.current = JSON.stringify(loaded.messages)
-      } catch {
-        lastSavedMessagesRef.current = ''
-      }
-      setConversationId(loaded.id)
-      setConversationTitle(loaded.title)
-      setTitleEditing(false)
-      setTitleDraft('')
-      activeScopeRef.current = loaded.scope || { kind: 'global' }
-      setMentions([])
-      const restoredToolElapsed: Record<string, number> = {}
-      for (const message of loaded.messages) Object.assign(restoredToolElapsed, readToolElapsedFromMessage(message))
-      setToolElapsedByKey(restoredToolElapsed)
-      setAgentProgress([])
-      setAgentRunPending(false)
-      setSubAgentProgress([])
-      setAgentNotice('')
-      setTitleLoading(false)
-      titleRequestSeqRef.current += 1
-      setRecordsOpen(false)
-    })
-  }, [busy, setMessages, stop])
+    void loadConversationById(record.id)
+  }, [busy, loadConversationById, stop])
 
   const handleDeleteRecord = useCallback(async (record: AgentConversationRecord) => {
     try {
@@ -3721,7 +3829,8 @@ export default function AgentPage() {
       setConversationRecords((prev) => prev.filter((item) => item.id !== record.id))
       if (conversationIdRef.current === record.id) {
         setMessages([])
-        setConversationId(null)
+        messagesRef.current = []
+        applyConversationId(null)
         setConversationTitle('新对话')
         setTitleEditing(false)
         setTitleDraft('')
@@ -3737,7 +3846,7 @@ export default function AgentPage() {
       setAgentNotice(error instanceof Error ? error.message : '删除对话失败')
       return false
     }
-  }, [setMessages])
+  }, [applyConversationId, setMessages])
 
   const confirmDeleteRecord = useCallback(async () => {
     if (!recordPendingDelete) return
@@ -3967,6 +4076,38 @@ export default function AgentPage() {
     }
   }, [refreshConversationRecords])
 
+  useEffect(() => {
+    let cancelled = false
+
+    const loadIfStillEmpty = async (id: number): Promise<boolean> => {
+      if (cancelled || conversationIdRef.current || messagesRef.current.length > 0) return false
+      const result = await window.electronAPI.agent.loadConversation(id)
+      if (cancelled || conversationIdRef.current || messagesRef.current.length > 0) return false
+      const loaded = result.success ? normalizeLoadedConversation(result.conversation) : null
+      if (!loaded) return false
+      restoreLoadedConversation(loaded, { closeRecords: false })
+      return true
+    }
+
+    void (async () => {
+      const stored = readStoredActiveAgentConversation()
+      if (stored === NEW_AGENT_CONVERSATION_MARKER) return
+      if (typeof stored === 'number' && await loadIfStillEmpty(stored)) return
+      if (cancelled || conversationIdRef.current || messagesRef.current.length > 0) return
+
+      const result = await window.electronAPI.agent.getLastConversation()
+      const record = result.success ? normalizeConversationRecord(result.conversation) : null
+      if (!record) return
+      await loadIfStillEmpty(record.id)
+    })().catch(() => {
+      // 恢复失败时保持空白新对话。
+    })
+
+    return () => {
+      cancelled = true
+    }
+  }, [restoreLoadedConversation])
+
   const handleSubmit = async (message: PromptInputMessage) => {
     if (busy) {
       void stop()
@@ -4053,7 +4194,9 @@ export default function AgentPage() {
     setSubAgentProgress([])
     runIsPlanRef.current = planModeRef.current
     submitScopeRef.current = activeScopeRef.current
-    setMessages(messages.slice(0, userIndex))
+    const nextMessages = messages.slice(0, userIndex)
+    setMessages(nextMessages)
+    messagesRef.current = nextMessages
 
     const sendPromise = Promise.resolve(sendMessage({ text, files })).finally(() => {
       submitScopeRef.current = null
@@ -4093,29 +4236,38 @@ export default function AgentPage() {
     setModelOpen(false)
   }, [])
 
-  const lastSavedMessagesRef = useRef('')
   useEffect(() => {
-    if (busy || !conversationId || messages.length === 0) return
-    const messagesWithSubAgentProgress = attachSubAgentProgressToLastAssistant(messages, subAgentProgress)
-    if (messagesWithSubAgentProgress !== messages) {
-      setMessages(messagesWithSubAgentProgress)
+    if (!conversationId || messages.length === 0) return
+
+    if (busy) {
+      if (streamingSaveTimerRef.current !== null) return
+      const elapsedMs = Date.now() - lastStreamingSaveAtRef.current
+      const delayMs = Math.max(0, STREAMING_AGENT_SAVE_INTERVAL_MS - elapsedMs)
+      streamingSaveTimerRef.current = window.setTimeout(() => {
+        streamingSaveTimerRef.current = null
+        lastStreamingSaveAtRef.current = Date.now()
+        flushConversationMessagesToStorage()
+      }, delayMs)
       return
     }
-    const messagesWithToolElapsed = attachToolElapsedToMessages(messagesWithSubAgentProgress, toolElapsedByKey)
-    if (messagesWithToolElapsed !== messagesWithSubAgentProgress) {
-      setMessages(messagesWithToolElapsed)
-      return
+
+    if (streamingSaveTimerRef.current !== null) {
+      window.clearTimeout(streamingSaveTimerRef.current)
+      streamingSaveTimerRef.current = null
     }
-    let signature = ''
-    try {
-      signature = JSON.stringify(messagesWithToolElapsed)
-    } catch {
-      signature = `${messagesWithToolElapsed.length}:${Date.now()}`
+    lastStreamingSaveAtRef.current = Date.now()
+    flushConversationMessagesToStorage({ refreshRecords: true })
+  }, [busy, conversationId, flushConversationMessagesToStorage, messages, subAgentProgress, toolElapsedByKey])
+
+  useEffect(() => {
+    return () => {
+      if (streamingSaveTimerRef.current !== null) {
+        window.clearTimeout(streamingSaveTimerRef.current)
+        streamingSaveTimerRef.current = null
+      }
+      flushConversationMessagesToStorage()
     }
-    if (signature === lastSavedMessagesRef.current) return
-    lastSavedMessagesRef.current = signature
-    void persistConversationMessages(conversationId, messagesWithToolElapsed, activeScopeRef.current)
-  }, [busy, conversationId, messages, persistConversationMessages, setMessages, subAgentProgress, toolElapsedByKey])
+  }, [flushConversationMessagesToStorage])
 
   // 出处：会话名解析
   const sessionNameMap = useMemo(() => new Map(sessions.map((s) => [s.username, s.displayName])), [sessions])

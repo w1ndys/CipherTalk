@@ -48,6 +48,11 @@ interface ListConversationOptions {
   limit?: number
 }
 
+interface AccountIdentity {
+  primary: string
+  aliases: string[]
+}
+
 function toScope(kind: string, sessionId?: string | null, displayName?: string | null): AgentScope {
   if ((kind === 'session' || kind === 'persona') && sessionId) {
     return { kind, sessionId, displayName: displayName || undefined }
@@ -90,15 +95,26 @@ export class AgentConversationStore {
     }
   }
 
-  private getAccountId(): string {
+  private getAccountIdentity(): AccountIdentity {
     const config = new ConfigService()
     try {
       const active = config.getActiveAccount()
       const wxid = String(config.get('myWxid') || '').trim()
-      return active?.id || wxid || 'default'
+      const primary = active?.id || wxid || 'default'
+      const aliases = Array.from(new Set([
+        primary,
+        active?.wxid,
+        wxid,
+        'default',
+      ].map((item) => String(item || '').trim()).filter(Boolean)))
+      return { primary, aliases }
     } finally {
       config.close()
     }
+  }
+
+  private getAccountId(): string {
+    return this.getAccountIdentity().primary
   }
 
   private getDb(): Database.Database {
@@ -177,6 +193,40 @@ export class AgentConversationStore {
     db.exec('CREATE INDEX IF NOT EXISTS idx_agent_conv_source ON agent_conversations(account_id, source, external_id)')
   }
 
+  private claimCompatibleAccountRows(db: Database.Database, identity: AccountIdentity): void {
+    const aliasIds = identity.aliases.filter((id) => id && id !== identity.primary)
+    if (aliasIds.length > 0) {
+      const params: Record<string, string> = { primary: identity.primary }
+      const placeholders = aliasIds.map((id, index) => {
+        const key = `alias${index}`
+        params[key] = id
+        return `@${key}`
+      })
+      db.prepare(`
+        UPDATE agent_conversations
+        SET account_id = @primary
+        WHERE account_id IN (${placeholders.join(', ')})
+      `).run(params)
+    }
+
+    const current = db.prepare('SELECT COUNT(*) AS count FROM agent_conversations WHERE account_id = ?')
+      .get(identity.primary) as { count?: number } | undefined
+    if (Number(current?.count || 0) > 0) return
+
+    const accounts = db.prepare(`
+      SELECT account_id AS accountId, COUNT(*) AS count
+      FROM agent_conversations
+      GROUP BY account_id
+    `).all() as Array<{ accountId: string; count: number }>
+    if (accounts.length !== 1) return
+
+    const legacyAccountId = String(accounts[0]?.accountId || '').trim()
+    if (!legacyAccountId || legacyAccountId === identity.primary) return
+
+    db.prepare('UPDATE agent_conversations SET account_id = ? WHERE account_id = ?')
+      .run(identity.primary, legacyAccountId)
+  }
+
   private mapConversation(row: any): AgentConversationRecord {
     return {
       id: Number(row.id),
@@ -194,7 +244,9 @@ export class AgentConversationStore {
 
   list(options: ListConversationOptions = {}): AgentConversationRecord[] {
     const db = this.getDb()
-    const accountId = this.getAccountId()
+    const identity = this.getAccountIdentity()
+    this.claimCompatibleAccountRows(db, identity)
+    const accountId = identity.primary
     const limit = Math.max(1, Math.min(100, Number(options.limit || 50)))
     const filters = ['account_id = @accountId']
     const params: Record<string, unknown> = { accountId, limit }
