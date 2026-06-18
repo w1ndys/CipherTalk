@@ -5,7 +5,7 @@
  * buildTools 在基础工具上加记忆工具、MCP 工具与 delegate_analysis（子 Agent，需 providerConfig）。
  */
 import type { ToolSet } from 'ai'
-import type { AgentMcpToolDescriptor, AgentProviderConfig, AgentScope } from '../types'
+import type { AgentMcpToolDescriptor, AgentProviderConfig, AgentScope, AgentUploadedMediaContext } from '../types'
 import type { CodeWorkspaceRef } from '../codeWorkspaceTypes'
 import { withToolTimeouts } from '../guards'
 import { listContacts } from './listContacts'
@@ -27,7 +27,7 @@ import { webSearch } from './webSearch'
 import { generateImage } from './generateImage'
 import { searchStickers, sendSticker } from './stickers'
 import { sendRandomImage } from './sendRandomImage'
-import { createInspectMediaImage, searchMedia, searchMomentMedia, sendMediaFromHistory } from './mediaHistory'
+import { createInspectMediaImage, createSearchSimilarMedia, searchMedia, searchMomentMedia, sendMediaFromHistory } from './mediaHistory'
 import { sendWechatFile } from './sendWechatFile'
 import { personaControl } from './personaControl'
 import { sendWechatMedia } from './wechatMedia'
@@ -88,6 +88,7 @@ export function buildPlanModeTools(_scope: AgentScope, codeWorkspace?: CodeWorks
 
 export interface BuildChatToolsOptions {
   allowWechatReplyMedia?: boolean
+  uploadedMediaContext?: AgentUploadedMediaContext
 }
 
 function createWechatReplyMediaTools(): ToolSet {
@@ -111,6 +112,7 @@ export function buildChatTools(
   return {
     ...buildBaseTools(scope),
     inspect_media_image: createInspectMediaImage(providerConfig),
+    search_similar_media: createSearchSimilarMedia(options.uploadedMediaContext),
     ...createAgentCapabilityTools(),
     ...buildMcpTools(mcpTools),
     ...(enableWebSearch ? { web_search: webSearch } : {}),

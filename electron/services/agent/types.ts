@@ -94,6 +94,7 @@ export interface AgentRunInput {
   messages: ModelMessage[]
   providerConfig: AgentProviderConfig
   scope: AgentScope
+  uploadedMediaContext?: AgentUploadedMediaContext
   mcpTools?: AgentMcpToolDescriptor[]
   skills?: AgentSkillContextItem[]
   /** 禁用工具装配：用于微信机器人这类只需要纯文本回复的外部入口。 */
@@ -111,6 +112,18 @@ export interface AgentRunInput {
   toolProfile?: AgentToolProfile
   /** 用户选择的代码工作区；真正的文件/命令操作仍由主进程 CodeWorkspaceService 代理并审批。 */
   codeWorkspace?: CodeWorkspaceRef | null
+}
+
+export interface AgentUploadedMediaItem {
+  id: string
+  mediaType: string
+  filename?: string
+  dataUrl: string
+  sizeBytes?: number
+}
+
+export interface AgentUploadedMediaContext {
+  images: AgentUploadedMediaItem[]
 }
 
 // ========= 主进程 ↔ AI 子进程 postMessage 协议 =========

@@ -141,6 +141,8 @@ interface ConfigSchema {
     baseURL: string
     model: string
     dimension: number  // 0 = 未探测；测试连接成功后回填模型实际维度
+    imageEnabled?: boolean
+    imageInputMode?: 'auto' | 'image_base64' | 'content_part' | 'data_url'
   }
   // 重排模型（RAG/Skills/MCP 候选重排，独立于聊天模型与嵌入模型）
   rerankConfig: {
@@ -308,6 +310,8 @@ const defaults: ConfigSchema = {
     baseURL: 'https://api.siliconflow.cn/v1',
     model: 'BAAI/bge-m3',
     dimension: 0,
+    imageEnabled: false,
+    imageInputMode: 'auto',
   },
   rerankConfig: {
     enabled: false,

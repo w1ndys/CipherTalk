@@ -313,7 +313,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     setConfig: (patch: unknown) => ipcRenderer.invoke('embedding:setConfig', patch) as Promise<{ success: boolean; config?: unknown; error?: string }>,
     test: (cfg: unknown) => ipcRenderer.invoke('embedding:test', cfg) as Promise<{ success: boolean; dimension?: number; error?: string }>,
     sessionStatus: (sessionId: string) => ipcRenderer.invoke('embedding:sessionStatus', sessionId) as Promise<{ success: boolean; enabled?: boolean; count?: number; store?: unknown; error?: string }>,
-    buildSession: (sessionId: string) => ipcRenderer.invoke('embedding:buildSession', sessionId) as Promise<{ success: boolean; indexed?: number; error?: string }>,
+    buildSession: (sessionId: string) => ipcRenderer.invoke('embedding:buildSession', sessionId) as Promise<{ success: boolean; indexed?: number; mediaIndexed?: number; error?: string }>,
     onBuildProgress: (callback: (progress: unknown) => void): (() => void) => {
       const listener = (_e: unknown, progress: unknown) => callback(progress)
       ipcRenderer.on('embedding:buildProgress', listener)

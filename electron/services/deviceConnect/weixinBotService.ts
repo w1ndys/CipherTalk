@@ -1420,8 +1420,27 @@ class WeixinBotService {
         this.logger?.warn('WechatBot', '发送向量化进度失败', { from, error: String(e) })
       })
     })
+    let mediaIndexed = 0
+    if (messageVectorService.isMediaReady(cfg)) {
+      mediaIndexed = await messageVectorService.ensureSessionMediaVectors(sessionId, cfg, undefined, (progress: unknown) => {
+        const progressSession = this.session
+        if (!progressSession) return
+        const now = Date.now()
+        if (now - lastProgressAt < 20_000) return
+        lastProgressAt = now
+        const data = progress as { message?: unknown; current?: unknown; total?: unknown }
+        const message = typeof data.message === 'string'
+          ? data.message
+          : Number.isFinite(Number(data.current)) && Number.isFinite(Number(data.total))
+            ? `已处理 ${Number(data.current)}/${Number(data.total)}`
+            : '正在建立媒体向量索引'
+        void sendText(progressSession, from, message, contextToken).catch((e) => {
+          this.logger?.warn('WechatBot', '发送媒体向量化进度失败', { from, error: String(e) })
+        })
+      })
+    }
     const doneSession = this.session
-    if (doneSession) await sendText(doneSession, from, `「${displayName}」的语义索引已建立，新增 ${indexed} 条。`, contextToken)
+    if (doneSession) await sendText(doneSession, from, `「${displayName}」的语义索引已建立，文本 ${indexed} 条，媒体 ${mediaIndexed} 张。`, contextToken)
   }
 
   private async handlePersonaModeMessage(from: string, text: string, mode: WechatConversationMode, contextToken?: string): Promise<void> {

@@ -29,7 +29,8 @@ const TOOL_PROMPT = `
 - search_moments：查询/筛选朋友圈动态（只读），支持发布者 usernames、关键词、时间范围、分页；用于"某人发过什么朋友圈 / 朋友圈里提到 X / 某段时间朋友圈内容"。
 - moments_stats：统计朋友圈动态（只读），用于"朋友圈发帖趋势 / 内容类型占比 / 谁发得多 / 点赞评论最多"，返回适合做图的数据分布。
 - search_moment_media：检索朋友圈里的正文图片、评论图片和评论表情包，返回 mediaId。用户说"某人朋友圈第一张图片"时，默认理解为"这个人最新一条含图朋友圈里的第 1 张图"，先 list_contacts 拿 usernames，再 search_moment_media({order:"latest",target:"post",limit:1})。
-- search_media：检索本地聊天记录里的历史图片/表情包，按会话、时间、方向、类型和前文语境筛选。结果里的 mediaId 可交给 inspect_media_image 看图，或交给 send_media_from_history 展示/回复。
+- search_media：检索本地聊天记录里的历史图片/表情包，按会话、时间、方向、类型和前文语境筛选；query 存在且图片向量化已开启时，会优先走文字找图。结果里的 mediaId 可交给 inspect_media_image 看图，或交给 send_media_from_history 展示/回复。
+- search_similar_media：用本轮用户上传的图片做以图找图，从聊天记录/朋友圈历史图片向量里找相似媒体。用户说“这张图以前发过吗 / 找类似这张的 / 历史里有没有这张”时用它；uploadedImageId 默认 upload-1。
 - inspect_media_image：把 search_media / search_moment_media 返回的 mediaId 自动下载、解密并喂给当前 Agent 模型识别图片。用于"这张图是什么/朋友圈第一张图是什么/聊天记录上一张图里有什么"。如果模型不支持图像输入，会返回明确错误；不要假装看过。
 - send_media_from_history：把 search_media / search_moment_media 选中的历史图片/表情包作为当前回复图片展示或回复附件。只在用户明确要看/发/抽取历史图片或表情包时用；发出后不要输出路径。
 - send_random_image：从本地聊天记录里随机抽一张历史图片作为当前回复图片。仅当用户明确要求"随机发张图/抽张图/来张老照片"这类玩法时使用，回答时提一下来源（谁/何时）。
@@ -65,6 +66,8 @@ const ROUTING_PROMPT = `
 - 人名/群名解析 → list_contacts；列群 / 群成员 / 群内发言排行 → list_groups / group_members / group_member_ranking
 - 朋友圈内容查询 → search_moments；朋友圈数量/趋势/占比/点赞评论排行 → moments_stats
 - 朋友圈/聊天记录图片内容识别 → 先 list_contacts（如涉及某人）→ search_moment_media 或 search_media 拿 mediaId → inspect_media_image 看图后回答；不要在未调用 inspect_media_image 时猜图片内容。
+- 文字找历史图片 → list_contacts（如涉及某人）→ search_media({query, sessionId})；命中后需要描述内容再 inspect_media_image。
+- 以图找图/找相似图/这张图以前发过吗 → search_similar_media({uploadedImageId:"upload-1", source:"all"})；如果涉及某人/某朋友圈，先 list_contacts 再填 sessionId 或 usernames。
 - 用户要求"给我看看/发出来/把那张图发出来" → search_moment_media 或 search_media 拿 mediaId → send_media_from_history 展示/回复；这和 inspect_media_image 不同，后者只看图不发送附件。
 - 导出聊天记录 → export_chat；先校验和补齐参数，参数齐全后必须先问最终确认，确认后才传 confirmed=true
 - 找本机文件/不知道路径 → find_files；要搜正文 → search_local_files；索引不足 → index_local_files
@@ -91,7 +94,7 @@ const EVIDENCE_PROMPT = `
 - 精确词用 search_messages，主题/相关用 semantic_search；如果用户已 @ 单个会话，主题类问题优先用 semantic_search；选错就换另一个再试。
 - query_sql 是兜底不是首选：凡是上面任一结构化工具能回答的，绝不准写 SQL。只有结构化工具确实答不了（已经试过且结果不够）时才用 query_sql；调用时必须填写 reason、attemptedTools、whyStructuredToolsInsufficient 三个审计字段。
 - 工具返回 {error} 或空结果时，如实说明"没找到/查询失败"，不要硬编。
-- 历史图片/表情包内容只有 inspect_media_image 成功后才能描述；search_media/search_moment_media 只提供来源线索。当前模型不支持图像输入、图片下载/解密失败、视频/LivePhoto 不支持时，要直接说明原因。
+- 历史图片/表情包内容只有 inspect_media_image 成功后才能描述；search_media/search_moment_media/search_similar_media 只提供来源线索。图片向量化未开启、当前模型不支持图像输入、图片下载/解密失败、视频/LivePhoto 不支持时，要直接说明原因。
 - 时间一律用毫秒时间戳传给工具；anchor 字段原样回传，不要改动。
 - 遇到"要读很多条消息才能归纳"的大任务（长时间跨度、多对象、多主题的总结/复盘），先拆成最多 4 个互相独立的子任务（按季度/月份/对象/主题切分），用一次 delegate_analysis({ tasks, maxConcurrency: 4 }) 并发委托子助手，别连续多次单任务委托，也别自己把海量原文读进上下文；精确小查询不要委托。
 - 复杂/多步问题（跨多人、长时间跨度、要综合多轮）先用 update_plan 列步骤再动手，每完成一步更新；简单问题别用，直接查。

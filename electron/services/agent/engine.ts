@@ -241,6 +241,7 @@ export async function runAgent(
           ? buildCodeOnlyTools(codeWorkspace, webSearchOn, imageGenOn)
           : buildTools(input.scope, input.providerConfig, input.mcpTools, webSearchOn, imageGenOn, codeWorkspace, {
             allowWechatReplyMedia: input.allowWechatReplyMedia === true,
+            uploadedMediaContext: input.uploadedMediaContext,
           }))
     perf('构建工具集', `${Object.keys(baseTools).length} 个`)
     const prepared = buildAgentInstructions(input, memoryContext, relevantMemoryContext, baseTools, webSearchOn, imageGenOn)

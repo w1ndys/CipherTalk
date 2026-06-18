@@ -5,8 +5,8 @@
  * 自带 IPC（embedding:getConfig/setConfig/test）。
  */
 import { useEffect, useState } from 'react'
-import { Button, Card, Description, InputGroup, Label, Switch, TextField } from '@heroui/react'
-import { AlertCircle, CheckCircle, ExternalLink, Plug } from 'lucide-react'
+import { Button, Card, Description, InputGroup, Label, ListBox, Select, Switch, TextField } from '@heroui/react'
+import { AlertCircle, CheckCircle, ExternalLink, Image, Plug } from 'lucide-react'
 import type { EmbeddingConfig } from '@/types/electron'
 
 const SILICONFLOW_REFERRAL_URL = 'https://cloud.siliconflow.cn/i/lNl8YK1m'
@@ -19,6 +19,19 @@ const DEFAULT_CFG: EmbeddingConfig = {
   baseURL: 'https://api.siliconflow.cn/v1',
   model: 'BAAI/bge-m3',
   dimension: 0,
+  imageEnabled: false,
+  imageInputMode: 'auto',
+}
+
+const IMAGE_INPUT_MODE_OPTIONS: Array<{ id: NonNullable<EmbeddingConfig['imageInputMode']>; label: string; description: string }> = [
+  { id: 'auto', label: '自动', description: '先试图片对象 base64，再试 content-part / data-url' },
+  { id: 'image_base64', label: 'Base64 图片对象', description: 'input 使用 { image: "纯 base64" }，硅基 VL Embedding 推荐' },
+  { id: 'content_part', label: 'Content Part', description: 'input 使用 image_url 内容块' },
+  { id: 'data_url', label: 'Data URL', description: 'input 直接传图片 data URL' },
+]
+
+function imageInputModeLabel(mode: EmbeddingConfig['imageInputMode']): string {
+  return IMAGE_INPUT_MODE_OPTIONS.find((item) => item.id === (mode || 'auto'))?.label || '自动'
 }
 
 export default function EmbeddingTab() {
@@ -47,11 +60,14 @@ export default function EmbeddingTab() {
     try {
       const res = await window.electronAPI.embedding.test(cfg)
       if (res.success) {
+        const imageText = cfg.imageEnabled && res.imageDimension
+          ? `；图片向量 ${res.imageDimension} 维，模式 ${res.imageInputMode || cfg.imageInputMode || 'auto'}`
+          : ''
         setStatus({
           ok: true,
-          text: res.dimensionMismatch || (cfg.dimension > 0
+          text: `${res.dimensionMismatch || (cfg.dimension > 0
             ? `连接成功，探测到模型维度 ${res.dimension}`
-            : `连接成功，模型默认维度 ${res.dimension}（如需固定维度，在上方"向量维度"填写）`),
+            : `连接成功，模型默认维度 ${res.dimension}（如需固定维度，在上方"向量维度"填写）`)}${imageText}`,
         })
       } else {
         setStatus({ ok: false, text: res.error || '测试失败' })
@@ -134,6 +150,60 @@ export default function EmbeddingTab() {
             留空/0 = 自动；填具体值则要求接口按该维度输出（需模型支持，如 text-embedding-3 / Qwen3-embedding；bge-m3 等固定维度的填默认值或留空）。
           </Description>
         </TextField>
+
+        <div className="rounded-md border border-border/70 p-4">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div className="min-w-0 space-y-1">
+              <Label className="flex items-center gap-2">
+                <Image size={16} />
+                图片向量化
+              </Label>
+              <Description>
+                开启后，聊天记录和朋友圈里的历史图片会在检索时发送给当前嵌入服务商生成图片向量，用于文字找图和以图找图。
+              </Description>
+            </div>
+            <Switch
+              aria-label={cfg.imageEnabled ? '关闭图片向量化' : '启用图片向量化'}
+              isSelected={cfg.imageEnabled === true}
+              onChange={(v) => patch({ imageEnabled: v })}
+            >
+              <Switch.Control>
+                <Switch.Thumb />
+              </Switch.Control>
+            </Switch>
+          </div>
+
+          <Select
+            className="mt-4 w-full"
+            isDisabled={!cfg.imageEnabled}
+            selectedKey={cfg.imageInputMode || 'auto'}
+            onSelectionChange={(key) => {
+              const next = String(key || 'auto') as NonNullable<EmbeddingConfig['imageInputMode']>
+              patch({ imageInputMode: next })
+            }}
+            variant="secondary"
+          >
+            <Label>图片输入格式</Label>
+            <Select.Trigger>
+              <Select.Value>{() => imageInputModeLabel(cfg.imageInputMode)}</Select.Value>
+              <Select.Indicator />
+            </Select.Trigger>
+            <Select.Popover>
+              <ListBox>
+                {IMAGE_INPUT_MODE_OPTIONS.map((option) => (
+                  <ListBox.Item key={option.id} id={option.id} textValue={option.label}>
+                    <div className="flex flex-col">
+                      <span>{option.label}</span>
+                      <span className="text-xs text-muted-foreground">{option.description}</span>
+                    </div>
+                    <ListBox.ItemIndicator />
+                  </ListBox.Item>
+                ))}
+              </ListBox>
+            </Select.Popover>
+            <Description>不确定模型格式时选自动。</Description>
+          </Select>
+        </div>
 
         {status && (
           <p className={`flex items-center gap-1.5 text-sm ${status.ok ? 'text-green-600' : 'text-red-600'}`}>

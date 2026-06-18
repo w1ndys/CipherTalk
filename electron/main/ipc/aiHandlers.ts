@@ -3,7 +3,7 @@ import { existsSync, readFileSync } from 'fs'
 import { join } from 'path'
 import type { UIMessage } from 'ai'
 import type { MainProcessContext } from '../context'
-import type { AgentProviderConfig, AgentProviderConfigOverride, AgentScope, AgentToolProfile } from '../../services/agent/types'
+import type { AgentProviderConfig, AgentProviderConfigOverride, AgentScope, AgentToolProfile, AgentUploadedMediaContext } from '../../services/agent/types'
 import type { CodeWorkspaceRef } from '../../services/agent/codeWorkspaceTypes'
 import type { PersonaNotes, PersonaRecord, PersonaTtsVoiceBinding } from '../../services/agent/persona/personaTypes'
 
@@ -55,6 +55,29 @@ function lastUserTextFromUiMessages(messages: UIMessage[] = []): string {
 function localDateKey(date = new Date()): string {
   const pad = (value: number) => String(value).padStart(2, '0')
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`
+}
+
+function extractUploadedMediaContext(messages: UIMessage[] = []): AgentUploadedMediaContext | undefined {
+  let userMessage: UIMessage | undefined
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    if (messages[i]?.role === 'user') {
+      userMessage = messages[i]
+      break
+    }
+  }
+  const parts = Array.isArray((userMessage as any)?.parts) ? (userMessage as any).parts as any[] : []
+  const images = parts
+    .filter((part) => part && part.type === 'file' && typeof part.url === 'string' && String(part.mediaType || '').startsWith('image/'))
+    .map((part, index) => ({
+      id: `upload-${index + 1}`,
+      mediaType: String(part.mediaType || 'image/png'),
+      filename: typeof part.filename === 'string' ? part.filename : undefined,
+      dataUrl: String(part.url || ''),
+      sizeBytes: Number.isFinite(Number(part.sizeBytes)) ? Number(part.sizeBytes) : undefined,
+    }))
+    .filter((item) => item.dataUrl.startsWith('data:image/'))
+    .slice(0, 6)
+  return images.length > 0 ? { images } : undefined
 }
 
 function sanitizePersonaVoiceForRenderer(ttsVoice: PersonaTtsVoiceBinding | null | undefined): PersonaTtsVoiceBinding | null {
@@ -330,6 +353,7 @@ export function registerAiHandlers(ctx: MainProcessContext): void {
       const uiMessages = shouldStripProviderMetadata(providerConfig)
         ? stripUiMessageProviderMetadata(payload.messages)
         : payload.messages
+      const uploadedMediaContext = extractUploadedMediaContext(uiMessages)
       const messages = await convertToModelMessages(uiMessages)
       markPerf('整理消息', `${messages.length} 条`)
       stage = 'inject_tools_and_skills'
@@ -389,6 +413,7 @@ export function registerAiHandlers(ctx: MainProcessContext): void {
           messages,
           providerConfig,
           scope: profile.scope,
+          uploadedMediaContext,
           mcpTools,
           skills,
           planMode: payload.planMode === true,
@@ -770,7 +795,7 @@ export function registerAiHandlers(ctx: MainProcessContext): void {
       const { messageVectorService } = await import('../../services/search/messageVectorService')
       const cfg = getEmbeddingConfig()
       const store = messageVectorService.getSessionVectorStoreInfo(sessionId)
-      return { success: true, enabled: messageVectorService.isReady(cfg), count: store.count, store }
+      return { success: true, enabled: messageVectorService.isReady(cfg), count: store.count, mediaCount: store.mediaCount || 0, store }
     } catch (e) {
       return { success: false, error: e instanceof Error ? e.message : String(e) }
     }
@@ -791,7 +816,13 @@ export function registerAiHandlers(ctx: MainProcessContext): void {
       const indexed = await messageVectorService.ensureSessionVectors(sessionId, cfg, undefined, (progress) => {
         if (!sender.isDestroyed()) sender.send('embedding:buildProgress', progress)
       })
-      return { success: true, indexed }
+      let mediaIndexed = 0
+      if (messageVectorService.isMediaReady(cfg)) {
+        mediaIndexed = await messageVectorService.ensureSessionMediaVectors(sessionId, cfg, undefined, (progress) => {
+          if (!sender.isDestroyed()) sender.send('embedding:buildProgress', progress)
+        })
+      }
+      return { success: true, indexed, mediaIndexed }
     } catch (e) {
       return { success: false, error: e instanceof Error ? e.message : String(e) }
     }

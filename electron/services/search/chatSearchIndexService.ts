@@ -509,6 +509,10 @@ export class ChatSearchIndexService {
 
         CREATE INDEX IF NOT EXISTS idx_message_index_session_time
           ON message_index(session_id, sort_seq DESC, create_time DESC, local_id DESC);
+        CREATE INDEX IF NOT EXISTS idx_message_index_session_type_time
+          ON message_index(session_id, local_type, sort_seq DESC, create_time DESC, local_id DESC);
+        CREATE INDEX IF NOT EXISTS idx_message_index_type_time
+          ON message_index(local_type, sort_seq DESC, create_time DESC, local_id DESC);
         CREATE INDEX IF NOT EXISTS idx_message_index_session_sender
           ON message_index(session_id, sender_username);
       `)
@@ -888,6 +892,7 @@ export class ChatSearchIndexService {
           messagesScanned: scanned,
           indexedCount: this.getIndexedCount(db, sessionId)
         }, onProgress)
+        await this.yieldToEventLoop()
 
         hasMore = Boolean(result.hasMore)
       }
@@ -926,6 +931,7 @@ export class ChatSearchIndexService {
         messagesScanned: scanned,
         indexedCount: this.getIndexedCount(db, sessionId)
       }, onProgress)
+      await this.yieldToEventLoop()
     }
 
     while (hasMore && messages.length > 0 && (!maxMessages || scanned < maxMessages)) {
@@ -956,6 +962,7 @@ export class ChatSearchIndexService {
         messagesScanned: scanned,
         indexedCount: this.getIndexedCount(db, sessionId)
       }, onProgress)
+      await this.yieldToEventLoop()
     }
 
     const isComplete = !hasMore || (maxMessages ? scanned < maxMessages : false)
@@ -1207,6 +1214,29 @@ export class ChatSearchIndexService {
       console.error('[ChatSearchIndex] pickRandomImageMessage 失败:', e)
       return null
     }
+  }
+
+  getPrecedingTextMap(sessionId: string, sortSeqs: number[]): Map<number, string> {
+    const out = new Map<number, string>()
+    const unique = Array.from(new Set(sortSeqs.filter((value) => Number.isFinite(Number(value))).map(Number)))
+    if (unique.length === 0) return out
+    try {
+      const db = this.getDb()
+      const stmt = db.prepare(`
+        SELECT parsed_content
+        FROM message_index
+        WHERE session_id = ? AND sort_seq < ? AND local_type = 1 AND trim(parsed_content) != ''
+        ORDER BY sort_seq DESC
+        LIMIT 1
+      `)
+      for (const sortSeq of unique) {
+        const row = stmt.get(sessionId, sortSeq) as { parsed_content?: string } | undefined
+        out.set(sortSeq, String(row?.parsed_content || ''))
+      }
+    } catch {
+      // ignore; callers treat missing context as empty
+    }
+    return out
   }
 
   /**

@@ -913,6 +913,7 @@ const TOOL_LABELS: Record<string, string> = {
   generate_image: '生成图片',
   search_moment_media: '找朋友圈图片',
   search_media: '找历史媒体',
+  search_similar_media: '以图找图',
   inspect_media_image: '识别历史图片',
   send_media_from_history: '发送历史媒体',
   search_stickers: '翻表情包',

@@ -23,6 +23,7 @@ const TOOL_TIMEOUT_OVERRIDES: Record<string, number> = {
   search_stickers: 240_000, // 首次构建表情包词典可能触发最近会话补建索引
   search_media: 240_000, // 首次搜索历史媒体可能触发最近会话补建索引
   search_moment_media: 240_000, // 朋友圈媒体检索可能触发 XML 解析和媒体元数据整理
+  search_similar_media: 600_000, // 以图找图首次会解密/下载并向量化历史图片
   inspect_media_image: 600_000, // 历史媒体解密 + 额外一次视觉模型调用
   send_random_image: 240_000, // 同上 + 图片解密
   send_media_from_history: 240_000, // 历史图片/表情包解密与落盘

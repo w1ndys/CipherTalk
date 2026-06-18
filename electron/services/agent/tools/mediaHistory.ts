@@ -11,10 +11,15 @@ import type { ChatSearchMediaKind, ChatSearchMediaMessageRow } from '../../searc
 import type { SnsCommentEmoji, SnsCommentImage, SnsMedia, SnsPost } from '../../snsService'
 import { getProviderDefinition } from '../../ai/providers/catalog'
 import { createLanguageModel } from '../provider'
-import type { AgentProviderConfig } from '../types'
-import { msToSeconds, resolveSenders, toLocalTime } from './shared'
+import type { AgentProviderConfig, AgentUploadedMediaContext } from '../types'
+import { getRecentChatSessions, msToSeconds, resolveSenders, toLocalTime } from './shared'
 import { reportAgentProgress } from '../progress'
 import { bootstrapIndexRecentSessions, getAiImageOutputDir, writeDataUrlToFile } from './stickers'
+import {
+  detectImageMime as detectSharedImageMime,
+  resolveMediaIdToFile as resolveSharedMediaIdToFile,
+  stripFileProtocol as stripSharedFileProtocol,
+} from '../../media/mediaResolver'
 
 type ChatMediaIdPayload = {
   source: 'chat'
@@ -75,6 +80,7 @@ type ResolveMediaResult = ResolvedMediaFile | {
 
 const MAX_VISION_IMAGE_BYTES = 20 * 1024 * 1024
 const MAX_MOMENT_FETCH_LIMIT = 200
+const MEDIA_VECTOR_BOOTSTRAP_SESSION_CAP = 5
 
 function safeFileSegment(value: string): string {
   return String(value || 'media').replace(/[^a-zA-Z0-9_@.-]/g, '_').slice(0, 80) || 'media'
@@ -200,6 +206,52 @@ function detectImageMime(buffer: Buffer): string | null {
   if (ext === '.gif') return 'image/gif'
   if (ext === '.webp') return 'image/webp'
   return null
+}
+
+function imageDataUrlToBuffer(dataUrl: string): { buffer: Buffer; mediaType: string } | null {
+  const match = /^data:(image\/[a-z+]+);base64,(.+)$/i.exec(String(dataUrl || ''))
+  if (!match) return null
+  try {
+    return { mediaType: match[1].toLowerCase(), buffer: Buffer.from(match[2], 'base64') }
+  } catch {
+    return null
+  }
+}
+
+async function ensureChatMediaVectorsForSearch(
+  sessionId: string | undefined,
+  cfg: import('../../ai/embeddingService').EmbeddingConfig,
+): Promise<number> {
+  const { messageVectorService } = await import('../../search/messageVectorService')
+  if (sessionId) return messageVectorService.ensureSessionMediaVectors(sessionId, cfg)
+  const sessions = await getRecentChatSessions(MEDIA_VECTOR_BOOTSTRAP_SESSION_CAP)
+  let total = 0
+  for (const sid of sessions) {
+    try {
+      total += await messageVectorService.ensureSessionMediaVectors(sid, cfg, 80)
+    } catch {
+      /* 单会话媒体向量化失败跳过 */
+    }
+  }
+  return total
+}
+
+function formatMediaVectorHit(hit: import('../../search/messageVectorService').MediaVectorHit, matchedBy: 'vector' | 'both' = 'vector') {
+  return {
+    mediaId: hit.mediaId,
+    source: hit.source,
+    kind: hit.mediaKind,
+    mediaKind: hit.mediaKind,
+    label: mediaLabel(hit.mediaKind),
+    time: hit.timeText || toLocalTime(hit.time),
+    from: hit.from,
+    sender: hit.sender,
+    context: hit.context,
+    score: Number(hit.score.toFixed(4)),
+    matchedBy,
+    localPath: hit.filePath,
+    postId: hit.postId,
+  }
 }
 
 async function resolveImageToFile(sessionId: string, localId: number, createTime: number): Promise<string | null> {
@@ -530,13 +582,60 @@ export const searchMedia = tool({
           context: item.context || undefined,
           md5: item.kind === 'image' ? item.imageInfo.md5 : item.emojiInfo.md5,
           localPath: localPath || undefined,
+          matchedBy: 'keyword',
         })
       }
 
+      let vectorHits: ReturnType<typeof formatMediaVectorHit>[] = []
+      if (String(query || '').trim()) {
+        try {
+          const { getEmbeddingConfig } = await import('../../ai/embeddingService')
+          const { messageVectorService, embedQuery } = await import('../../search/messageVectorService')
+          const cfg = getEmbeddingConfig()
+          if (messageVectorService.isMediaReady(cfg)) {
+            reportAgentProgress({
+              stage: 'indexing',
+              title: '准备历史图片向量',
+              detail: query,
+              sessionId,
+            })
+            await ensureChatMediaVectorsForSearch(sessionId, cfg)
+            const queryVec = await embedQuery(String(query), cfg)
+            vectorHits = messageVectorService
+              .searchMediaVectors(queryVec, { source: 'chat', sessionId, limit })
+              .map((hit) => formatMediaVectorHit(hit))
+          }
+        } catch (error) {
+          if (hits.length === 0) {
+            return {
+              error: `图片向量检索失败：${error instanceof Error ? error.message : String(error)}`,
+              note: '如果当前嵌入模型支持图片向量化，请在设置 → 嵌入中开启“图片向量化”。',
+              hits,
+            }
+          }
+        }
+      }
+
+      const seen = new Set<string>()
+      const mergedHits = [...vectorHits, ...hits]
+        .map((hit) => {
+          if (vectorHits.some((item) => item.mediaId === hit.mediaId) && hits.some((item) => item.mediaId === hit.mediaId)) {
+            return { ...hit, matchedBy: 'both' }
+          }
+          return hit
+        })
+        .filter((hit) => {
+          if (seen.has(hit.mediaId)) return false
+          seen.add(hit.mediaId)
+          return true
+        })
+        .slice(0, limit)
+
       return {
-        matched,
+        matched: vectorHits.length > 0 ? true : matched,
+        retrieval: vectorHits.length > 0 ? 'media_vector' : 'keyword',
         note: terms.length > 0 && matched === false ? '没有匹配语境的媒体；可以放宽关键词或指定会话/时间。' : undefined,
-        hits,
+        hits: mergedHits,
       }
     } catch (error) {
       return { error: error instanceof Error ? error.message : String(error) }
@@ -634,12 +733,54 @@ export const searchMomentMedia = tool({
         .slice(0, limit)
         .map(({ score: _score, ...hit }) => hit)
 
+      let vectorHits: ReturnType<typeof formatMediaVectorHit>[] = []
+      if (String(keyword || '').trim()) {
+        try {
+          const { getEmbeddingConfig } = await import('../../ai/embeddingService')
+          const { messageVectorService, embedQuery } = await import('../../search/messageVectorService')
+          const cfg = getEmbeddingConfig()
+          if (messageVectorService.isMediaReady(cfg)) {
+            await messageVectorService.ensureMomentMediaVectors({
+              usernames,
+              keyword,
+              startTimeMs,
+              endTimeMs,
+              order,
+              target,
+              limit: Math.max(limit * 4, limit),
+            }, cfg)
+            const queryVec = await embedQuery(String(keyword), cfg)
+            vectorHits = messageVectorService
+              .searchMediaVectors(queryVec, { source: 'moment', usernames, limit })
+              .map((hit) => formatMediaVectorHit(hit))
+          }
+        } catch {
+          /* 朋友圈图片向量失败时保留普通媒体检索结果 */
+        }
+      }
+
+      const seen = new Set<string>()
+      const mergedHits = [...vectorHits, ...hits]
+        .map((hit) => {
+          if (vectorHits.some((item) => item.mediaId === hit.mediaId) && hits.some((item) => item.mediaId === hit.mediaId)) {
+            return { ...hit, matchedBy: 'both' }
+          }
+          return hit
+        })
+        .filter((hit) => {
+          if (seen.has(hit.mediaId)) return false
+          seen.add(hit.mediaId)
+          return true
+        })
+        .slice(0, limit)
+
       return {
         scope: usernames?.length ? 'users' : 'all',
         order,
         target,
-        hits,
-        note: hits.length === 0
+        retrieval: vectorHits.length > 0 ? 'media_vector' : 'metadata',
+        hits: mergedHits,
+        note: mergedHits.length === 0
           ? (skippedVideos > 0 ? '只找到视频/LivePhoto，暂不支持视频帧识别。' : '没有找到可用的朋友圈图片或表情包。')
           : undefined,
       }
@@ -658,7 +799,7 @@ export const sendMediaFromHistory = tool({
   }),
   execute: async ({ mediaId }) => {
     try {
-      const resolved = await resolveMediaIdToFile(mediaId)
+      const resolved = await resolveSharedMediaIdToFile(mediaId)
       if (!resolved.success) return { error: resolved.error }
       return {
         ...resolved,
@@ -669,6 +810,82 @@ export const sendMediaFromHistory = tool({
     }
   },
 })
+
+export function createSearchSimilarMedia(uploadedMediaContext?: AgentUploadedMediaContext) {
+  return tool({
+    description:
+      '用本轮用户上传的图片做以图找图，从聊天记录和朋友圈的历史图片/表情包向量里找相似媒体。' +
+      'uploadedImageId 使用 upload-1、upload-2...；用户只发一张图时默认 upload-1。命中 mediaId 可继续交给 inspect_media_image 识别或 send_media_from_history 展示。',
+    inputSchema: z.object({
+      uploadedImageId: z.string().default('upload-1').describe('本轮用户上传图片 ID，如 upload-1；不确定时用 upload-1'),
+      sessionId: z.string().optional().describe('限定某聊天会话/群 username'),
+      usernames: z.array(z.string()).optional().describe('限定朋友圈发布者 username'),
+      source: z.enum(['chat', 'moment', 'all']).default('all').describe('搜索范围'),
+      limit: z.number().int().min(1).max(20).default(8).describe('返回条数上限'),
+    }),
+    execute: async ({ uploadedImageId, sessionId, usernames, source, limit }) => {
+      try {
+        const image = (uploadedMediaContext?.images || []).find((item) => item.id === uploadedImageId)
+          || uploadedMediaContext?.images?.[0]
+        if (!image) {
+          return {
+            error: '本轮没有可用于以图找图的上传图片。',
+            availableUploadedImageIds: uploadedMediaContext?.images?.map((item) => item.id) || [],
+          }
+        }
+        const decoded = imageDataUrlToBuffer(image.dataUrl)
+        if (!decoded) return { error: '上传图片不是可读取的 data URL，无法向量化。' }
+
+        const { getEmbeddingConfig, embedImage } = await import('../../ai/embeddingService')
+        const { messageVectorService } = await import('../../search/messageVectorService')
+        const cfg = getEmbeddingConfig()
+        if (!messageVectorService.isMediaReady(cfg)) {
+          return {
+            error: '图片向量化未开启或嵌入模型未配置。请在设置 → 嵌入中启用嵌入模型，并打开“图片向量化”。',
+          }
+        }
+
+        if (source === 'chat' || source === 'all') {
+          reportAgentProgress({
+            stage: 'indexing',
+            title: '准备聊天图片向量',
+            detail: image.filename || uploadedImageId,
+            sessionId,
+          })
+          await ensureChatMediaVectorsForSearch(sessionId, cfg)
+        }
+        if (source === 'moment' || source === 'all') {
+          reportAgentProgress({
+            stage: 'indexing',
+            title: '准备朋友圈图片向量',
+            detail: usernames?.join(', ') || '最近朋友圈',
+          })
+          await messageVectorService.ensureMomentMediaVectors({
+            usernames,
+            order: 'latest',
+            target: 'all',
+            limit: 120,
+          }, cfg)
+        }
+
+        const query = await embedImage({ data: decoded.buffer, mediaType: decoded.mediaType, filename: image.filename }, cfg, { timeoutMs: 45000 })
+        const hits = messageVectorService
+          .searchMediaVectors(query.embedding, { source, sessionId, usernames, limit })
+          .map((hit) => formatMediaVectorHit(hit))
+        return {
+          success: true,
+          uploadedImageId: image.id,
+          source,
+          imageInputMode: query.imageInputMode,
+          hits,
+          note: hits.length === 0 ? '没有找到相似历史图片；可能还没有为相关聊天/朋友圈建立图片向量。' : undefined,
+        }
+      } catch (error) {
+        return { error: error instanceof Error ? error.message : String(error) }
+      }
+    },
+  })
+}
 
 function currentModelVisionSupport(providerConfig: AgentProviderConfig): boolean | undefined {
   try {
@@ -711,7 +928,7 @@ export function createInspectMediaImage(providerConfig: AgentProviderConfig) {
       question: z.string().optional().describe('希望视觉模型回答的具体问题；不填则概述图片内容'),
     }),
     execute: async ({ mediaId, question }, { abortSignal }) => {
-      const resolved = await resolveMediaIdToFile(mediaId)
+      const resolved = await resolveSharedMediaIdToFile(mediaId)
       if (!resolved.success) return { error: resolved.error }
 
       const support = currentModelVisionSupport(providerConfig)
@@ -729,7 +946,7 @@ export function createInspectMediaImage(providerConfig: AgentProviderConfig) {
       }
 
       try {
-        const filePath = stripFileProtocol(resolved.filePath)
+        const filePath = stripSharedFileProtocol(resolved.filePath)
         if (!fs.existsSync(filePath)) return { error: '图片文件不存在或无法访问' }
         const buffer = fs.readFileSync(filePath)
         if (buffer.length === 0) return { error: '图片文件为空' }
@@ -745,7 +962,7 @@ export function createInspectMediaImage(providerConfig: AgentProviderConfig) {
             time: resolved.time,
           }
         }
-        const mediaType = detectImageMime(buffer)
+        const mediaType = detectSharedImageMime(buffer)
         if (!mediaType) return { error: '图片格式不支持，无法识别' }
 
         reportAgentProgress({

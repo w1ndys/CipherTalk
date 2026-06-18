@@ -10,6 +10,8 @@ export interface EmbeddingConfig {
   baseURL: string
   model: string
   dimension: number
+  imageEnabled?: boolean
+  imageInputMode?: 'auto' | 'image_base64' | 'content_part' | 'data_url'
 }
 
 export interface RerankConfig {
@@ -108,7 +110,9 @@ export interface EmbeddingVectorStoreInfo {
   sizeBytes: number
   updatedAtMs: number | null
   count: number
+  mediaCount?: number
   dimensions: number[]
+  mediaDimensions?: number[]
 }
 
 export interface ImageListItem {
@@ -1370,9 +1374,9 @@ export interface ElectronAPI {
   embedding: {
     getConfig: () => Promise<{ success: boolean; config?: EmbeddingConfig; error?: string }>
     setConfig: (patch: Partial<EmbeddingConfig>) => Promise<{ success: boolean; config?: EmbeddingConfig; error?: string }>
-    test: (cfg: EmbeddingConfig) => Promise<{ success: boolean; dimension?: number; error?: string; dimensionMismatch?: string }>
-    sessionStatus: (sessionId: string) => Promise<{ success: boolean; enabled?: boolean; count?: number; store?: EmbeddingVectorStoreInfo; error?: string }>
-    buildSession: (sessionId: string) => Promise<{ success: boolean; indexed?: number; error?: string }>
+    test: (cfg: EmbeddingConfig) => Promise<{ success: boolean; dimension?: number; imageDimension?: number; imageInputMode?: 'image_base64' | 'content_part' | 'data_url'; error?: string; dimensionMismatch?: string }>
+    sessionStatus: (sessionId: string) => Promise<{ success: boolean; enabled?: boolean; count?: number; mediaCount?: number; store?: EmbeddingVectorStoreInfo; error?: string }>
+    buildSession: (sessionId: string) => Promise<{ success: boolean; indexed?: number; mediaIndexed?: number; error?: string }>
     onBuildProgress: (callback: (progress: EmbeddingBuildProgress) => void) => () => void
   }
   rerank: {

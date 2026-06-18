@@ -27,7 +27,7 @@ type SessionDetail = {
 
 function formatVectorProgress(progress: EmbeddingBuildProgress | null): string {
   if (!progress) return '准备语义索引…'
-  if (progress.total > 0) return `${progress.message} ${progress.current}/${progress.total} 段`
+  if (progress.total > 0) return `${progress.message} ${progress.current}/${progress.total}`
   return progress.message
 }
 
@@ -291,7 +291,9 @@ export function ChatHeader({
   const vectorEvidenceRows = vecStore
     ? [
         `片段：${vecStore.count} 段`,
+        `媒体：${vecStore.mediaCount || 0} 张`,
         `维度：${vecStore.dimensions.length > 0 ? vecStore.dimensions.join(', ') : '无'}`,
+        vecStore.mediaDimensions?.length ? `媒体维度：${vecStore.mediaDimensions.join(', ')}` : '',
         `文件：${vecStore.exists ? formatBytes(vecStore.sizeBytes) : '未创建'}`,
         `更新：${formatUpdatedAt(vecStore.updatedAtMs)}`,
         vecStore.dbPath,
