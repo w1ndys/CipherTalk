@@ -795,34 +795,43 @@ export function registerAiHandlers(ctx: MainProcessContext): void {
       const { messageVectorService } = await import('../../services/search/messageVectorService')
       const cfg = getEmbeddingConfig()
       const store = messageVectorService.getSessionVectorStoreInfo(sessionId)
-      return { success: true, enabled: messageVectorService.isReady(cfg), count: store.count, mediaCount: store.mediaCount || 0, store }
+      return { success: true, enabled: messageVectorService.isReady(cfg), mediaEnabled: messageVectorService.isMediaReady(cfg), count: store.count, mediaCount: store.mediaCount || 0, store }
     } catch (e) {
       return { success: false, error: e instanceof Error ? e.message : String(e) }
     }
   })
 
   // 主动为某会话构建向量（懒构建的手动触发；增量，已建则只补新增）
-  ipcMain.handle('embedding:buildSession', async (event, sessionId: string) => {
+  ipcMain.handle('embedding:buildSession', async (event, sessionId: string, options?: { target?: 'all' | 'text' | 'image' }) => {
     try {
       const { getEmbeddingConfig } = await import('../../services/ai/embeddingService')
       const { messageVectorService } = await import('../../services/search/messageVectorService')
       const { refreshResolvedProxyUrl } = await import('../../services/ai/proxyFetch')
       const sender = event.sender
       const cfg = getEmbeddingConfig()
+      const target = options?.target === 'text' || options?.target === 'image' ? options.target : 'all'
       if (!messageVectorService.isReady(cfg)) {
         return { success: false, error: '未启用或未配置嵌入模型（请先在设置 → 嵌入中配置并启用）' }
       }
+      if (target === 'image' && !messageVectorService.isMediaReady(cfg)) {
+        return { success: false, error: '图片向量化未开启（请先在设置 → 嵌入中开启图片向量化）' }
+      }
       await refreshResolvedProxyUrl()
-      const indexed = await messageVectorService.ensureSessionVectors(sessionId, cfg, undefined, (progress) => {
-        if (!sender.isDestroyed()) sender.send('embedding:buildProgress', progress)
-      })
-      let mediaIndexed = 0
-      if (messageVectorService.isMediaReady(cfg)) {
+      const currentStore = messageVectorService.getSessionVectorStoreInfo(sessionId)
+      let indexed = currentStore.count
+      let mediaIndexed = currentStore.mediaCount || 0
+      if (target === 'all' || target === 'text') {
+        indexed = await messageVectorService.ensureSessionVectors(sessionId, cfg, undefined, (progress) => {
+          if (!sender.isDestroyed()) sender.send('embedding:buildProgress', progress)
+        })
+      }
+      if ((target === 'all' && messageVectorService.isMediaReady(cfg)) || target === 'image') {
         mediaIndexed = await messageVectorService.ensureSessionMediaVectors(sessionId, cfg, undefined, (progress) => {
           if (!sender.isDestroyed()) sender.send('embedding:buildProgress', progress)
         })
       }
-      return { success: true, indexed, mediaIndexed }
+      const store = messageVectorService.getSessionVectorStoreInfo(sessionId)
+      return { success: true, indexed: store.count || indexed, mediaIndexed: store.mediaCount || mediaIndexed }
     } catch (e) {
       return { success: false, error: e instanceof Error ? e.message : String(e) }
     }

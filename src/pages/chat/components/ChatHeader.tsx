@@ -1,9 +1,9 @@
-import { Aperture, Bell, BellOff, Bot, Download, Image as ImageIcon, Info, Loader2, Mic, RefreshCw, Sparkles } from 'lucide-react'
+import { Aperture, Bell, BellOff, Bot, Download, FileText, Image as ImageIcon, Info, Layers, Loader2, Mic, RefreshCw, Sparkles } from 'lucide-react'
 import { type ReactNode, useCallback, useEffect, useRef, useState } from 'react'
-import { Button, Drawer, Tooltip } from '@heroui/react'
+import { Button, Drawer, Dropdown, Label, Tooltip } from '@heroui/react'
 import { DateJumpPicker } from './DateJumpPicker'
 import type { ChatSession } from '../../../types/models'
-import type { EmbeddingBuildProgress, EmbeddingVectorStoreInfo } from '../../../types/electron'
+import type { EmbeddingBuildProgress, EmbeddingBuildTarget, EmbeddingVectorStoreInfo } from '../../../types/electron'
 import { isGroupChat } from '../utils/messageGuards'
 import { SessionAvatar } from './SessionSidebar'
 
@@ -125,7 +125,7 @@ export function ChatHeader({
 }: ChatHeaderProps) {
   // 向量化（语义索引）状态：null=未知/未启用嵌入，count=已建片段数
   const [vecBuilding, setVecBuilding] = useState(false)
-  const [vecStatus, setVecStatus] = useState<{ enabled: boolean; count: number } | null>(null)
+  const [vecStatus, setVecStatus] = useState<{ enabled: boolean; mediaEnabled: boolean; count: number; mediaCount: number } | null>(null)
   const [vecError, setVecError] = useState<string | null>(null)
   const [vecProgress, setVecProgress] = useState<EmbeddingBuildProgress | null>(null)
   const [vecStore, setVecStore] = useState<EmbeddingVectorStoreInfo | null>(null)
@@ -235,7 +235,7 @@ export function ChatHeader({
     }
     void window.electronAPI.embedding.sessionStatus(currentSessionId).then((res) => {
       if (!cancelled && res.success) {
-        setVecStatus({ enabled: !!res.enabled, count: res.count ?? 0 })
+        setVecStatus({ enabled: !!res.enabled, mediaEnabled: !!res.mediaEnabled, count: res.count ?? 0, mediaCount: res.mediaCount ?? 0 })
         setVecStore(res.store ?? null)
       }
     })
@@ -247,12 +247,17 @@ export function ChatHeader({
       if (!currentSessionId || progress.sessionId !== currentSessionId) return
       setVecProgress(progress)
       if (progress.stage === 'done') {
-        setVecStatus({ enabled: true, count: progress.indexed })
+        void window.electronAPI.embedding.sessionStatus(currentSessionId).then((res) => {
+          if (res.success) {
+            setVecStatus({ enabled: !!res.enabled, mediaEnabled: !!res.mediaEnabled, count: res.count ?? 0, mediaCount: res.mediaCount ?? 0 })
+            setVecStore(res.store ?? null)
+          }
+        })
       }
     })
   }, [currentSessionId])
 
-  const handleVectorize = async () => {
+  const handleVectorize = async (target: EmbeddingBuildTarget = 'all') => {
     if (!currentSessionId || vecBuilding) return
     setVecBuilding(true)
     setVecError(null)
@@ -262,14 +267,16 @@ export function ChatHeader({
       current: 0,
       total: 0,
       indexed: vecStatus?.count ?? 0,
-      message: '准备语义索引'
+      message: target === 'image' ? '准备图片向量索引' : target === 'text' ? '准备文本语义索引' : '准备语义索引'
     })
     try {
-      const res = await window.electronAPI.embedding.buildSession(currentSessionId)
+      const res = await window.electronAPI.embedding.buildSession(currentSessionId, { target })
       if (res.success) {
-        setVecStatus({ enabled: true, count: res.indexed ?? 0 })
         const status = await window.electronAPI.embedding.sessionStatus(currentSessionId)
-        if (status.success) setVecStore(status.store ?? null)
+        if (status.success) {
+          setVecStatus({ enabled: !!status.enabled, mediaEnabled: !!status.mediaEnabled, count: status.count ?? 0, mediaCount: status.mediaCount ?? 0 })
+          setVecStore(status.store ?? null)
+        }
       } else setVecError(res.error || '向量化失败')
     } catch (e) {
       setVecError(e instanceof Error ? e.message : String(e))
@@ -285,8 +292,8 @@ export function ChatHeader({
       ? `向量化失败：${vecError}`
       : vecStatus && !vecStatus.enabled
         ? '未启用嵌入模型（设置 → 嵌入）'
-        : vecStatus && vecStatus.count > 0
-          ? `已向量化 ${vecStatus.count} 段 · 点击更新`
+        : vecStatus && (vecStatus.count > 0 || vecStatus.mediaCount > 0)
+          ? `文本 ${vecStatus.count} 段 · 图片 ${vecStatus.mediaCount} 张 · 点击选择更新`
           : '为此会话建立语义索引'
   const vectorEvidenceRows = vecStore
     ? [
@@ -433,36 +440,40 @@ export function ChatHeader({
           <Tooltip.Content placement="bottom">刷新消息</Tooltip.Content>
         </Tooltip>
 
-        <Tooltip delay={0}>
-          <Tooltip.Trigger>
-            <Button
-              isIconOnly
-              size="sm"
-              variant="ghost"
-              aria-label="向量化（语义索引）"
-              onPress={handleVectorize}
-              isDisabled={vecDisabled}
+        <Dropdown>
+          <Button
+            isIconOnly
+            size="sm"
+            variant="ghost"
+            aria-label="向量化（语义索引）"
+            isDisabled={vecDisabled}
+          >
+            {vecBuilding
+              ? <Loader2 size={18} className="animate-spin" />
+              : <Sparkles size={18} className={(vecStatus && (vecStatus.count > 0 || vecStatus.mediaCount > 0)) ? 'text-primary' : ''} />}
+          </Button>
+          <Dropdown.Popover className="min-w-64" placement="bottom end">
+            <Dropdown.Menu
+              disabledKeys={vecStatus && !vecStatus.mediaEnabled ? ['image'] : undefined}
+              onAction={(key) => void handleVectorize(String(key) as EmbeddingBuildTarget)}
             >
-              {vecBuilding
-                ? <Loader2 size={18} className="animate-spin" />
-                : <Sparkles size={18} className={vecStatus && vecStatus.count > 0 ? 'text-primary' : ''} />}
-            </Button>
-          </Tooltip.Trigger>
-          <Tooltip.Content className="max-w-96" placement="bottom">
-            <div className="space-y-1">
-              <div>{vecTooltip}</div>
-              {vectorEvidenceRows.length > 0 && (
-                <div className="space-y-0.5 text-xs text-muted-foreground">
-                  {vectorEvidenceRows.map((row, index) => (
-                    <div className={index === vectorEvidenceRows.length - 1 ? 'max-w-88 truncate font-mono' : ''} key={`${index}:${row}`}>
-                      {row}
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          </Tooltip.Content>
-        </Tooltip>
+              <Dropdown.Item id="text" textValue="向量化文本">
+                <FileText className="size-4 shrink-0 text-muted" />
+                <Label>向量化文本</Label>
+                <span className="ml-auto text-muted-foreground text-xs">{vecStore?.count ?? vecStatus?.count ?? 0} 段</span>
+              </Dropdown.Item>
+              <Dropdown.Item id="image" textValue="向量化图片">
+                <ImageIcon className="size-4 shrink-0 text-muted" />
+                <Label>向量化图片</Label>
+                <span className="ml-auto text-muted-foreground text-xs">{vecStore?.mediaCount ?? vecStatus?.mediaCount ?? 0} 张</span>
+              </Dropdown.Item>
+              <Dropdown.Item id="all" textValue="向量化文本和图片">
+                <Layers className="size-4 shrink-0 text-muted" />
+                <Label>向量化全部</Label>
+              </Dropdown.Item>
+            </Dropdown.Menu>
+          </Dropdown.Popover>
+        </Dropdown>
 
         {isPrivateSession && (
           <Tooltip delay={0}>

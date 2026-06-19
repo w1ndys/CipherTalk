@@ -104,6 +104,8 @@ export interface EmbeddingBuildProgress {
   message: string
 }
 
+export type EmbeddingBuildTarget = 'all' | 'text' | 'image'
+
 export interface EmbeddingVectorStoreInfo {
   dbPath: string
   exists: boolean
@@ -1375,8 +1377,8 @@ export interface ElectronAPI {
     getConfig: () => Promise<{ success: boolean; config?: EmbeddingConfig; error?: string }>
     setConfig: (patch: Partial<EmbeddingConfig>) => Promise<{ success: boolean; config?: EmbeddingConfig; error?: string }>
     test: (cfg: EmbeddingConfig) => Promise<{ success: boolean; dimension?: number; imageDimension?: number; imageInputMode?: 'image_base64' | 'content_part' | 'data_url'; error?: string; dimensionMismatch?: string }>
-    sessionStatus: (sessionId: string) => Promise<{ success: boolean; enabled?: boolean; count?: number; mediaCount?: number; store?: EmbeddingVectorStoreInfo; error?: string }>
-    buildSession: (sessionId: string) => Promise<{ success: boolean; indexed?: number; mediaIndexed?: number; error?: string }>
+    sessionStatus: (sessionId: string) => Promise<{ success: boolean; enabled?: boolean; mediaEnabled?: boolean; count?: number; mediaCount?: number; store?: EmbeddingVectorStoreInfo; error?: string }>
+    buildSession: (sessionId: string, options?: { target?: EmbeddingBuildTarget }) => Promise<{ success: boolean; indexed?: number; mediaIndexed?: number; error?: string }>
     onBuildProgress: (callback: (progress: EmbeddingBuildProgress) => void) => () => void
   }
   rerank: {
