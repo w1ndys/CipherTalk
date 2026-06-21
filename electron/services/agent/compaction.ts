@@ -37,21 +37,48 @@ export function compactMessages(messages: ModelMessage[]): ModelMessage[] {
   const oversizedReason = getOversizedReason(stats)
   if (oversizedReason) {
     warnFallback(oversizedReason, stats)
-    return fastCompactMessages(messages)
+    return sanitizeModelMessageToolPairs(fastCompactMessages(messages))
   }
 
   try {
-    return pruneMessages({
+    return sanitizeModelMessageToolPairs(pruneMessages({
       messages,
       reasoning: 'before-last-message',
       toolCalls: `before-last-${KEEP_RECENT_TOOL_MESSAGES}-messages`,
       emptyMessages: 'remove',
-    })
+    }))
   } catch (e) {
     const detail = e instanceof Error ? e.message : String(e)
     warnFallback(`AI SDK pruneMessages 失败：${detail}`, stats)
-    return fastCompactMessages(messages)
+    return sanitizeModelMessageToolPairs(fastCompactMessages(messages))
   }
+}
+
+export function sanitizeModelMessageToolPairs(messages: ModelMessage[]): ModelMessage[] {
+  const calls = new Set<string>()
+  const results = new Set<string>()
+
+  for (const message of messages) {
+    const content = (message as { content?: unknown }).content
+    if (!Array.isArray(content)) continue
+    for (const part of content) {
+      const type = getPartType(part)
+      const id = getStringField(part, 'toolCallId')
+      if (!id) continue
+      if (type === 'tool-call') calls.add(id)
+      if (type === 'tool-result') results.add(id)
+    }
+  }
+
+  const sanitized = messages
+    .map((message) => sanitizeMessageToolPairs(message, calls, results))
+    .filter((message): message is ModelMessage => Boolean(message) && !isEmptyMessage(message))
+
+  if (sanitized.length !== messages.length || hasToolPairPartDelta(messages, sanitized)) {
+    warnToolPairSanitized(messages, sanitized)
+  }
+
+  return sanitized
 }
 
 function getOversizedReason(stats: MessageStats): string | null {
@@ -202,6 +229,49 @@ function compactOldPart(
   }
 
   return record
+}
+
+function sanitizeMessageToolPairs(
+  message: ModelMessage,
+  calls: Set<string>,
+  results: Set<string>,
+): ModelMessage | null {
+  const content = (message as { content?: unknown }).content
+  if (!Array.isArray(content)) return message
+
+  const compacted = content.filter((part) => {
+    const type = getPartType(part)
+    if (type !== 'tool-call' && type !== 'tool-result') return true
+    const id = getStringField(part, 'toolCallId')
+    if (!id) return false
+    return calls.has(id) && results.has(id)
+  })
+
+  if (compacted.length === 0) return null
+  return compacted.length === content.length ? message : { ...message, content: compacted } as ModelMessage
+}
+
+function countToolPairParts(messages: ModelMessage[]): number {
+  let count = 0
+  for (const message of messages) {
+    const content = (message as { content?: unknown }).content
+    if (!Array.isArray(content)) continue
+    for (const part of content) {
+      const type = getPartType(part)
+      if (type === 'tool-call' || type === 'tool-result') count += 1
+    }
+  }
+  return count
+}
+
+function hasToolPairPartDelta(before: ModelMessage[], after: ModelMessage[]): boolean {
+  return countToolPairParts(before) !== countToolPairParts(after)
+}
+
+function warnToolPairSanitized(before: ModelMessage[], after: ModelMessage[]): void {
+  console.warn(
+    `[agent:compaction] 已移除不完整工具调用：messages ${before.length}->${after.length}, toolParts ${countToolPairParts(before)}->${countToolPairParts(after)}`,
+  )
 }
 
 function getPartType(part: unknown): string | undefined {

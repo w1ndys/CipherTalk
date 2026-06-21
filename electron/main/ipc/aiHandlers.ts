@@ -334,6 +334,7 @@ export function registerAiHandlers(ctx: MainProcessContext): void {
       const { agentProcessService } = await import('../../services/agent/agentProcessService')
       agentProcessService.setLogger(logger)
       const { agentProfileService } = await import('../../services/agent/agentProfileService')
+      const { sanitizeModelMessageToolPairs } = await import('../../services/agent/compaction')
       const { convertToModelMessages } = await import('ai')
       markPerf('加载主进程服务模块')
       stage = 'resolve_agent_profile'
@@ -354,7 +355,7 @@ export function registerAiHandlers(ctx: MainProcessContext): void {
         ? stripUiMessageProviderMetadata(payload.messages)
         : payload.messages
       const uploadedMediaContext = extractUploadedMediaContext(uiMessages)
-      const messages = await convertToModelMessages(uiMessages)
+      const messages = sanitizeModelMessageToolPairs(await convertToModelMessages(uiMessages))
       markPerf('整理消息', `${messages.length} 条`)
       stage = 'inject_tools_and_skills'
       sendPrepProgress()
@@ -1129,10 +1130,11 @@ export function registerAiHandlers(ctx: MainProcessContext): void {
 
       const { resolveProviderConfig } = await import('../../services/agent/resolveProviderConfig')
       const { refreshResolvedProxyUrl } = await import('../../services/ai/proxyFetch')
+      const { sanitizeModelMessageToolPairs } = await import('../../services/agent/compaction')
       const { convertToModelMessages } = await import('ai')
       const providerConfig = resolveProviderConfig()
       await refreshAgentRunProxyCached(refreshResolvedProxyUrl)
-      const messages = await convertToModelMessages(payload.messages || [])
+      const messages = sanitizeModelMessageToolPairs(await convertToModelMessages(payload.messages || []))
 
       // 导演笔记（纠正规则 + 分身对话记忆）：读取失败不阻塞聊天
       let notes: PersonaNotes | undefined
