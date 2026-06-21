@@ -204,6 +204,12 @@ function setupDevToolsShortcut(win: BrowserWindow, getTargetWindow?: () => Brows
   })
 }
 
+function hideMacWindowControls(win: BrowserWindow): void {
+  if (process.platform !== 'darwin') return
+  win.setWindowButtonVisibility(false)
+  win.setWindowButtonPosition({ x: -100, y: -100 })
+}
+
 function loadWindowRoute(
   ctx: MainProcessContext,
   win: BrowserWindow,
@@ -271,16 +277,16 @@ export function createWindowManager(ctx: MainProcessContext): WindowManager {
     petBubbleExpanded = false
   }
 
-  const setPetWindowMaterial = (expanded: boolean): void => {
+  const setPetWindowMaterial = (_expanded: boolean): void => {
     if (!petWindow || petWindow.isDestroyed()) return
     try {
-      // win32 不做 setBackgroundMaterial 切换：acrylic 切回 'none' 后透明窗口会被
-      // 合成器画成不可恢复的黑底（Electron 已知 bug），气泡观感靠 .pet-notice 自身的 CSS 玻璃态。
+      // BrowserWindow 本身必须保持透明，气泡观感由 .pet-notice 自身的 CSS 负责。
+      petWindow.setBackgroundColor('#00000000')
       if (process.platform === 'darwin') {
-        petWindow.setVibrancy(expanded ? 'hud' : null)
+        petWindow.setVibrancy(null)
       }
     } catch {
-      // 平台材质是通知气泡的增强项，失败时保持普通透明桌宠窗口。
+      // 透明窗口本身仍可用。
     }
   }
 
@@ -462,7 +468,7 @@ export function createWindowManager(ctx: MainProcessContext): WindowManager {
         resizable: false,
         skipTaskbar: true,
         hasShadow: false,
-        show: true,
+        show: false,
         webPreferences: {
           preload: join(__dirname, 'preload.js'),
           devTools: ctx.allowDevTools,
@@ -473,9 +479,14 @@ export function createWindowManager(ctx: MainProcessContext): WindowManager {
         backgroundColor: '#00000000'
       })
 
+      hideMacWindowControls(splash)
       attachWindowStartupDiagnostics(splash, 'splash')
       ctx.setSplashWindow(splash)
       splash.center()
+      splash.once('ready-to-show', () => {
+        hideMacWindowControls(splash)
+        splash.show()
+      })
 
       if (process.env.VITE_DEV_SERVER_URL) {
         splash.loadURL(`${process.env.VITE_DEV_SERVER_URL}#/splash`).catch(() => undefined)
@@ -1081,6 +1092,7 @@ export function createWindowManager(ctx: MainProcessContext): WindowManager {
 
     openPetWindow() {
       if (petWindow && !petWindow.isDestroyed()) {
+        hideMacWindowControls(petWindow)
         petWindow.show()
         return petWindow
       }
@@ -1096,6 +1108,7 @@ export function createWindowManager(ctx: MainProcessContext): WindowManager {
         y: workArea.y + workArea.height - height - 16,
         frame: false,
         transparent: true,
+        backgroundColor: '#00000000',
         resizable: false,
         maximizable: false,
         fullscreenable: false,
@@ -1112,8 +1125,13 @@ export function createWindowManager(ctx: MainProcessContext): WindowManager {
         }
       })
 
+      hideMacWindowControls(petWindow)
       petWindow.setAlwaysOnTop(true, 'screen-saver')
-      petWindow.once('ready-to-show', () => petWindow?.show())
+      petWindow.once('ready-to-show', () => {
+        if (!petWindow || petWindow.isDestroyed()) return
+        hideMacWindowControls(petWindow)
+        petWindow.show()
+      })
       loadWindowRoute(ctx, petWindow, '/pet-window')
 
       petWindow.on('system-context-menu', (event) => {

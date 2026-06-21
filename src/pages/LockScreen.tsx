@@ -1,7 +1,8 @@
-import { useRef, useState, useEffect } from 'react'
+import { useState, useEffect } from 'react'
+import { Avatar, Button } from '@heroui/react'
 import { useAppStore } from '../stores/appStore'
 import { useAuthStore } from '../stores/authStore'
-import { Lock, Fingerprint, AlertCircle, KeyRound, ChevronRight } from 'lucide-react'
+import { Lock, Fingerprint, AlertCircle, ChevronRight } from 'lucide-react'
 import './LockScreen.css'
 
 export default function LockScreen() {
@@ -11,21 +12,14 @@ export default function LockScreen() {
     const [isVerifying, setIsVerifying] = useState(false)
     const [error, setError] = useState('')
     const [platformInfo, setPlatformInfo] = useState<{ platform: string; arch: string }>({ platform: 'win32', arch: 'x64' })
-    const hasInvokedRef = useRef(false)
+    const userDisplayName = userInfo?.nickName?.trim() || 'CipherTalk'
+    const avatarFallback = userInfo?.nickName?.trim()?.slice(0, 1).toUpperCase()
 
     useEffect(() => {
         void window.electronAPI.app.getPlatformInfo().then(setPlatformInfo).catch(() => {
             // ignore
         })
     }, [])
-
-    useEffect(() => {
-        // 自动触发一次验证 (仅当生物识别时)
-        if (authMethod === 'biometric' && !hasInvokedRef.current) {
-            hasInvokedRef.current = true
-            handleUnlock()
-        }
-    }, [authMethod])
 
     const handleUnlock = async () => {
         if (isVerifying) return
@@ -70,13 +64,14 @@ export default function LockScreen() {
         <div className="lock-screen-overlay">
             <div className="lock-content">
                 <div className="lock-avatar-container">
-                    {userInfo?.avatarUrl ? (
-                        <img src={userInfo.avatarUrl} alt="Avatar" className="lock-avatar" />
-                    ) : (
-                        <div className="lock-avatar" style={{ background: '#e0e0e0', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                            <Lock size={32} color="#999" />
-                        </div>
-                    )}
+                    <Avatar className="lock-avatar" color="default" variant="soft">
+                        {userInfo?.avatarUrl ? (
+                            <Avatar.Image src={userInfo.avatarUrl} alt={userDisplayName} />
+                        ) : null}
+                        <Avatar.Fallback>
+                            {avatarFallback || <Lock size={32} />}
+                        </Avatar.Fallback>
+                    </Avatar>
                     <div className="lock-icon">
                         <Lock size={14} />
                     </div>
@@ -88,14 +83,18 @@ export default function LockScreen() {
                 </div>
 
                 {authMethod === 'biometric' ? (
-                    <button
+                    <Button
+                        type="button"
                         className="unlock-btn"
-                        onClick={handleUnlock}
-                        disabled={isVerifying}
+                        variant="primary"
+                        fullWidth
+                        onPress={() => void handleUnlock()}
+                        isPending={isVerifying}
+                        isDisabled={isVerifying}
                     >
                         <Fingerprint size={20} />
                         {isVerifying ? '正在验证...' : platformInfo.platform === 'darwin' ? '使用 Touch ID 解锁' : '使用 Windows Hello 解锁'}
-                    </button>
+                    </Button>
                 ) : (
                     <form className="password-form" onSubmit={handlePasswordUnlock}>
                         <div className="password-input-wrapper">
