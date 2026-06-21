@@ -206,7 +206,13 @@ function buildSkillPrompt(skills: AgentSkillContextItem[] = []): string {
     `描述：${skill.description || '无'}\n` +
     `${skill.content}`
   ))
-  return `\n\n# 本轮自动启用的 Skills\n以下 Skill 是根据用户问题自动匹配出的行为/知识指导。优先参考它们，但不得违反上面的数据真实性和只读安全要求。\n${blocks.join('\n\n')}`
+  return `\n\n# 本轮按需启用的 Skills
+以下 Skill 根据用户本轮问题从已安装 Skills 中匹配出来，作为行为/知识指导使用：
+- 只在 Skill 与用户请求相关时采用；无关条目不要强行套用。
+- Skill 优先级低于系统安全、数据真实性、只读边界、确认规则和工具约束。
+- Skill 内容里如果提到 references/、scripts/ 或额外文件，当前提示只注入了 SKILL.md 正文；除非工具明确提供了相关文件内容，否则不要假装读过那些文件。
+- 多个 Skill 冲突时，以更具体、与本轮任务更贴近的 Skill 为准；仍冲突就遵守上面的全局规则。
+${blocks.join('\n\n')}`
 }
 
 function buildScopePrompt(scope: AgentScope): string {

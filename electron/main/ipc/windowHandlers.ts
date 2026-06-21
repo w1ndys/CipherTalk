@@ -133,6 +133,11 @@ export function registerWindowHandlers(ctx: MainProcessContext): void {
     ctx.getWindowManager().openBrowserWindow(url, title)
   })
 
+  ipcMain.handle('window:openSkillPreviewWindow', (_, skillName: string) => {
+    ctx.getWindowManager().openSkillPreviewWindow(skillName)
+    return true
+  })
+
   ipcMain.handle('window:openChatHistoryWindow', (_, sessionId: string, messageId: number) => {
     ctx.getWindowManager().openChatHistoryWindow(sessionId, messageId)
     return true

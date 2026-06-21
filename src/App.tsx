@@ -22,6 +22,7 @@ import ActivationPage from './pages/ActivationPage'
 import ImageWindow from './pages/ImageWindow'
 import VideoWindow from './pages/VideoWindow'
 import BrowserWindowPage from './pages/BrowserWindowPage'
+import SkillPreviewWindow from './pages/SkillPreviewWindow'
 import PosterStyleWindow from './pages/PosterStyleWindow'
 import SplashPage from './pages/SplashPage'
 import ChatHistoryPage from './pages/ChatHistoryPage'
@@ -575,6 +576,10 @@ function App() {
         <BrowserWindowPage />
       </div>
     )
+  }
+
+  if (location.pathname === '/skill-preview-window') {
+    return <SkillPreviewWindow />
   }
 
   if (isPosterStyleWindow) {

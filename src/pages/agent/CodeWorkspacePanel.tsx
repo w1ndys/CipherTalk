@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type DragEvent, type ReactNode } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent, type ReactNode } from 'react'
 import { AlertDialog, Button as HeroButton, Label, Popover, Tabs } from '@heroui/react'
 import { ChevronRight, Code2, ExternalLink, File, Folder, FolderOpen, Monitor, RefreshCcw, ShieldAlert, Square, Terminal, X } from 'lucide-react'
 import type { CodeWorkspaceApprovalRequest, CodeWorkspaceFileItem, CodeWorkspaceState } from '@/types/electron'
@@ -139,10 +139,15 @@ export function CodeWorkspaceSidebar({
   const [loadingPaths, setLoadingPaths] = useState<Set<string>>(() => new Set())
   const [error, setError] = useState('')
   const [truncated, setTruncated] = useState(false)
+  const childrenByPathRef = useRef(childrenByPath)
 
-  const loadDirectory = async (targetPath = '.', force = false) => {
+  useEffect(() => {
+    childrenByPathRef.current = childrenByPath
+  }, [childrenByPath])
+
+  const loadDirectory = useCallback(async (targetPath = '.', force = false, preserveTree = false) => {
     if (!workspace) return
-    if (!force && targetPath !== '.' && childrenByPath[targetPath]) return
+    if (!force && targetPath !== '.' && childrenByPathRef.current[targetPath]) return
     setError('')
     setLoadingPaths((prev) => new Set(prev).add(targetPath))
     try {
@@ -159,8 +164,10 @@ export function CodeWorkspaceSidebar({
       setTruncated(Boolean(result.truncated))
       if (targetPath === '.') {
         setRootItems(items)
-        setChildrenByPath({})
-        setExpanded(new Set())
+        if (!preserveTree) {
+          setChildrenByPath({})
+          setExpanded(new Set())
+        }
       } else {
         setChildrenByPath((prev) => ({ ...prev, [targetPath]: items }))
       }
@@ -173,7 +180,7 @@ export function CodeWorkspaceSidebar({
         return next
       })
     }
-  }
+  }, [workspace?.id])
 
   useEffect(() => {
     setRootItems([])
@@ -182,8 +189,28 @@ export function CodeWorkspaceSidebar({
     setError('')
     setTruncated(false)
     if (workspace) void loadDirectory('.', true)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [workspace?.id])
+  }, [loadDirectory, workspace?.id])
+
+  const refreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  useEffect(() => {
+    if (!workspace) return undefined
+    const unsubscribe = window.electronAPI.agentWorkspace.onWorkspaceEvent((event) => {
+      if (event.type !== 'files-changed') return
+      if (refreshTimerRef.current) clearTimeout(refreshTimerRef.current)
+      refreshTimerRef.current = setTimeout(() => {
+        void loadDirectory('.', true, true)
+        for (const path of expanded) void loadDirectory(path, true)
+      }, 120)
+    })
+    return () => {
+      unsubscribe()
+      if (refreshTimerRef.current) {
+        clearTimeout(refreshTimerRef.current)
+        refreshTimerRef.current = null
+      }
+    }
+  }, [expanded, loadDirectory, workspace])
 
   const toggleDirectory = (item: CodeWorkspaceFileItem) => {
     const nextExpanded = new Set(expanded)

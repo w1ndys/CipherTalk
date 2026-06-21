@@ -198,6 +198,9 @@ export class CodeWorkspaceService {
   private devServerStartedAt = 0
   private devServerPreviewUrl = ''
   private logs: string[] = []
+  private workspaceWatcher: fs.FSWatcher | null = null
+  private workspaceWatchTimer: NodeJS.Timeout | null = null
+  private workspaceWatchPaths = new Set<string>()
 
   setContext(ctx: MainProcessContext): void {
     this.ctx = ctx
@@ -384,6 +387,7 @@ export class CodeWorkspaceService {
     const realRoot = await fs.promises.realpath(root)
     const stat = await fs.promises.stat(realRoot)
     if (!stat.isDirectory()) throw new Error('工作区必须是目录')
+    this.stopWorkspaceWatcher()
     this.rejectAllApprovals()
     this.workspace = {
       id: createHash('sha1').update(realRoot).digest('hex').slice(0, 12),
@@ -392,6 +396,7 @@ export class CodeWorkspaceService {
     }
     this.writeConfiguredWorkspaceRoot(realRoot)
     this.appendLog(`[workspace] ${realRoot}`)
+    this.startWorkspaceWatcher(realRoot)
     this.broadcast({ type: 'state', state: this.getState(), at: Date.now() })
   }
 
@@ -510,6 +515,66 @@ export class CodeWorkspaceService {
 
   private broadcast(event: CodeWorkspaceEvent): void {
     this.ctx?.broadcastToWindows('agentWorkspace:event', event)
+  }
+
+  private startWorkspaceWatcher(root: string): void {
+    this.stopWorkspaceWatcher()
+    try {
+      this.workspaceWatcher = fs.watch(root, { recursive: true }, (_eventType, filename) => {
+        this.queueWorkspaceFileChange(root, filename ? String(filename) : '')
+      })
+      this.workspaceWatcher.on('error', (error) => {
+        this.appendLog(`[workspace watch error] ${error.message}`)
+        this.stopWorkspaceWatcher()
+      })
+    } catch (error: any) {
+      try {
+        this.workspaceWatcher = fs.watch(root, (_eventType, filename) => {
+          this.queueWorkspaceFileChange(root, filename ? String(filename) : '')
+        })
+      } catch (fallbackError: any) {
+        this.appendLog(`[workspace watch disabled] ${fallbackError?.message || error?.message || String(fallbackError || error)}`)
+      }
+    }
+  }
+
+  private stopWorkspaceWatcher(): void {
+    if (this.workspaceWatchTimer) {
+      clearTimeout(this.workspaceWatchTimer)
+      this.workspaceWatchTimer = null
+    }
+    this.workspaceWatchPaths.clear()
+    if (!this.workspaceWatcher) return
+    try {
+      this.workspaceWatcher.close()
+    } catch {
+      // ignore
+    }
+    this.workspaceWatcher = null
+  }
+
+  private queueWorkspaceFileChange(root: string, filename: string): void {
+    const normalized = filename.replace(/\\/g, '/')
+    if (this.shouldIgnoreWatchedPath(normalized)) return
+    this.workspaceWatchPaths.add(normalized || '.')
+    if (this.workspaceWatchTimer) clearTimeout(this.workspaceWatchTimer)
+    this.workspaceWatchTimer = setTimeout(() => {
+      this.workspaceWatchTimer = null
+      if (!this.workspace || normalizePathKey(this.workspace.root) !== normalizePathKey(root)) return
+      const changedPaths = Array.from(this.workspaceWatchPaths).slice(0, 80)
+      this.workspaceWatchPaths.clear()
+      this.broadcast({ type: 'files-changed', changedPaths, at: Date.now() })
+    }, 150)
+  }
+
+  private broadcastWorkspaceFileChange(displayPath: string): void {
+    if (this.shouldIgnoreWatchedPath(displayPath.replace(/\\/g, '/'))) return
+    this.broadcast({ type: 'files-changed', changedPaths: [displayPath || '.'], at: Date.now() })
+  }
+
+  private shouldIgnoreWatchedPath(relativePath: string): boolean {
+    if (!relativePath) return false
+    return relativePath.split('/').some((part) => SKIP_DIRS.has(part))
   }
 
   private appendLog(line: string): void {
@@ -631,6 +696,7 @@ export class CodeWorkspaceService {
       snapshotPath,
       outputPaths: [target.absPath],
     })
+    this.broadcastWorkspaceFileChange(target.displayPath)
     return { success: true, path: target.displayPath, diffPreview, operationId: audit.operationId }
   }
 
@@ -670,6 +736,7 @@ export class CodeWorkspaceService {
       snapshotPath,
       outputPaths: [target.absPath],
     })
+    this.broadcastWorkspaceFileChange(target.displayPath)
     return { success: true, path: target.displayPath, bytes: Buffer.byteLength(content), diffPreview, operationId: audit.operationId }
   }
 
@@ -706,6 +773,7 @@ export class CodeWorkspaceService {
       targetPath: target.absPath,
       snapshotPath,
     })
+    this.broadcastWorkspaceFileChange(target.displayPath)
     return { success: true, path: target.displayPath, operationId: audit.operationId }
   }
 

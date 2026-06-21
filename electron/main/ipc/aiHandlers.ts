@@ -346,6 +346,7 @@ export function registerAiHandlers(ctx: MainProcessContext): void {
         toolProfile,
         codeWorkspace,
         includeMcpSkills: true,
+        queryText: initialLastUserText,
       }))
       const providerConfig = profile.providerConfig
       markPerf('解析 Agent Profile', `MCP ${profile.mcpTools.length} 个 / 技能 ${profile.skills.length} 个`)

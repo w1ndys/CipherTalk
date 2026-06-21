@@ -413,6 +413,28 @@ function parseWechatIncomingMessage(msg: IlinkMessage): ParsedWechatIncomingMess
   return { textSegments, attachments }
 }
 
+function textFromUiMessage(message: UIMessage): string {
+  const anyMessage = message as any
+  if (typeof anyMessage.content === 'string') return anyMessage.content
+  if (!Array.isArray(anyMessage.parts)) return ''
+  return anyMessage.parts
+    .map((part: any) => {
+      if (!part || typeof part !== 'object') return ''
+      if (part.type === 'text') return String(part.text || '')
+      if (typeof part.text === 'string') return part.text
+      return ''
+    })
+    .filter(Boolean)
+    .join('\n')
+}
+
+function lastUserTextFromUiMessages(messages: UIMessage[] = []): string {
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    if (messages[i]?.role === 'user') return textFromUiMessage(messages[i])
+  }
+  return ''
+}
+
 function rememberToolNameFromChunk(chunk: UIMessageChunk, toolNames: Map<string, string>): void {
   const c = chunk as { toolCallId?: unknown; toolName?: unknown }
   if (typeof c.toolCallId === 'string' && typeof c.toolName === 'string') {
@@ -1855,6 +1877,7 @@ class WeixinBotService {
       scope: { kind: 'global' },
       ensureCodeWorkspace: true,
       includeMcpSkills: true,
+      queryText: lastUserTextFromUiMessages(uiMessages),
     })
     const messages = await convertToModelMessages(uiMessages)
     let reply = ''

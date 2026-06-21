@@ -216,6 +216,10 @@
       {
         "from": "skills/ct-mcp-copilot",
         "to": "builtin-skills/ct-mcp-copilot"
+      },
+      {
+        "from": "skills/frontend-design",
+        "to": "builtin-skills/frontend-design"
       }
     ],
     "extraFiles": [

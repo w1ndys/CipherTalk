@@ -38,6 +38,7 @@ export interface WindowManager {
   ): BrowserWindow
   openVideoPlayerWindow(videoPath: string, videoWidth?: number, videoHeight?: number): BrowserWindow
   openBrowserWindow(url: string, title?: string): BrowserWindow
+  openSkillPreviewWindow(skillName: string): BrowserWindow
   openChatHistoryWindow(sessionId: string, messageId: number): BrowserWindow
   openPersonaChatWindow(sessionId: string): BrowserWindow
   openPosterStyleWindow(): BrowserWindow

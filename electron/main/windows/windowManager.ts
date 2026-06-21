@@ -1134,6 +1134,45 @@ export function createWindowManager(ctx: MainProcessContext): WindowManager {
       return win
     },
 
+    openSkillPreviewWindow(skillName: string) {
+      const safeSkillName = String(skillName || '').trim()
+      const win = new BrowserWindow({
+        width: 1180,
+        height: 780,
+        minWidth: 760,
+        minHeight: 520,
+        ...getWindowIconOptions(ctx),
+        webPreferences: {
+          preload: join(__dirname, 'preload.js'),
+          devTools: ctx.allowDevTools,
+          contextIsolation: true,
+          nodeIntegration: false,
+        },
+        titleBarStyle: 'hidden',
+        titleBarOverlay: {
+          color: '#1a1a1a',
+          symbolColor: '#ffffff',
+          height: 36
+        },
+        show: false,
+        backgroundColor: '#ffffff',
+        title: `Skill Preview - ${safeSkillName}`
+      })
+
+      win.once('ready-to-show', () => win.show())
+      const queryParams = `${getThemeQueryParams(ctx)}&skill=${encodeURIComponent(safeSkillName)}`
+      if (process.env.VITE_DEV_SERVER_URL) {
+        win.loadURL(`${process.env.VITE_DEV_SERVER_URL}#/skill-preview-window?${queryParams}`)
+        setupDevToolsShortcut(win)
+      } else {
+        win.loadFile(join(__dirname, '../dist/index.html'), {
+          hash: `/skill-preview-window?${queryParams}`
+        })
+      }
+
+      return win
+    },
+
     completeWelcome() {
       if (welcomeWindow && !welcomeWindow.isDestroyed()) {
         welcomeWindow.close()

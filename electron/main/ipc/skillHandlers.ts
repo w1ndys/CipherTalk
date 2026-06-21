@@ -14,6 +14,14 @@ export function registerSkillHandlers(ctx: MainProcessContext): void {
     return skillManagerService.readSkillContent(skillName)
   })
 
+  ipcMain.handle('skillManager:listFiles', async (_, skillName: string) => {
+    return skillManagerService.listSkillFiles(skillName)
+  })
+
+  ipcMain.handle('skillManager:readFile', async (_, skillName: string, filePath: string) => {
+    return skillManagerService.readSkillFile(skillName, filePath)
+  })
+
   ipcMain.handle('skillManager:updateContent', async (_, skillName: string, content: string) => {
     return skillManagerService.updateSkillContent(skillName, content)
   })

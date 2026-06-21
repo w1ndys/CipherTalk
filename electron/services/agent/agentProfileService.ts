@@ -8,8 +8,11 @@ import { buildReadOnlyMcpToolDescriptors } from './mcpToolPolicy'
 import { skillManagerService } from '../skillManagerService'
 import {
   fingerprintMcpToolSchemas,
+  fingerprintSkills,
   getCachedMcpToolDescriptors,
+  getCachedSkillSelection,
   setCachedMcpToolDescriptors,
+  setCachedSkillSelection,
 } from './runtimeCache'
 
 export type AgentProfileMode = 'app' | 'wechat-bot'
@@ -34,6 +37,7 @@ export interface AgentProfileRequest {
   codeWorkspace?: CodeWorkspaceRef | null
   ensureCodeWorkspace?: boolean
   includeMcpSkills?: boolean
+  queryText?: string
 }
 
 export interface ResolvedAgentProfile {
@@ -49,7 +53,7 @@ export interface ResolvedAgentProfile {
     selectedMcpTools: string[]
     selectedSkills: string[]
     mcpSelectionMode: 'all' | 'disabled'
-    skillSelectionMode: 'all' | 'disabled'
+    skillSelectionMode: 'selected' | 'disabled'
   }
 }
 
@@ -71,7 +75,7 @@ export class AgentProfileService {
       : codeWorkspace ? 'hybrid' : 'chat'
     const includeMcpSkills = request.includeMcpSkills !== false
     const mcpTools = includeMcpSkills ? this.getReadOnlyMcpTools() : []
-    const skills = includeMcpSkills ? skillManagerService.getAllSkillsForAgentPrompt() : []
+    const skills = includeMcpSkills ? this.selectSkills(request.queryText || '') : []
 
     return {
       providerConfig,
@@ -86,9 +90,19 @@ export class AgentProfileService {
         selectedMcpTools: mcpTools.map((tool) => `${tool.serverName}/${tool.toolName}`),
         selectedSkills: skills.map((skill) => skill.name),
         mcpSelectionMode: includeMcpSkills ? 'all' : 'disabled',
-        skillSelectionMode: includeMcpSkills ? 'all' : 'disabled',
+        skillSelectionMode: includeMcpSkills ? 'selected' : 'disabled',
       },
     }
+  }
+
+  private selectSkills(queryText: string): AgentSkillContextItem[] {
+    const skillList = skillManagerService.listSkills()
+    const version = fingerprintSkills(skillList)
+    const cached = getCachedSkillSelection(queryText, version)
+    if (cached) return cached
+    const selected = skillManagerService.selectSkillsForAgentPrompt(queryText)
+    setCachedSkillSelection(queryText, version, selected)
+    return selected
   }
 
   private getReadOnlyMcpTools(): AgentMcpToolDescriptor[] {

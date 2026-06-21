@@ -137,6 +137,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   skillManager: {
     list: () => ipcRenderer.invoke('skillManager:list') as Promise<Array<{ name: string; version: string; description: string; builtin: boolean }>>,
     readContent: (skillName: string) => ipcRenderer.invoke('skillManager:readContent', skillName) as Promise<{ success: boolean; content?: string; error?: string }>,
+    listFiles: (skillName: string) => ipcRenderer.invoke('skillManager:listFiles', skillName) as Promise<{ success: boolean; files?: Array<{ path: string; name: string; type: 'file' | 'dir'; size?: number; children?: Array<{ path: string; name: string; type: 'file' | 'dir'; size?: number }> }>; truncated?: boolean; error?: string }>,
+    readFile: (skillName: string, filePath: string) => ipcRenderer.invoke('skillManager:readFile', skillName, filePath) as Promise<{ success: boolean; path?: string; content?: string; size?: number; binary?: boolean; error?: string }>,
     updateContent: (skillName: string, content: string) => ipcRenderer.invoke('skillManager:updateContent', skillName, content) as Promise<{ success: boolean; error?: string }>,
     exportZip: (skillName: string) => ipcRenderer.invoke('skillManager:exportZip', skillName) as Promise<{ success: boolean; outputPath?: string; fileName?: string; version?: string; error?: string }>,
     importZip: (zipPath: string) => ipcRenderer.invoke('skillManager:importZip', zipPath) as Promise<{ success: boolean; skillName?: string; error?: string }>,
@@ -459,6 +461,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ) => ipcRenderer.invoke('window:openImageViewerWindow', imagePath, liveVideoPath, imageList, options),
     openVideoPlayerWindow: (videoPath: string, videoWidth?: number, videoHeight?: number) => ipcRenderer.invoke('window:openVideoPlayerWindow', videoPath, videoWidth, videoHeight),
     openBrowserWindow: (url: string, title?: string) => ipcRenderer.invoke('window:openBrowserWindow', url, title),
+    openSkillPreviewWindow: (skillName: string) => ipcRenderer.invoke('window:openSkillPreviewWindow', skillName) as Promise<boolean>,
     openChatHistoryWindow: (sessionId: string, messageId: number) => ipcRenderer.invoke('window:openChatHistoryWindow', sessionId, messageId),
     resizeToFitVideo: (videoWidth: number, videoHeight: number) => ipcRenderer.invoke('window:resizeToFitVideo', videoWidth, videoHeight),
     resizeContent: (width: number, height: number) => ipcRenderer.invoke('window:resizeContent', width, height),

@@ -207,7 +207,6 @@ function McpPage() {
   const [mcpServers, setMcpServers] = useState<McpServerStatus[]>([])
 
   const [skillDialog, setSkillDialog] = useState<SkillDialogState>(null)
-  const [skillContent, setSkillContent] = useState('')
   const [editingSkillContent, setEditingSkillContent] = useState('')
   const [serverPanelOpen, setServerPanelOpen] = useState(false)
   const [editingServer, setEditingServer] = useState<string | null>(null)
@@ -294,9 +293,17 @@ function McpPage() {
   }
 
   const openSkillPanel = async (name: string, mode: 'preview' | 'edit') => {
+    if (mode === 'preview') {
+      try {
+        await window.electronAPI.window.openSkillPreviewWindow(name)
+      } catch {
+        toast.danger('打开 Skill 预览窗口失败')
+      }
+      return
+    }
+
     const result = await window.electronAPI.skillManager.readContent(name)
     if (result.success) {
-      setSkillContent(result.content || '')
       setEditingSkillContent(result.content || '')
       setSkillDialog({ name, mode })
     } else toast.danger(result.error || '读取失败')
@@ -307,8 +314,7 @@ function McpPage() {
     const result = await window.electronAPI.skillManager.updateContent(skillDialog.name, editingSkillContent)
     toast[result.success ? 'success' : 'danger'](result.success ? 'Skill 已保存' : (result.error || '保存失败'))
     if (result.success) {
-      setSkillContent(editingSkillContent)
-      setSkillDialog({ name: skillDialog.name, mode: 'preview' })
+      setSkillDialog(null)
       void loadIntegrationData()
     }
   }
@@ -1012,39 +1018,29 @@ function McpPage() {
         </Modal.Backdrop>
       </Modal>
 
-      {/* ── Skill Preview/Edit Modal ── */}
+      {/* ── Skill Edit Modal ── */}
       <Modal isOpen={skillDialog !== null}
-        onOpenChange={(open) => { if (!open) setSkillDialog(null) }}>
+        onOpenChange={(open) => {
+          if (!open) {
+            setSkillDialog(null)
+          }
+        }}>
         <Modal.Backdrop>
           <Modal.Container size="lg">
             <Modal.Dialog>
               <Modal.CloseTrigger />
               <Modal.Header>
                 <Modal.Icon><FileCode size={20} /></Modal.Icon>
-                <Modal.Heading>{skillDialog?.mode === 'edit' ? '编辑 Skill' : '预览 Skill'}: {skillDialog?.name}</Modal.Heading>
+                <Modal.Heading>编辑 Skill: {skillDialog?.name}</Modal.Heading>
               </Modal.Header>
               <Modal.Body>
-                {skillDialog?.mode === 'edit' ? (
-                  <TextArea value={editingSkillContent}
-                    onChange={(e) => setEditingSkillContent(e.target.value)}
-                    className="min-h-100" />
-                ) : (
-                  <TextArea value={skillContent} readOnly className="min-h-100" />
-                )}
+                <TextArea value={editingSkillContent}
+                  onChange={(e) => setEditingSkillContent(e.target.value)}
+                  className="min-h-[60vh]" />
               </Modal.Body>
               <Modal.Footer>
-                {skillDialog?.mode === 'preview' && skills.find(s => s.name === skillDialog.name && !s.builtin) && (
-                  <Button variant="tertiary" onPress={() => setSkillDialog({ name: skillDialog!.name, mode: 'edit' })}>
-                    <Pencil size={14} /> 编辑
-                  </Button>
-                )}
-                {skillDialog?.mode === 'edit' && (
-                  <Button variant="tertiary" onPress={() => setSkillDialog({ name: skillDialog!.name, mode: 'preview' })}>取消</Button>
-                )}
-                {skillDialog?.mode === 'edit' && (
-                  <Button variant="primary" onPress={saveEditSkill}>保存</Button>
-                )}
-                <Button slot="close" variant="tertiary">关闭</Button>
+                <Button slot="close" variant="tertiary">取消</Button>
+                <Button variant="primary" onPress={saveEditSkill}>保存</Button>
               </Modal.Footer>
             </Modal.Dialog>
           </Modal.Container>

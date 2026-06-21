@@ -50,12 +50,13 @@ export interface CodeWorkspaceApprovalRequest {
 }
 
 export interface CodeWorkspaceEvent {
-  type: 'state' | 'log' | 'preview-url' | 'approval-resolved'
+  type: 'state' | 'log' | 'preview-url' | 'approval-resolved' | 'files-changed'
   state?: CodeWorkspaceState
   log?: string
   previewUrl?: string
   requestId?: string
   decision?: CodeWorkspaceApprovalDecision
+  changedPaths?: string[]
   at: number
 }
 

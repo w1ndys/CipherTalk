@@ -1,6 +1,6 @@
 import { app } from 'electron'
-import { existsSync, readFileSync, writeFileSync, readdirSync, rmSync, mkdirSync, mkdtempSync, renameSync } from 'fs'
-import { join } from 'path'
+import { existsSync, readFileSync, writeFileSync, readdirSync, rmSync, mkdirSync, mkdtempSync, renameSync, statSync } from 'fs'
+import { basename, isAbsolute, join, relative, resolve } from 'path'
 import AdmZip from 'adm-zip'
 import type { AgentSkillContextItem } from './agent/types'
 
@@ -16,6 +16,14 @@ export type SkillInfo = {
   builtin: boolean
 }
 
+export type SkillFileItem = {
+  path: string
+  name: string
+  type: 'file' | 'dir'
+  size?: number
+  children?: SkillFileItem[]
+}
+
 type SkillDocument = {
   name: string
   version: string
@@ -23,9 +31,13 @@ type SkillDocument = {
   content: string
 }
 
-const BUILTIN_SKILLS = new Set(['ct-mcp-copilot'])
+const BUILTIN_SKILLS = new Set(['ct-mcp-copilot', 'frontend-design'])
 const DEFAULT_AGENT_ALL_SKILL_BUDGET = 30_000
 const SKILL_DOCS_CACHE_TTL_MS = 5 * 60 * 1000
+const MAX_SKILL_PREVIEW_FILE_BYTES = 1024 * 1024
+const MAX_SKILL_TREE_ENTRIES = 800
+const DEFAULT_SELECTED_SKILL_BUDGET = 18_000
+const MAX_SELECTED_SKILLS = 3
 
 function parseSkillFrontmatter(content: string): { name: string; version: string; description: string } {
   const match = content.match(/^---\r?\n([\s\S]*?)\r?\n---/)
@@ -158,6 +170,83 @@ function compactSkillContent(content: string, maxChars: number): string {
   return body.length > maxChars ? `${body.slice(0, Math.max(0, maxChars - 20)).trim()}\n...<truncated>` : body
 }
 
+function normalizeSkillSearchText(value: string): string {
+  return String(value || '')
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}_-]+/gu, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+function tokenizeSkillQuery(value: string): string[] {
+  const normalized = normalizeSkillSearchText(value)
+  if (!normalized) return []
+  const tokens = normalized.split(' ').filter(token => token.length >= 2)
+  const cjkChars = Array.from(normalized.matchAll(/\p{Script=Han}/gu)).map(match => match[0])
+  return Array.from(new Set([...tokens, ...cjkChars]))
+}
+
+function skillSearchHaystack(doc: SkillDocument): string {
+  const headings = doc.content
+    .split(/\r?\n/)
+    .filter(line => /^#{1,3}\s+/.test(line))
+    .join('\n')
+  return normalizeSkillSearchText([
+    doc.name,
+    doc.version,
+    doc.description,
+    headings,
+    doc.content.slice(0, 4000),
+  ].join('\n'))
+}
+
+function scoreSkillForQuery(doc: SkillDocument, queryTokens: string[]): number {
+  if (queryTokens.length === 0) return 0
+  const name = normalizeSkillSearchText(doc.name)
+  const description = normalizeSkillSearchText(doc.description)
+  const haystack = skillSearchHaystack(doc)
+  let score = 0
+  for (const token of queryTokens) {
+    if (name.includes(token)) score += 8
+    if (description.includes(token)) score += 5
+    if (haystack.includes(token)) score += 1
+  }
+  return score
+}
+
+function packSkillDocuments(docs: SkillDocument[], totalBudget: number): AgentSkillContextItem[] {
+  const safeBudget = Math.max(0, Math.floor(totalBudget))
+  if (docs.length === 0 || safeBudget <= 0) return []
+  let remaining = safeBudget
+  return docs.map((doc, index) => {
+    const remainingDocs = Math.max(1, docs.length - index)
+    const perSkillBudget = Math.max(0, Math.floor(remaining / remainingDocs))
+    const content = compactSkillContent(doc.content, perSkillBudget)
+    remaining = Math.max(0, remaining - content.length)
+    return {
+      name: doc.name,
+      version: doc.version,
+      description: doc.description,
+      content,
+    }
+  }).filter(skill => skill.content)
+}
+
+function sortSkillFileItems(items: SkillFileItem[]): SkillFileItem[] {
+  return items.sort((a, b) => {
+    if (a.type !== b.type) return a.type === 'dir' ? -1 : 1
+    return a.name.localeCompare(b.name, 'zh-CN')
+  })
+}
+
+function isBinaryBuffer(buffer: Buffer): boolean {
+  const sampleLength = Math.min(buffer.length, 8192)
+  for (let i = 0; i < sampleLength; i += 1) {
+    if (buffer[i] === 0) return true
+  }
+  return false
+}
+
 export class SkillManagerService {
   listSkills(): SkillInfo[] {
     const results: SkillInfo[] = []
@@ -196,6 +285,90 @@ export class SkillManagerService {
       return { success: true, content }
     } catch (e) {
       return { success: false, error: String(e) }
+    }
+  }
+
+  listSkillFiles(skillName: string): { success: boolean; files?: SkillFileItem[]; truncated?: boolean; error?: string } {
+    const dir = this.resolveAnySkillDir(skillName)
+    if (!dir) return { success: false, error: `Skill "${skillName}" not found` }
+
+    let count = 0
+    let truncated = false
+
+    const readDirectory = (baseDir: string, basePath = ''): SkillFileItem[] => {
+      if (truncated) return []
+      const entries = readdirSync(baseDir, { withFileTypes: true })
+      const items: SkillFileItem[] = []
+
+      for (const entry of entries) {
+        if (truncated) break
+        count += 1
+        if (count > MAX_SKILL_TREE_ENTRIES) {
+          truncated = true
+          break
+        }
+
+        const itemPath = basePath ? `${basePath}/${entry.name}` : entry.name
+        const fullPath = join(baseDir, entry.name)
+        if (entry.isDirectory()) {
+          items.push({
+            path: itemPath,
+            name: entry.name,
+            type: 'dir',
+            children: readDirectory(fullPath, itemPath),
+          })
+          continue
+        }
+        if (!entry.isFile()) continue
+        const stats = statSync(fullPath)
+        items.push({
+          path: itemPath,
+          name: entry.name,
+          type: 'file',
+          size: stats.size,
+        })
+      }
+
+      return sortSkillFileItems(items)
+    }
+
+    try {
+      return { success: true, files: readDirectory(dir), truncated }
+    } catch (error) {
+      return { success: false, error: String(error) }
+    }
+  }
+
+  readSkillFile(skillName: string, filePath: string): { success: boolean; path?: string; content?: string; size?: number; binary?: boolean; error?: string } {
+    const dir = this.resolveAnySkillDir(skillName)
+    if (!dir) return { success: false, error: `Skill "${skillName}" not found` }
+
+    const target = resolve(dir, filePath || 'SKILL.md')
+    const safeRelativePath = relative(dir, target)
+    if (!safeRelativePath || safeRelativePath.startsWith('..') || isAbsolute(safeRelativePath)) {
+      return { success: false, error: '文件路径无效' }
+    }
+
+    try {
+      const stats = statSync(target)
+      if (!stats.isFile()) return { success: false, error: '只能预览文件' }
+      if (stats.size > MAX_SKILL_PREVIEW_FILE_BYTES) {
+        return { success: false, path: safeRelativePath, size: stats.size, error: '文件过大，无法预览' }
+      }
+
+      const buffer = readFileSync(target)
+      if (isBinaryBuffer(buffer)) {
+        return { success: false, path: safeRelativePath, size: stats.size, binary: true, error: '二进制文件无法预览' }
+      }
+
+      return {
+        success: true,
+        path: safeRelativePath,
+        content: buffer.toString('utf8'),
+        size: stats.size,
+      }
+    } catch (error) {
+      return { success: false, path: basename(filePath), error: String(error) }
     }
   }
 
@@ -343,29 +516,28 @@ export class SkillManagerService {
   getAllSkillsForAgentPrompt(totalBudget = DEFAULT_AGENT_ALL_SKILL_BUDGET): AgentSkillContextItem[] {
     const docs = this.getSkillDocuments()
     if (docs.length === 0) return []
-    const full = docs.map((doc) => ({
-      name: doc.name,
-      version: doc.version,
-      description: doc.description,
-      content: compactSkillContent(doc.content, Number.MAX_SAFE_INTEGER),
-    }))
+    const full = packSkillDocuments(docs, Number.MAX_SAFE_INTEGER)
     const fullLength = full.reduce((sum, item) => sum + item.content.length, 0)
     const safeBudget = Math.max(0, Math.floor(totalBudget))
     if (fullLength <= safeBudget) return full
 
-    let remaining = safeBudget
-    return docs.map((doc, index) => {
-      const remainingDocs = Math.max(1, docs.length - index)
-      const perSkillBudget = remaining > 0 ? Math.floor(remaining / remainingDocs) : 0
-      const content = perSkillBudget > 0 ? compactSkillContent(doc.content, perSkillBudget) : ''
-      remaining = Math.max(0, remaining - content.length)
-      return {
-        name: doc.name,
-        version: doc.version,
-        description: doc.description,
-        content,
-      }
-    })
+    return packSkillDocuments(docs, safeBudget)
+  }
+
+  selectSkillsForAgentPrompt(query: string, totalBudget = DEFAULT_SELECTED_SKILL_BUDGET): AgentSkillContextItem[] {
+    const docs = this.getSkillDocuments()
+    if (docs.length === 0) return []
+    const tokens = tokenizeSkillQuery(query)
+    if (tokens.length === 0) return []
+
+    const selected = docs
+      .map(doc => ({ doc, score: scoreSkillForQuery(doc, tokens) }))
+      .filter(item => item.score > 0)
+      .sort((a, b) => b.score - a.score || a.doc.name.localeCompare(b.doc.name))
+      .slice(0, MAX_SELECTED_SKILLS)
+      .map(item => item.doc)
+
+    return packSkillDocuments(selected, totalBudget)
   }
 
   private resolveUserSkillDir(skillName: string): string | null {
@@ -380,6 +552,10 @@ export class SkillManagerService {
       if (getSkillNameFromDir(candidate) === skillName) return candidate
     }
     return null
+  }
+
+  private resolveAnySkillDir(skillName: string): string | null {
+    return resolveSkillDir(skillName) ?? this.resolveUserSkillDir(skillName)
   }
 }
 
