@@ -1,5 +1,6 @@
 import { basename, delimiter, dirname, join } from 'path'
 import { existsSync, readdirSync, statSync } from 'fs'
+import * as https from 'https'
 import { createRequire } from 'module'
 
 const require = createRequire(import.meta.url)
@@ -55,6 +56,10 @@ export class WcdbCore {
   private wcdbStopMonitorPipe: any = null
   private wcdbGetMonitorPipeName: any = null
   private wcdbSetMyWxid: any = null
+  private wcdbSetTrustedTime: any = null
+
+  // 可信时间同步定时器（防本地改时钟绕过到期）
+  private trustedTimeTimer: any = null
 
   // 管道监控状态
   private monitorPipeClient: any = null
@@ -132,17 +137,103 @@ export class WcdbCore {
       this.wcdbStopMonitorPipe = tryBind('int32 wcdb_stop_monitor_pipe()')
       this.wcdbGetMonitorPipeName = tryBind('int32 wcdb_get_monitor_pipe_name(_Out_ void** outName)')
       this.wcdbSetMyWxid = tryBind('int32 wcdb_set_my_wxid(int64 handle, const char* wxid)')
+      this.wcdbSetTrustedTime = tryBind('int32 wcdb_set_trusted_time(int64 epochSeconds)')
 
-      const initResult = this.wcdbInit()
+      let initResult = this.wcdbInit()
+      if (initResult === -8 && this.wcdbSetTrustedTime) {
+        await this.syncTrustedTime()
+        initResult = this.wcdbInit()
+      }
       if (initResult !== 0) {
         return { success: false, error: `wcdb_init() 返回错误码: ${initResult}` }
       }
 
       this.initialized = true
+      this.startTrustedTimeSync(false)
       return { success: true }
     } catch (e: any) {
       return { success: false, error: `WCDB 初始化异常: ${e.message || String(e)}` }
     }
+  }
+
+  // ============== 可信时间同步（防本地改时钟绕过到期）==============
+  // native 维护"高水位 + 联网投影"的有效时间；这里负责从公共时间 API 取可信时间喂进 DLL。
+  // 取不到（离线）就静默，DLL 退化为本地时钟 + 历史高水位，离线照常可用。
+  private startTrustedTimeSync(syncNow = true): void {
+    if (!this.wcdbSetTrustedTime) return
+    if (syncNow) void this.syncTrustedTime()
+    if (this.trustedTimeTimer) clearInterval(this.trustedTimeTimer)
+    this.trustedTimeTimer = setInterval(() => { void this.syncTrustedTime() }, 6 * 60 * 60 * 1000)
+    this.trustedTimeTimer?.unref?.()
+  }
+
+  private stopTrustedTimeSync(): void {
+    if (this.trustedTimeTimer) {
+      clearInterval(this.trustedTimeTimer)
+      this.trustedTimeTimer = null
+    }
+  }
+
+  private async syncTrustedTime(): Promise<void> {
+    try {
+      if (!this.wcdbSetTrustedTime) return
+      const epoch = await this.fetchNetworkEpochSeconds()
+      if (epoch && this.isPlausibleEpoch(epoch)) {
+        this.wcdbSetTrustedTime(epoch)
+      }
+    } catch {
+      // 离线/失败静默，靠 native 本地高水位兜底
+    }
+  }
+
+  private isPlausibleEpoch(sec: number): boolean {
+    return Number.isFinite(sec) && sec > 1700000000 && sec < 4102444800
+  }
+
+  private async fetchNetworkEpochSeconds(): Promise<number | null> {
+    const sources: Array<{ url: string; parse: (body: string) => number | null }> = [
+      {
+        url: 'https://worldtimeapi.org/api/timezone/Etc/UTC',
+        parse: (b) => { try { const j = JSON.parse(b); return typeof j.unixtime === 'number' ? j.unixtime : null } catch { return null } },
+      },
+      {
+        url: 'https://timeapi.io/api/time/current/zone?timeZone=Etc%2FUTC',
+        parse: (b) => { try { const j = JSON.parse(b); const t = Date.parse(String(j.dateTime).replace(/Z?$/, 'Z')); return Number.isFinite(t) ? Math.floor(t / 1000) : null } catch { return null } },
+      },
+      {
+        url: 'https://www.cloudflare.com/cdn-cgi/trace',
+        parse: (b) => { const m = /(?:^|\n)ts=([0-9.]+)/.exec(b); return m ? Math.floor(parseFloat(m[1])) : null },
+      },
+    ]
+    for (const s of sources) {
+      try {
+        const { body, dateHeader } = await this.httpGetText(s.url, 4000)
+        let epoch = s.parse(body)
+        if ((!epoch || !this.isPlausibleEpoch(epoch)) && dateHeader) {
+          const d = Date.parse(dateHeader)
+          if (Number.isFinite(d)) epoch = Math.floor(d / 1000)
+        }
+        if (epoch && this.isPlausibleEpoch(epoch)) return epoch
+      } catch {
+        // 试下一个源
+      }
+    }
+    return null
+  }
+
+  private httpGetText(url: string, timeoutMs: number): Promise<{ body: string; dateHeader?: string }> {
+    return new Promise((resolve, reject) => {
+      const req = https.get(url, { timeout: timeoutMs, headers: { 'User-Agent': 'CipherTalk' } }, (res) => {
+        const rawDateHeader = res.headers?.date
+        const dateHeader = Array.isArray(rawDateHeader) ? rawDateHeader[0] : rawDateHeader
+        let body = ''
+        res.setEncoding('utf8')
+        res.on('data', (c: string) => { if (body.length < 8192) body += c })
+        res.on('end', () => resolve({ body, dateHeader }))
+      })
+      req.on('timeout', () => req.destroy(new Error('timeout')))
+      req.on('error', reject)
+    })
   }
 
   // ============== 路径解析 ==============
@@ -291,6 +382,7 @@ export class WcdbCore {
   }
 
   close(): void {
+    this.stopTrustedTimeSync()
     if (this.handle !== null && this.wcdbCloseAccount) {
       try { this.wcdbCloseAccount(this.handle) } catch (e) { console.error('关闭 WCDB 句柄失败:', e) }
     }
@@ -784,12 +876,19 @@ export class WcdbCore {
       case -4: return '数据库打开失败'
       case -5: return '查询执行失败'
       case -6: return 'WCDB 尚未初始化'
+      case -7: return 'WCDB 表结构不匹配'
+      case -8: return '软件偷来的吧！'
+      case -9: return '快提醒作者更新软件了！'
+      case -10: return '靠，你从哪搞得软件？'
       default: return `WCDB 错误码: ${code}`
     }
   }
 
   private mapCursorStatusCode(code: number, prefix: string): string {
     if (code === -7) return 'message schema mismatch：当前账号消息表结构与程序要求不一致'
+    if (code === -8) return `${prefix}: ${code}（软件偷来的吧！）`
+    if (code === -9) return `${prefix}: ${code}（快提醒作者更新软件了！）`
+    if (code === -10) return `${prefix}: ${code}（靠，你从哪搞得软件？）`
     if (code === -3) return `${prefix}: ${code}（消息数据库未找到）`
     return `${prefix}: ${code}`
   }
