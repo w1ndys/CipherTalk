@@ -82,6 +82,47 @@ function pruneImageNativeAddons(context) {
     }
 }
 
+// 构建期硬闸：若源码里有当前平台的图片解密原生插件，则产物里必须也有，否则让构建失败。
+// 背景：build.extraResources 的 filter 曾被改成 *.dll，漏打 wedecrypt/*.node，导致发布版图片解密全失败且静默回退（多个版本无人察觉）。
+function verifyImageNativePacked(context) {
+    const platformDir = resolveNativePlatform(context.electronPlatformName);
+    const archDir = resolveNativeArch(context.arch);
+    const targetFileName = `${IMAGE_NATIVE_PREFIX}${platformDir}-${archDir}${IMAGE_NATIVE_SUFFIX}`;
+
+    // 源码无此平台/架构插件（如 mac x64 / linux）→ 无可打包内容，跳过
+    const sourcePath = path.join(__dirname, '..', 'resources', 'wedecrypt', targetFileName);
+    if (!fs.existsSync(sourcePath)) {
+        console.log(`[afterPack] 源码无 ${targetFileName}，跳过原生插件打包校验`);
+        return;
+    }
+
+    const productName = context.packager?.appInfo?.productFilename || 'CipherTalk';
+    const resourceRoots = uniqueExistingDirs([
+        path.join(context.appOutDir, 'resources'),
+        path.join(context.appOutDir, 'Contents', 'Resources'),
+        path.join(context.appOutDir, `${productName}.app`, 'Contents', 'Resources')
+    ]);
+
+    for (const resourceRoot of resourceRoots) {
+        for (const nativeDir of [
+            path.join(resourceRoot, 'resources', 'wedecrypt'),
+            path.join(resourceRoot, 'wedecrypt')
+        ]) {
+            const packed = path.join(nativeDir, targetFileName);
+            if (fs.existsSync(packed) && fs.statSync(packed).size > 0) {
+                console.log(`[afterPack] 图片解密原生插件已打包: ${packed}`);
+                return;
+            }
+        }
+    }
+
+    throw new Error(
+        `[afterPack] 图片解密原生插件未打进发布包：期望产物里有 resources/wedecrypt/${targetFileName}，但找不到。` +
+        `源码存在该文件，几乎可以确定是 build.extraResources 的 filter 漏掉了 wedecrypt/*.node（历史上被改成过 *.dll）。` +
+        `修正 filter 后重新打包。`
+    );
+}
+
 exports.default = async function (context) {
     // context.appOutDir 是打包后的临时解压目录
     const localesDir = path.join(context.appOutDir, 'locales');
@@ -107,6 +148,8 @@ exports.default = async function (context) {
     }
 
     pruneImageNativeAddons(context);
+
+    verifyImageNativePacked(context);
 
     if (context.electronPlatformName === 'darwin') {
         const productName = context.packager?.appInfo?.productFilename || 'CipherTalk';

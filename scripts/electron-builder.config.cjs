@@ -39,6 +39,12 @@ function getExtraResources(buildTarget) {
         to: 'resources/macos/',
         filter: ['**/*']
       },
+      {
+        // 图片解密原生插件，运行时按 process.resourcesPath/resources/wedecrypt 查找；mac 之前没拷这层导致解密失败
+        from: 'resources/wedecrypt/',
+        to: 'resources/wedecrypt/',
+        filter: ['**/*']
+      },
       ...common
     ]
   }
@@ -48,7 +54,9 @@ function getExtraResources(buildTarget) {
       {
         from: 'resources/',
         to: 'resources/',
-        filter: ['*.dll']
+        // *.dll = 顶层 WCDB/wcdb_api/wx_key；wedecrypt/** = 图片解密原生插件(.node)，
+        // 之前只写 *.dll 把 wedecrypt 漏掉了，导致发布版图片解密全失败。非当前平台的 .node 由 afterPack 裁剪。
+        filter: ['*.dll', 'wedecrypt/**/*']
       },
       ...common,
       {

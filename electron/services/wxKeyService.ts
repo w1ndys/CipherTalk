@@ -36,7 +36,7 @@ export class WxKeyService {
    */
   isWeChatRunning(): boolean {
     try {
-      const result = execSync('tasklist /FI "IMAGENAME eq Weixin.exe" /NH', { encoding: 'utf8' })
+      const result = execSync('tasklist /FI "IMAGENAME eq Weixin.exe" /NH', { encoding: 'utf8', windowsHide: true })
       return result.toLowerCase().includes('weixin.exe')
     } catch {
       return false
@@ -48,7 +48,7 @@ export class WxKeyService {
    */
   getWeChatPid(): number | null {
     try {
-      const result = execSync('tasklist /FI "IMAGENAME eq Weixin.exe" /FO CSV /NH', { encoding: 'utf8' })
+      const result = execSync('tasklist /FI "IMAGENAME eq Weixin.exe" /FO CSV /NH', { encoding: 'utf8', windowsHide: true })
       const lines = result.trim().split('\n')
 
       for (const line of lines) {
@@ -73,7 +73,7 @@ export class WxKeyService {
    */
   killWeChat(): boolean {
     try {
-      execSync('taskkill /F /IM Weixin.exe', { encoding: 'utf8' })
+      execSync('taskkill /F /IM Weixin.exe', { encoding: 'utf8', windowsHide: true })
       return true
     } catch {
       return false
@@ -95,7 +95,7 @@ export class WxKeyService {
 
       for (const regPath of regPaths) {
         try {
-          const result = execSync(`reg query "${regPath}" /s /f "WeChat" 2>nul`, { encoding: 'utf8' })
+          const result = execSync(`reg query "${regPath}" /s /f "WeChat" 2>nul`, { encoding: 'utf8', windowsHide: true })
           const match = result.match(/InstallLocation\s+REG_SZ\s+(.+)/i)
           if (match) {
             const installPath = match[1].trim()
@@ -119,7 +119,7 @@ export class WxKeyService {
 
       for (const key of tencentKeys) {
         try {
-          const result = execSync(`reg query "${key}" /v InstallPath 2>nul`, { encoding: 'utf8' })
+          const result = execSync(`reg query "${key}" /v InstallPath 2>nul`, { encoding: 'utf8', windowsHide: true })
           const match = result.match(/InstallPath\s+REG_SZ\s+(.+)/i)
           if (match) {
             const installPath = match[1].trim()

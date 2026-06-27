@@ -39,7 +39,7 @@ class WindowsShortcutService implements ShortcutService {
           '-ExecutionPolicy', 'Bypass',
           '-WindowStyle', 'Hidden',
           '-Command', psScript
-        ])
+        ], { windowsHide: true })
 
         let errorOutput = ''
 

@@ -62,6 +62,7 @@ class ActivationService {
           // 尝试使用 PowerShell 获取序列号 (替代已弃用的 wmic)
           const biosSerial = execSync('powershell -Command "Get-WmiObject Win32_Bios | Select-Object -ExpandProperty SerialNumber"', {
             encoding: 'buffer',
+            windowsHide: true, // 隐藏 PowerShell 控制台窗口，避免闪窗
             stdio: ['ignore', 'pipe', 'ignore'] // 忽略 stderr 防止错误输出
           })
           const serial = biosSerial.toString('utf8').trim()
@@ -75,6 +76,7 @@ class ActivationService {
           // 尝试使用 PowerShell 获取 UUID
           const uuid = execSync('powershell -Command "Get-WmiObject Win32_ComputerSystemProduct | Select-Object -ExpandProperty UUID"', {
             encoding: 'buffer',
+            windowsHide: true, // 隐藏 PowerShell 控制台窗口，避免闪窗
             stdio: ['ignore', 'pipe', 'ignore']
           })
           const uuidValue = uuid.toString('utf8').trim()
