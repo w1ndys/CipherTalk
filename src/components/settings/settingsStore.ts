@@ -34,12 +34,15 @@ export interface SettingsConfig {
   sttOnlineTimeoutMs: number
   sttOnlineMaxConcurrency: number
 
-  // —— ai 切片 ——
-  aiProvider: string
-  aiApiKey: string
-  aiModel: string
+ // —— ai 切片 ——
+ aiProvider: string
+ aiApiKey: string
+ aiModel: string
 
-  // —— appearance / misc 切片 ——
+  // —— diary 切片 ——
+  diaryEnabled: boolean
+
+ // —— appearance / misc 切片 ——
   quoteStyle: 'default' | 'wechat' | 'card'
   exportPath: string
   exportDefaultDateRange: number
@@ -75,11 +78,13 @@ export const DEFAULT_SETTINGS_CONFIG: SettingsConfig = {
   sttOnlineTimeoutMs: 60000,
   sttOnlineMaxConcurrency: 2,
 
-  aiProvider: 'deepseek',
-  aiApiKey: '',
-  aiModel: '',
+ aiProvider: 'deepseek',
+ aiApiKey: '',
+ aiModel: '',
 
-  quoteStyle: 'default',
+  diaryEnabled: true,
+
+ quoteStyle: 'default',
   exportPath: '',
   exportDefaultDateRange: 0,
   closeToTray: true,

@@ -41,9 +41,10 @@ export const CONFIG_KEYS = {
   AUTH_PASSWORD_SALT: 'authPasswordSalt',
   CLOSE_TO_TRAY: 'closeToTray',
   HARDWARE_ACCELERATION_ENABLED: 'hardwareAccelerationEnabled',
-  DIARY_SUMMARY_HOUR: 'diarySummaryHour',
-  DIARY_CUSTOM_PROMPT: 'diaryCustomPrompt',
-  AI_PROVIDER_MODEL_CACHE: 'aiProviderModelCache',
+ DIARY_SUMMARY_HOUR: 'diarySummaryHour',
+ DIARY_CUSTOM_PROMPT: 'diaryCustomPrompt',
+  DIARY_ENABLED: 'diaryEnabled',
+ AI_PROVIDER_MODEL_CACHE: 'aiProviderModelCache',
   AI_ACTIVE_CONFIG_PRESET_ID: 'aiActiveConfigPresetId',
   AGENT_CODE_WORKSPACE_ROOT: 'agentCodeWorkspaceRoot',
   AGENT_CODE_WORKSPACE_APPROVAL_POLICY: 'agentCodeWorkspaceApprovalPolicy',
@@ -442,6 +443,11 @@ export async function setAuthPasswordSalt(salt: string | null): Promise<void> {
 
 export const DEFAULT_DIARY_SUMMARY_HOUR = 2
 export const MAX_DIARY_CUSTOM_PROMPT_LENGTH = 4000
+export const DEFAULT_DIARY_ENABLED = true
+
+export function normalizeDiaryEnabled(value: unknown): boolean {
+  return value !== false
+}
 
 export function normalizeDiarySummaryHour(hour: unknown): number {
   const numberValue = Math.floor(Number(hour))
@@ -468,6 +474,15 @@ export async function getDiaryCustomPrompt(): Promise<string> {
 
 export async function setDiaryCustomPrompt(prompt: string): Promise<void> {
   await config.set(CONFIG_KEYS.DIARY_CUSTOM_PROMPT, normalizeDiaryCustomPrompt(prompt))
+}
+
+export async function getDiaryEnabled(): Promise<boolean> {
+  const value = await config.get(CONFIG_KEYS.DIARY_ENABLED)
+  return normalizeDiaryEnabled(value)
+}
+
+export async function setDiaryEnabled(enabled: boolean): Promise<void> {
+  await config.set(CONFIG_KEYS.DIARY_ENABLED, enabled)
 }
 
 // --- AI 接入配置 ---

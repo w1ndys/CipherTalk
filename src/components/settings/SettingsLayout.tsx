@@ -361,40 +361,20 @@ function SettingsLayout() {
         savedSttOnlineMaxConcurrency, savedSkipIntegrityCheck, savedAutoUpdateDatabase,
         savedCheckInterval, savedMinInterval, savedDebounceTime,
         savedQuoteStyle, savedExportDefaultDateRange,
-        savedAiProvider, savedAiApiKey, savedAiModel,
-        savedCloseToTray, savedHardwareAccelerationEnabled
-      ] = await Promise.all([
-        configService.getDecryptKey(),
-        configService.getDbPath(),
-        configService.getMyWxid(),
-        configService.getCachePath(),
-        configService.getImageXorKey(),
-        configService.getImageAesKey(),
-        configService.getExportPath(),
-        configService.getSttLanguages(),
-        configService.getSttModelType(),
-        configService.getSttMode(),
-        configService.getSttOnlineProvider(),
-        configService.getSttOnlineApiKey(),
-        configService.getSttOnlineBaseURL(),
-        configService.getSttOnlineModel(),
-        configService.getSttOnlineLanguage(),
-        configService.getSttOnlineTimeoutMs(),
-        configService.getSttOnlineMaxConcurrency(),
-        configService.getSkipIntegrityCheck(),
-        configService.getAutoUpdateDatabase(),
-        configService.getAutoUpdateCheckInterval(),
-        configService.getAutoUpdateMinInterval(),
-        configService.getAutoUpdateDebounceTime(),
-        configService.getQuoteStyle(),
-        configService.getExportDefaultDateRange(),
-        configService.getAiProvider(),
-        configService.getAiApiKey(),
-        configService.getAiModel(),
-        configService.getCloseToTray(),
-        configService.getHardwareAccelerationEnabled()
-      ])
-      const { activeAccount, editingAccount } = await accountsPromise
+       savedAiProvider, savedAiApiKey, savedAiModel,
+        savedCloseToTray, savedHardwareAccelerationEnabled, savedDiaryEnabled
+     ] = await Promise.all([
+        configService.getDecryptKey(), configService.getDbPath(), configService.getMyWxid(), configService.getCachePath(),
+        configService.getImageXorKey(), configService.getImageAesKey(), configService.getExportPath(), configService.getSttLanguages(),
+        configService.getSttModelType(), configService.getSttMode(), configService.getSttOnlineProvider(), configService.getSttOnlineApiKey(),
+        configService.getSttOnlineBaseURL(), configService.getSttOnlineModel(), configService.getSttOnlineLanguage(), configService.getSttOnlineTimeoutMs(),
+        configService.getSttOnlineMaxConcurrency(), configService.getSkipIntegrityCheck(), configService.getAutoUpdateDatabase(),
+        configService.getAutoUpdateCheckInterval(), configService.getAutoUpdateMinInterval(), configService.getAutoUpdateDebounceTime(),
+        configService.getQuoteStyle(), configService.getExportDefaultDateRange(),
+        configService.getAiProvider(), configService.getAiApiKey(), configService.getAiModel(),
+       configService.getCloseToTray(), configService.getHardwareAccelerationEnabled(), configService.getDiaryEnabled(),
+     ])
+     const { activeAccount, editingAccount } = await accountsPromise
 
       if (!editingAccount && savedKey) setDecryptKey(savedKey)
       if (!editingAccount && savedPath) setDbPath(savedPath)
@@ -470,9 +450,10 @@ function SettingsLayout() {
         aiProvider: savedAiProvider,
         aiApiKey: savedAiApiKey,
         aiModel: savedAiModel,
-        closeToTray: savedCloseToTray,
-        hardwareAccelerationEnabled: savedHardwareAccelerationEnabled,
-        editingAccountId: (editingAccount || activeAccount)?.id || ''
+       closeToTray: savedCloseToTray,
+       hardwareAccelerationEnabled: savedHardwareAccelerationEnabled,
+        diaryEnabled: savedDiaryEnabled,
+       editingAccountId: (editingAccount || activeAccount)?.id || ''
       }
       hydrateSettings(loadedConfig)
 
@@ -1307,11 +1288,14 @@ function SettingsLayout() {
       await configService.setSttOnlineTimeoutMs(storeConfig.sttOnlineTimeoutMs)
       await configService.setSttOnlineMaxConcurrency(storeConfig.sttOnlineMaxConcurrency)
 
-      // 保存关闭行为配置
-      await configService.setCloseToTray(storeConfig.closeToTray)
-      await configService.setHardwareAccelerationEnabled(storeConfig.hardwareAccelerationEnabled)
+     // 保存关闭行为配置
+     await configService.setCloseToTray(storeConfig.closeToTray)
+     await configService.setHardwareAccelerationEnabled(storeConfig.hardwareAccelerationEnabled)
 
-      // 如果数据库配置完整，尝试设置已连接状态（不进行耗时测试，仅标记）
+      // 保存日记功能开关
+      await configService.setDiaryEnabled(storeConfig.diaryEnabled)
+
+     // 如果数据库配置完整，尝试设置已连接状态（不进行耗时测试，仅标记）
       if (storeConfig.decryptKey && storeConfig.dbPath && storeConfig.wxid && storeConfig.decryptKey.length === 64 && isAccountVerified) {
         setDbConnected(true, storeConfig.dbPath)
       }

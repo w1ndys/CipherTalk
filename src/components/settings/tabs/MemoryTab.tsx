@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+﻿import { useEffect, useMemo, useState } from 'react'
 import {
   AlertDialog,
   Button,
@@ -12,12 +12,14 @@ import {
   NumberField,
   Select,
   Skeleton,
+  Switch,
   TextField,
   Typography,
   type Key,
 } from '@heroui/react'
 import { Check, Download, FileText, ListChecks, Pencil, Plus, RefreshCw, Search, Sparkles, Trash2, X } from 'lucide-react'
 import type { AgentMemoryItem, AgentMemorySourceType, MemoryBankNoteInfo, MemoryBankNoteKind } from '../../../types/electron'
+import { useSettingsStore } from '../settingsStore'
 
 interface MemoryTabProps {
   showMessage: (text: string, success: boolean) => void
@@ -134,7 +136,9 @@ function bankNoteKindLabel(kind: MemoryBankNoteKind) {
 }
 
 export default function MemoryTab({ showMessage }: MemoryTabProps) {
-  const [items, setItems] = useState<AgentMemoryItem[]>([])
+  const diaryEnabled = useSettingsStore(s => s.config.diaryEnabled)
+  const setField = useSettingsStore(s => s.setField)
+ const [items, setItems] = useState<AgentMemoryItem[]>([])
   const [count, setCount] = useState(0)
   const [loading, setLoading] = useState(false)
   const [exporting, setExporting] = useState(false)
@@ -593,6 +597,27 @@ export default function MemoryTab({ showMessage }: MemoryTabProps) {
 
   return (
     <div className="space-y-4">
+    <Card>
+      <Card.Header className="flex-col items-start gap-1">
+        <Card.Title>日记功能</Card.Title>
+        <Card.Description>关闭后将隐藏侧边栏日记入口，并停止每日自动生成日记的夜间记忆整理。</Card.Description>
+      </Card.Header>
+      <Card.Content>
+        <Switch
+          className="max-w-2xl"
+          isSelected={diaryEnabled}
+          onChange={(enabled) => setField('diaryEnabled', enabled)}
+        >
+          <Switch.Control>
+            <Switch.Thumb />
+          </Switch.Control>
+          <Switch.Content>
+            <Label>启用日记</Label>
+            <Description>默认开启。关闭后不再自动生成日记，已有日记仍可查看。</Description>
+          </Switch.Content>
+        </Switch>
+      </Card.Content>
+    </Card>
     <Card>
       <Card.Header className="flex-col items-start gap-3 lg:flex-row lg:items-start lg:justify-between">
         <div>

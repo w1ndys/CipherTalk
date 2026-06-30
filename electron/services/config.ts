@@ -102,11 +102,12 @@ interface ConfigSchema {
   // 窗口关闭行为
   closeToTray: boolean
 
-  // 日记相关
-  diarySummaryHour: number
-  diaryCustomPrompt: string
+ // 日记相关
+ diarySummaryHour: number
+ diaryCustomPrompt: string
+  diaryEnabled: boolean
 
-  // 性能相关
+ // 性能相关
   hardwareAccelerationEnabled: boolean
 
   // AI 相关
@@ -286,9 +287,10 @@ const defaults: ConfigSchema = {
   autoUpdateMinInterval: 1000,     // 默认最小更新间隔 1 秒
   autoUpdateDebounceTime: 500,     // 默认防抖时间 0.5 秒
   closeToTray: true,  // 默认最小化到托盘
-  diarySummaryHour: 2,
-  diaryCustomPrompt: '',
-  hardwareAccelerationEnabled: true,
+ diarySummaryHour: 2,
+ diaryCustomPrompt: '',
+  diaryEnabled: true,
+ hardwareAccelerationEnabled: true,
   // AI 默认配置
   aiCurrentProvider: 'deepseek',
   aiActiveConfigPresetId: '',

@@ -99,14 +99,15 @@ class NightlyMemoryService {
     this.ctx = null
   }
 
-  private async check(): Promise<void> {
-    if (this.running) return
-    const config = this.ctx?.getConfigService()
-    if (!config) return
-    if (!String(config.get('myWxid') || '').trim()) return
-    const provider = config.getAICurrentProvider()
-    if (!String(config.getAIProviderConfig(provider)?.apiKey || '').trim()) return
-    const summaryHour = Number(config.get('diarySummaryHour') ?? 2)
+ private async check(): Promise<void> {
+   if (this.running) return
+   const config = this.ctx?.getConfigService()
+   if (!config) return
+   if (!String(config.get('myWxid') || '').trim()) return
+   const provider = config.getAICurrentProvider()
+   if (!String(config.getAIProviderConfig(provider)?.apiKey || '').trim()) return
+    if (config.get('diaryEnabled') === false) return
+   const summaryHour = Number(config.get('diarySummaryHour') ?? 2)
     const customPrompt = String(config.get('diaryCustomPrompt') || '').trim()
     this.running = true
     try {

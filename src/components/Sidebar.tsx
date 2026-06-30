@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactElement, type CSSProperties, type Key } from 'react'
+﻿import { useEffect, useState, type ReactElement, type CSSProperties, type Key } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { Avatar, Button, ScrollShadow, Separator, Tabs, Tooltip } from '@heroui/react'
 import { Home, MessageSquare, Database, Settings, SquareChevronLeft, SquareChevronRight, Download, Aperture, Bot, PawPrint, BookOpen, UserRoundPlus } from 'lucide-react'
@@ -40,18 +40,30 @@ function Sidebar({ autoCollapse = false }: { autoCollapse?: boolean }) {
   const navigate = useNavigate()
   const userInfo = useAppStore(state => state.userInfo)
   const deviceStatus = useDeviceConnectStatus()
-  const [collapsed, setCollapsed] = useState(false)
-  const [deviceConnectOpen, setDeviceConnectOpen] = useState(false)
-  const userDisplayName = userInfo?.nickName?.trim() || userInfo?.alias?.trim() || '未连接用户'
+ const [collapsed, setCollapsed] = useState(false)
+ const [deviceConnectOpen, setDeviceConnectOpen] = useState(false)
+  const [diaryEnabled, setDiaryEnabled] = useState(true)
+ const userDisplayName = userInfo?.nickName?.trim() || userInfo?.alias?.trim() || '未连接用户'
   const userInitial = userDisplayName.slice(0, 1).toUpperCase()
 
   const isActive = (path: string) => location.pathname === path
 
-  useEffect(() => {
-    if (autoCollapse) setCollapsed(true)
-  }, [autoCollapse])
+ useEffect(() => {
+   if (autoCollapse) setCollapsed(true)
+ }, [autoCollapse])
 
-  const openChatWindow = async () => {
+  useEffect(() => {
+    let mounted = true
+    window.electronAPI.config.get('diaryEnabled')
+      .then((value) => { if (mounted) setDiaryEnabled(value !== false) })
+      .catch(() => undefined)
+    const off = window.electronAPI.config.onChanged(({ key, value }) => {
+      if (key === 'diaryEnabled') setDiaryEnabled(value !== false)
+    })
+    return () => { mounted = false; off() }
+  }, [])
+
+ const openChatWindow = async () => {
     try {
       await window.electronAPI.window.openChatWindow()
     } catch (e) {
@@ -78,19 +90,20 @@ function Sidebar({ autoCollapse = false }: { autoCollapse?: boolean }) {
     { key: 'export', label: '导出数据', icon: <Download size={NAV_ICON_SIZE} />, type: 'route', path: '/export' },
     { key: 'data-management', label: '数据管理', icon: <Database size={NAV_ICON_SIZE} />, type: 'route', path: '/data-management' },
     { key: 'mcp', label: 'MCP & Skills', icon: <MCP size={NAV_ICON_SIZE} />, type: 'route', path: '/mcp' },
-  ]
-  const activeNavKey = navItems.find(item => item.type === 'route' && isActive(item.path))?.key
+ ]
+  const visibleNavItems = diaryEnabled ? navItems : navItems.filter((item) => item.key !== 'diary')
+ const activeNavKey = navItems.find(item => item.type === 'route' && isActive(item.path))?.key
 
-  const handleNavSelectionChange = (key: Key) => {
-    const item = navItems.find(navItem => navItem.key === String(key))
-    if (!item) return
+ const handleNavSelectionChange = (key: Key) => {
+   const item = navItems.find(navItem => navItem.key === String(key))
+   if (!item) return
 
-    if (item.type === 'route') {
-      navigate(item.path)
-    } else {
-      item.onClick()
-    }
-  }
+   if (item.type === 'route') {
+     navigate(item.path)
+   } else {
+     item.onClick()
+   }
+ }
 
   const renderNavButton = (opts: { label: string; icon: ReactElement; active?: boolean; onPress: () => void }) => {
     const button = (
@@ -212,7 +225,7 @@ function Sidebar({ autoCollapse = false }: { autoCollapse?: boolean }) {
                   collapsed ? 'w-fit items-center gap-1' : 'w-full gap-1'
                 )}
               >
-                {navItems.map(renderNavTab)}
+               {visibleNavItems.map(renderNavTab)}
               </Tabs.List>
             </Tabs.ListContainer>
           </Tabs>

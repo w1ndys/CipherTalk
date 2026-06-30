@@ -50,11 +50,13 @@ export function useSettingsConfig() {
         sttOnlineTimeoutMs: await configService.getSttOnlineTimeoutMs(),
         sttOnlineMaxConcurrency: await configService.getSttOnlineMaxConcurrency(),
 
-        aiProvider: await configService.getAiProvider(),
-        aiApiKey: await configService.getAiApiKey(),
-        aiModel: await configService.getAiModel(),
+       aiProvider: await configService.getAiProvider(),
+       aiApiKey: await configService.getAiApiKey(),
+       aiModel: await configService.getAiModel(),
 
-        quoteStyle: await configService.getQuoteStyle(),
+        diaryEnabled: await configService.getDiaryEnabled(),
+
+       quoteStyle: await configService.getQuoteStyle(),
         exportPath: await configService.getExportPath() || '',
         exportDefaultDateRange: await configService.getExportDefaultDateRange(),
         closeToTray: await configService.getCloseToTray(),
@@ -120,10 +122,12 @@ export function useSettingsConfig() {
       await configService.setSttOnlineLanguage(config.sttOnlineLanguage)
       await configService.setSttOnlineTimeoutMs(config.sttOnlineTimeoutMs)
       await configService.setSttOnlineMaxConcurrency(config.sttOnlineMaxConcurrency)
-      await configService.setCloseToTray(config.closeToTray)
-      await configService.setHardwareAccelerationEnabled(config.hardwareAccelerationEnabled)
+     await configService.setCloseToTray(config.closeToTray)
+     await configService.setHardwareAccelerationEnabled(config.hardwareAccelerationEnabled)
 
-      store.commit()
+      await configService.setDiaryEnabled(config.diaryEnabled)
+
+     store.commit()
       showMessage('配置保存成功', true)
       return savedAccount
     } catch (e) {
