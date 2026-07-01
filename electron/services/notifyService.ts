@@ -1,4 +1,6 @@
-import { Notification } from 'electron'
+import { Notification, nativeImage } from 'electron'
+import { readFile } from 'fs/promises'
+import sharp from 'sharp'
 import type { MainProcessContext } from '../main/context'
 import { getNotificationIconPath } from '../main/windows/windowManager'
 import { chatService } from './chatService'
@@ -27,6 +29,22 @@ export interface NotifyPayload {
   avatarUrl?: string
   preview: string
   timestamp: number
+}
+
+// 苹果 App 图标的圆角是超椭圆 |x|^n+|y|^n=1（n≈5），并非普通圆弧，故用参数方程采样成多边形当遮罩。
+function squircleMaskSvg(size: number): string {
+  const n = 5
+  const r = size / 2
+  const N = 180
+  let pts = ''
+  for (let i = 0; i < N; i++) {
+    const t = (i / N) * 2 * Math.PI
+    const c = Math.cos(t), s = Math.sin(t)
+    const x = r + Math.sign(c) * r * Math.abs(c) ** (2 / n)
+    const y = r + Math.sign(s) * r * Math.abs(s) ** (2 / n)
+    pts += `${x.toFixed(2)},${y.toFixed(2)} `
+  }
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}"><polygon points="${pts.trim()}" fill="#fff"/></svg>`
 }
 
 interface SessionSnap {
@@ -172,19 +190,59 @@ class NotifyService {
     if (this.ctx?.getWindowManager().isPetWindowOpen()) {
       this.ctx.broadcastToWindows('pet:notify', payload)
     } else {
-      this.showSystemNotification(payload)
+      void this.showSystemNotification(payload)
     }
   }
 
-  private showSystemNotification(payload: NotifyPayload): void {
+  /** 头像可能是远程 http URL、data:URL 或本地路径，统一取原始字节。 */
+  private async loadAvatarBuffer(avatarUrl?: string): Promise<Buffer | null> {
+    if (!avatarUrl) return null
+    try {
+      if (avatarUrl.startsWith('data:')) {
+        return Buffer.from(avatarUrl.slice(avatarUrl.indexOf(',') + 1), 'base64')
+      }
+      if (/^https?:\/\//.test(avatarUrl)) {
+        const res = await fetch(avatarUrl)
+        return res.ok ? Buffer.from(await res.arrayBuffer()) : null
+      }
+      return await readFile(avatarUrl)
+    } catch {
+      return null
+    }
+  }
+
+  /** 头像裁成苹果 App 图标那种超椭圆（squircle）连续曲率圆角，透明背景。 */
+  private async squircleAvatar(avatarUrl?: string): Promise<Electron.NativeImage | null> {
+    const src = await this.loadAvatarBuffer(avatarUrl)
+    if (!src) return null
+    try {
+      const size = 256
+      const png = await sharp(src)
+        .resize(size, size, { fit: 'cover' })
+        .composite([{ input: Buffer.from(squircleMaskSvg(size)), blend: 'dest-in' }])
+        .png()
+        .toBuffer()
+      const img = nativeImage.createFromBuffer(png)
+      return img.isEmpty() ? null : img
+    } catch {
+      // sharp 处理失败（如格式不支持）就退回原图不裁角
+      const img = nativeImage.createFromBuffer(src)
+      return img.isEmpty() ? null : img
+    }
+  }
+
+  private async showSystemNotification(payload: NotifyPayload): Promise<void> {
     if (!Notification.isSupported()) return
     try {
+      const avatar = await this.squircleAvatar(payload.avatarUrl)
       const iconPath = getNotificationIconPath()
+      // 优先发送者头像，拉取失败回退 App 图标
+      const icon = avatar || (iconPath ? nativeImage.createFromPath(iconPath) : null)
       const notification = new Notification({
         title: payload.displayName,
         body: payload.preview,
         silent: false,
-        ...(iconPath ? { icon: iconPath } : {}),
+        ...(icon ? { icon } : {}),
       })
       notification.on('click', () => {
         const win = this.ctx?.getMainWindow()

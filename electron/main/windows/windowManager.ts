@@ -522,8 +522,8 @@ export function createWindowManager(ctx: MainProcessContext): WindowManager {
 
     createSplashWindow() {
       const splash = new BrowserWindow({
-        width: 460,
-        height: 300,
+        width: 480,
+        height: 270,
         ...getWindowIconOptions(ctx),
         frame: false,
         transparent: true,
