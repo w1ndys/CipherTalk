@@ -1,10 +1,10 @@
-import type { LucideIcon } from 'lucide-react'
+import type { IconComponent } from '@/types/icon'
 import { Card, Checkbox } from '@heroui/react'
 
 export interface OptionCardItem {
   key: string
   label: string
-  icon: LucideIcon
+  icon: IconComponent
 }
 
 interface OptionCardGroupProps {
@@ -32,7 +32,7 @@ export default function OptionCardGroup({ items, isSelected, onToggle, 'aria-lab
             className="cursor-pointer"
           >
             <div className="flex items-center gap-2">
-              <Icon size={18} className="shrink-0" />
+              <Icon width={18} height={18} className="shrink-0" />
               <span className="flex-1 text-sm">{label}</span>
               <Checkbox isSelected={selected} isReadOnly aria-hidden>
                 <Checkbox.Control><Checkbox.Indicator /></Checkbox.Control>

@@ -1,4 +1,4 @@
-import { RefreshCw, Info } from 'lucide-react'
+import { ArrowsRotateLeft, CircleInfo } from '@gravity-ui/icons'
 import { ScrollShadow, Button, Typography } from '@heroui/react'
 import type { ExportShared } from '../hooks/useExportShared'
 import type { useDatabaseExport } from '../hooks/useDatabaseExport'
@@ -34,7 +34,7 @@ export default function DatabaseExportPanel({ database, shared }: DatabaseExport
         <div className="flex items-center justify-between">
           <Typography type="h6">数据库列表</Typography>
           <Button isIconOnly variant="tertiary" size="sm" isDisabled={isLoading} onPress={loadDatabases}>
-            <RefreshCw size={16} className={isLoading ? 'animate-spin' : ''} />
+            <ArrowsRotateLeft width={16} height={16} className={isLoading ? 'animate-spin' : ''} />
           </Button>
         </div>
 
@@ -67,7 +67,7 @@ export default function DatabaseExportPanel({ database, shared }: DatabaseExport
         <ScrollShadow hideScrollBar className="min-h-0 flex-1" size={32}>
           <div className="flex flex-col gap-5 px-1 py-1">
             <section className="flex items-start gap-2 rounded-lg bg-default p-3">
-              <Info size={16} className="mt-0.5 shrink-0 text-muted" />
+              <CircleInfo width={16} height={16} className="mt-0.5 shrink-0 text-muted" />
               <Typography type="body-sm" className="text-muted">
                 将微信原生加密数据库解密为普通 SQLite 库导出。每个勾选的库各导出为一个明文 .db 文件，
                 可用任意 SQLite 工具直接打开。

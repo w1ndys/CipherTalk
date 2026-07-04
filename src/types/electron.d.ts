@@ -1369,7 +1369,15 @@ export interface ElectronAPI {
         images?: Array<{ base64: string }>
       },
       modelConfig?: unknown
-    ) => Promise<{ success: boolean; suggestions?: string[]; error?: string }>
+    ) => Promise<{
+      success: boolean
+      suggestions?: string[]
+      /** 实际附进模型请求的图片张数（0=没附） */
+      imagesAttached?: number
+      /** 模型图像输入能力：true/false=目录明确标记，undefined=目录查不到 */
+      visionSupport?: boolean
+      error?: string
+    }>
     onChunk: (runId: string, callback: (chunk: unknown) => void) => () => void
     onProgress: (runId: string, callback: (progress: unknown) => void) => () => void
     listConversations: (scope?: unknown) => Promise<{ success: boolean; conversations?: unknown[]; error?: string }>

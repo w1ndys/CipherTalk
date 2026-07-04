@@ -1,4 +1,4 @@
-import { RefreshCw, Users, User, CircleUserRound, Image, Video, Smile, Mic } from 'lucide-react'
+import { ArrowsRotateLeft, FaceSmile, Microphone, Person, Persons, Picture, Video } from '@gravity-ui/icons'
 import { ScrollShadow, Button, Tabs, Chip, Typography } from '@heroui/react'
 import DateRangePicker from '../../../components/DateRangePicker'
 import type { ExportOptions, SessionTypeFilter } from '../types'
@@ -17,12 +17,12 @@ interface ChatExportPanelProps {
   shared: ExportShared
 }
 
-const exportToggles: { key: keyof ExportOptions; label: string; icon: typeof Image }[] = [
-  { key: 'exportAvatars', label: '导出头像', icon: CircleUserRound },
-  { key: 'exportImages', label: '导出图片', icon: Image },
+const exportToggles: { key: keyof ExportOptions; label: string; icon: typeof Picture }[] = [
+  { key: 'exportAvatars', label: '导出头像', icon: Person },
+  { key: 'exportImages', label: '导出图片', icon: Picture },
   { key: 'exportVideos', label: '导出视频', icon: Video },
-  { key: 'exportEmojis', label: '导出表情包', icon: Smile },
-  { key: 'exportVoices', label: '导出语音', icon: Mic }
+  { key: 'exportEmojis', label: '导出表情包', icon: FaceSmile },
+  { key: 'exportVoices', label: '导出语音', icon: Microphone }
 ]
 
 export default function ChatExportPanel({ chat, shared }: ChatExportPanelProps) {
@@ -56,7 +56,7 @@ export default function ChatExportPanel({ chat, shared }: ChatExportPanelProps) 
             )}
           </div>
           <Button isIconOnly variant="tertiary" size="sm" isDisabled={isLoading} onPress={loadSessions}>
-            <RefreshCw size={16} className={isLoading ? 'animate-spin' : ''} />
+            <ArrowsRotateLeft width={16} height={16} className={isLoading ? 'animate-spin' : ''} />
           </Button>
         </div>
 
@@ -74,8 +74,8 @@ export default function ChatExportPanel({ chat, shared }: ChatExportPanelProps) 
           <Tabs.ListContainer>
             <Tabs.List aria-label="会话类型筛选">
               <Tabs.Tab id="all">全部<Tabs.Indicator /></Tabs.Tab>
-              <Tabs.Tab id="group"><Users size={13} />群聊<Tabs.Indicator /></Tabs.Tab>
-              <Tabs.Tab id="private"><User size={13} />私聊<Tabs.Indicator /></Tabs.Tab>
+              <Tabs.Tab id="group"><Persons width={13} height={13} />群聊<Tabs.Indicator /></Tabs.Tab>
+              <Tabs.Tab id="private"><Person width={13} height={13} />私聊<Tabs.Indicator /></Tabs.Tab>
             </Tabs.List>
           </Tabs.ListContainer>
         </Tabs>

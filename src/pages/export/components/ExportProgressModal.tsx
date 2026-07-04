@@ -1,4 +1,4 @@
-import { Loader2 } from 'lucide-react'
+import { CircleDashed } from '@gravity-ui/icons'
 import { Modal, ProgressBar, Label, Chip, Typography } from '@heroui/react'
 import type { ExportOptions, ExportProgress } from '../types'
 
@@ -35,7 +35,7 @@ export default function ExportProgressModal({
         <Modal.Dialog>
           <Modal.Header>
             <Modal.Icon className="bg-default text-foreground">
-              <Loader2 className="size-5 animate-spin" />
+              <CircleDashed className="size-5 animate-spin" />
             </Modal.Icon>
             <Modal.Heading>正在导出</Modal.Heading>
           </Modal.Header>

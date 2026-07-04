@@ -1,4 +1,4 @@
-import { FolderOpen } from 'lucide-react'
+import { FolderOpen } from '@gravity-ui/icons'
 import { TextField, Input, Button } from '@heroui/react'
 
 interface ExportPathSelectProps {
@@ -13,7 +13,7 @@ export default function ExportPathSelect({ exportFolder, onSelect }: ExportPathS
         <Input placeholder="点击选择导出位置" />
       </TextField>
       <Button variant="secondary" onPress={onSelect}>
-        <FolderOpen size={16} />
+        <FolderOpen width={16} height={16} />
         浏览
       </Button>
     </div>

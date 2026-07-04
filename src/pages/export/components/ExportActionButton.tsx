@@ -1,4 +1,4 @@
-import { Download } from 'lucide-react'
+import { ArrowDownToLine } from '@gravity-ui/icons'
 import { Button } from '@heroui/react'
 
 interface ExportActionButtonProps {
@@ -17,7 +17,7 @@ export default function ExportActionButton({ label, isExporting, disabled, onCli
       isDisabled={disabled}
       onPress={onClick}
     >
-      {!isExporting && <Download size={18} />}
+      {!isExporting && <ArrowDownToLine width={18} height={18} />}
       {isExporting ? '导出中...' : label}
     </Button>
   )

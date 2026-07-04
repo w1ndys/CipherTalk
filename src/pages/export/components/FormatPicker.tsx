@@ -26,7 +26,7 @@ export default function FormatPicker({ options, value, onChange, 'aria-label': a
           >
             <Card.Header className="gap-1">
               <div className="flex items-center gap-2">
-                <fmt.icon size={18} className="shrink-0" />
+                <fmt.icon width={18} height={18} className="shrink-0" />
                 <Card.Title className="flex-1 text-sm">{fmt.label}</Card.Title>
                 <Checkbox isSelected={selected} isReadOnly aria-hidden>
                   <Checkbox.Control><Checkbox.Indicator /></Checkbox.Control>

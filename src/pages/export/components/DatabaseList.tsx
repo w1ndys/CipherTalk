@@ -1,4 +1,4 @@
-import { Database as DatabaseIcon } from 'lucide-react'
+import { Database as DatabaseIcon } from '@gravity-ui/icons'
 import { Spinner, ListBox, Chip, Label, Description, Typography, type Selection } from '@heroui/react'
 import type { DatabaseFile } from '../types'
 import { formatBytes } from '../utils'
@@ -48,7 +48,7 @@ export default function DatabaseList({ isLoading, databases, selected, onSelecti
           textValue={db.name}
           className="data-[selected=true]:bg-accent-soft data-[selected=true]:text-accent-soft-foreground"
         >
-          <DatabaseIcon size={16} className="shrink-0 text-muted" />
+          <DatabaseIcon width={16} height={16} className="shrink-0 text-muted" />
           <div className="flex min-w-0 flex-1 flex-col">
             <Label className="truncate">{db.name}</Label>
             {db.folder && <Description className="truncate">{db.folder}</Description>}

@@ -106,10 +106,9 @@ export class AgentProcessService {
     return result.title
   }
 
-  /** 聊天回复建议：子进程内单次 generateText，返回建议文本数组。 */
-  async replySuggest(input: import('./engine').ReplySuggestInput): Promise<string[]> {
-    const result = await this.call<{ suggestions: string[] }>('replySuggest', input)
-    return result.suggestions
+  /** 聊天回复建议：子进程内单次 generateText（可带图/带检索工具），返回建议 + 附图诊断信息。 */
+  async replySuggest(input: import('./engine').ReplySuggestInput): Promise<import('./engine').ReplySuggestOutcome> {
+    return this.call<import('./engine').ReplySuggestOutcome>('replySuggest', input)
   }
 
   /** 克隆好友：在子进程内跑画像提取（两路 generateObject），返回画像卡 + few-shot。 */

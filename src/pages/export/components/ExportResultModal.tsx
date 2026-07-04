@@ -1,4 +1,4 @@
-import { CheckCircle, XCircle, ExternalLink } from 'lucide-react'
+import { ArrowUpRightFromSquare, CircleCheck, CircleXmark } from '@gravity-ui/icons'
 import { Modal, Button, Typography } from '@heroui/react'
 import type { ExportResult } from '../types'
 
@@ -19,7 +19,7 @@ export default function ExportResultModal({ result, unitLabel, onOpenFolder, onC
             <Modal.CloseTrigger />
             <Modal.Header>
               <Modal.Icon className={result.success ? 'bg-success-soft text-success-soft-foreground' : 'bg-danger-soft text-danger-soft-foreground'}>
-                {result.success ? <CheckCircle className="size-5" /> : <XCircle className="size-5" />}
+                {result.success ? <CircleCheck className="size-5" /> : <CircleXmark className="size-5" />}
               </Modal.Icon>
               <Modal.Heading>{result.success ? '导出完成' : '导出失败'}</Modal.Heading>
             </Modal.Header>
@@ -38,7 +38,7 @@ export default function ExportResultModal({ result, unitLabel, onOpenFolder, onC
             <Modal.Footer>
               {result.success && (
                 <Button variant="tertiary" onPress={onOpenFolder}>
-                  <ExternalLink size={16} />
+                  <ArrowUpRightFromSquare width={16} height={16} />
                   打开文件夹
                 </Button>
               )}

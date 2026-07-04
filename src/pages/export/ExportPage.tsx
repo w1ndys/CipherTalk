@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { MessageSquare, Database } from 'lucide-react'
+import { Comment, Database } from '@gravity-ui/icons'
 import { Tabs } from '@heroui/react'
 import type { ExportTab } from './types'
 import { useExportShared } from './hooks/useExportShared'
@@ -29,8 +29,8 @@ function ExportPage() {
       >
         <Tabs.ListContainer>
           <Tabs.List aria-label="导出模式">
-            <Tabs.Tab id="chat"><MessageSquare size={14} />聊天记录<Tabs.Indicator /></Tabs.Tab>
-            <Tabs.Tab id="database"><Database size={14} />数据库导出<Tabs.Indicator /></Tabs.Tab>
+            <Tabs.Tab id="chat"><Comment width={14} height={14} />聊天记录<Tabs.Indicator /></Tabs.Tab>
+            <Tabs.Tab id="database"><Database width={14} height={14} />数据库导出<Tabs.Indicator /></Tabs.Tab>
           </Tabs.List>
         </Tabs.ListContainer>
 

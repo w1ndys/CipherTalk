@@ -1542,11 +1542,11 @@ export function registerAiHandlers(ctx: MainProcessContext): void {
       const { refreshResolvedProxyUrl } = await import('../../services/ai/proxyFetch')
       await refreshResolvedProxyUrl()
       const providerConfig = resolveProviderConfig(payload.modelConfig)
-      const suggestions = await agentProcessService.replySuggest({
+      const result = await agentProcessService.replySuggest({
         ...payload.input,
         providerConfig,
       })
-      return { success: true, suggestions }
+      return { success: true, ...result }
     } catch (e) {
       return { success: false, error: e instanceof Error ? e.message : String(e) }
     }

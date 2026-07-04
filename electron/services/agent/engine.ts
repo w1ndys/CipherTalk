@@ -407,6 +407,14 @@ export type ReplySuggestInput = {
 /** 单次回复建议最多附带的图片张数 */
 const SUGGEST_IMAGE_LIMIT = 3
 
+export type ReplySuggestOutcome = {
+  suggestions: string[]
+  /** 实际附进请求的图片张数（0=没附：没传图/模型明确不支持视觉/全部解码失败） */
+  imagesAttached: number
+  /** 模型图像输入能力：true/false=目录明确标记，undefined=目录查不到（按可尝试处理） */
+  visionSupport: boolean | undefined
+}
+
 /** 我平均一轮连发达到该值就提示模型按连发习惯拆条（用"／"分隔） */
 const BURST_HINT_THRESHOLD = 1.5
 
@@ -422,14 +430,15 @@ const REPLY_STYLE_HINTS: Record<ReplySuggestStyle, string> = {
 export async function generateReplySuggestions(
   input: ReplySuggestInput,
   signal?: AbortSignal,
-): Promise<string[]> {
+): Promise<ReplySuggestOutcome> {
   const count = Math.min(5, Math.max(1, Math.round(input.count) || 3))
   const contactName = input.contactName.trim() || '对方'
+  const visionSupport = currentModelVisionSupport(input.providerConfig)
   const lines = input.context
     .map((m) => ({ ...m, text: m.text.trim() }))
     .filter((m) => m.text)
     .map((m) => `${m.fromMe ? '我' : contactName}：${m.text.slice(0, 300)}`)
-  if (lines.length === 0) return []
+  if (lines.length === 0) return { suggestions: [], imagesAttached: 0, visionSupport }
 
   const sessionId = input.sessionId?.trim()
   const fewShotParts: string[] = []
@@ -473,7 +482,7 @@ export async function generateReplySuggestions(
   // 多模态：把对方刚发来的图片附进请求。仅当模型被明确标记"不支持图像输入"时丢弃；
   // 目录里查不到（undefined）按可尝试处理，与 inspect_media_image 工具口径一致。
   const imageParts: Array<{ type: 'image'; image: Buffer; mediaType: string }> = []
-  if (input.images?.length && currentModelVisionSupport(input.providerConfig) !== false) {
+  if (input.images?.length && visionSupport !== false) {
     for (const img of input.images.slice(0, SUGGEST_IMAGE_LIMIT)) {
       try {
         const buffer = Buffer.from(img.base64, 'base64')
@@ -523,7 +532,11 @@ export async function generateReplySuggestions(
     abortSignal: signal,
   })
 
-  return parseReplySuggestions(result.text, count)
+  return {
+    suggestions: parseReplySuggestions(result.text, count),
+    imagesAttached: imageParts.length,
+    visionSupport,
+  }
 }
 
 function parseReplySuggestions(text: string, count: number): string[] {

@@ -90,8 +90,8 @@ async function handleMessage(msg: any): Promise<void> {
       case 'replySuggest': {
         const aborter = new AbortController()
         try {
-          const suggestions = await generateReplySuggestions(payload, aborter.signal)
-          parentPort!.postMessage({ id, result: { suggestions } })
+          const result = await generateReplySuggestions(payload, aborter.signal)
+          parentPort!.postMessage({ id, result })
         } finally {
           aborter.abort()
         }

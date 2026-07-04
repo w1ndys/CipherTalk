@@ -164,6 +164,12 @@ export function ReplySuggestBar({ session, messages }: { session: ChatSession; m
         buildSuggestContext(username, messages, current.deep),
         collectPendingImages(username, messages),
       ])
+      const voiceReplaced = context.filter((c) => c.text.startsWith('[语音] ')).length
+      console.log(
+        `[ReplySuggest] 生成开始：上下文 ${context.length} 条（语音转写 ${voiceReplaced} 条），待附图片 ${images.length} 张`
+        + `${images.length > 0 ? `（${images.map((img) => `${Math.round(img.base64.length * 0.75 / 1024)}KB`).join(' / ')}）` : ''}`
+        + `，风格=${current.style}，深度=${current.deep}`,
+      )
       const res = await window.electronAPI.agent.replySuggest({
         contactName: session.displayName || session.username,
         sessionId: session.username,
@@ -180,6 +186,10 @@ export function ReplySuggestBar({ session, messages }: { session: ChatSession; m
       // 生成期间切走了会话、或我已经自己回过了，丢弃结果
       if (sessionRef.current !== username || runSeqRef.current !== runSeq) return
       if (res.success && res.suggestions?.length) {
+        const vision = res.visionSupport === undefined ? '未知(按可尝试处理)' : res.visionSupport ? '支持' : '不支持'
+        console.log(
+          `[ReplySuggest] 生成完成：${res.suggestions.length} 条建议，实际附图 ${res.imagesAttached ?? 0} 张，模型图像输入=${vision}`,
+        )
         setSuggestions(res.suggestions)
       } else if (!res.success) {
         console.warn('[ReplySuggest] 生成失败:', res.error)

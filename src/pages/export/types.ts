@@ -1,4 +1,4 @@
-import type { LucideIcon } from 'lucide-react'
+import type { IconComponent } from '@/types/icon'
 
 export type ExportTab = 'chat' | 'database'
 
@@ -53,6 +53,6 @@ export interface ExportProgress {
 export interface FormatOption {
   value: string
   label: string
-  icon: LucideIcon
+  icon: IconComponent
   desc: string
 }
