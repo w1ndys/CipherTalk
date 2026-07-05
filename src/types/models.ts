@@ -115,3 +115,85 @@ export interface AnalyticsData {
   messagesByHour: number[]
   messagesByDay: number[]
 }
+
+export type RelationshipGraphRelationType = 'direct_chat' | 'same_group' | 'group_interaction'
+
+export interface RelationshipGraphNode {
+  id: string
+  label: string
+  avatarUrl?: string
+  kind: 'self' | 'friend' | 'group_member' | 'other'
+  communityId?: string
+  weightedDegree: number
+  degree: number
+  lastActiveTime?: number
+}
+
+export interface RelationshipGraphLink {
+  source: string
+  target: string
+  type: RelationshipGraphRelationType
+  weight: number
+  messageCount?: number
+  sharedGroupCount?: number
+  lastActiveTime?: number
+  evidenceSessionIds: string[]
+}
+
+export interface RelationshipGraphOptions {
+  startTime?: number
+  endTime?: number
+  relationTypes?: RelationshipGraphRelationType[]
+  minWeight?: number
+  includeIsolated?: boolean
+  query?: string
+  communityId?: string
+}
+
+export interface RelationshipGraphCommunity {
+  id: string
+  label: string
+  size: number
+  weight: number
+}
+
+export interface RelationshipGraphStats {
+  nodeCount: number
+  linkCount: number
+  directChatCount: number
+  sameGroupCount: number
+  groupInteractionCount: number
+  isolatedCount: number
+  communityCount: number
+  builtAt: number
+  stale: boolean
+}
+
+export interface RelationshipGraphResult {
+  success: boolean
+  nodes?: RelationshipGraphNode[]
+  links?: RelationshipGraphLink[]
+  communities?: RelationshipGraphCommunity[]
+  rankings?: {
+    central: RelationshipGraphNode[]
+    isolated: RelationshipGraphNode[]
+    active: RelationshipGraphNode[]
+  }
+  similar?: Record<string, RelationshipGraphNode[]>
+  stats?: RelationshipGraphStats
+  error?: string
+}
+
+export interface RelationshipGraphPathResult {
+  success: boolean
+  nodeIds?: string[]
+  links?: RelationshipGraphLink[]
+  error?: string
+}
+
+export interface RelationshipGraphBuildProgress {
+  stage: 'loading' | 'sessions' | 'groups' | 'analyzing' | 'caching' | 'done' | 'error'
+  message: string
+  current?: number
+  total?: number
+}

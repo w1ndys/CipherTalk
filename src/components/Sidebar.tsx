@@ -1,7 +1,7 @@
 ﻿import { useEffect, useState, type ReactElement, type CSSProperties, type Key } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { Avatar, Button, ScrollShadow, Separator, Tabs, Tooltip } from '@heroui/react'
-import { House, Comment, Database, Gear, ChevronLeft, ChevronRight, ArrowDownToLine, Aperture, FaceRobot, Ghost, BookOpen, LogoMcp, PersonGear } from '@gravity-ui/icons'
+import { House, Comment, Database, Gear, ChevronLeft, ChevronRight, ArrowDownToLine, Aperture, FaceRobot, Ghost, BookOpen, LogoMcp, PersonGear, NodesRight } from '@gravity-ui/icons'
 import packageJson from '../../package.json'
 import { useAppStore } from '../stores/appStore'
 import { usePluginStore, ensurePluginStoreSubscribed, selectEnabledPlugins } from '../stores/pluginStore'
@@ -88,6 +88,7 @@ function Sidebar({ autoCollapse = false }: { autoCollapse?: boolean }) {
     { key: 'agent', label: 'CT-Agent', icon: <FaceRobot width={NAV_ICON_SIZE} height={NAV_ICON_SIZE} />, type: 'route', path: '/agent' },
     { key: 'personas', label: 'AI 克隆', icon: <PersonGear width={NAV_ICON_SIZE} height={NAV_ICON_SIZE} />, type: 'route', path: '/personas' },
     { key: 'diary', label: '日记', icon: <BookOpen width={NAV_ICON_SIZE} height={NAV_ICON_SIZE} />, type: 'route', path: '/diary' },
+    { key: 'relationship-graph', label: '关系网络', icon: <NodesRight width={NAV_ICON_SIZE} height={NAV_ICON_SIZE} />, type: 'route', path: '/relationship-graph' },
     { key: 'pets', label: 'AI 宠物', icon: <Ghost width={NAV_ICON_SIZE} height={NAV_ICON_SIZE} />, type: 'route', path: '/pets' },
     { key: 'chat', label: '聊天查看', icon: <Comment width={NAV_ICON_SIZE} height={NAV_ICON_SIZE} />, type: 'action', onClick: openChatWindow },
     { key: 'moments', label: '朋友圈', icon: <Aperture width={NAV_ICON_SIZE} height={NAV_ICON_SIZE} />, type: 'action', onClick: openMomentsWindow },

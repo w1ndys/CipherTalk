@@ -17,6 +17,7 @@ import McpPage from './pages/McpPage'
 import AgentPage from './pages/agent/AgentPage'
 import PersonasPage from './pages/PersonasPage'
 import DiaryPage from './pages/DiaryPage'
+import RelationshipGraphPage from './pages/RelationshipGraphPage'
 import ExportPage from './pages/export/ExportPage'
 import ActivationPage from './pages/ActivationPage'
 import ImageWindow from './pages/ImageWindow'
@@ -81,7 +82,7 @@ type UpdateDownloadProgressPayload = {
   bytesPerSecond: number
 }
 
-const MAIN_WINDOW_NAV_ROUTES = new Set(['/home', '/agent', '/personas', '/settings', '/pets', '/diary', '/export'])
+const MAIN_WINDOW_NAV_ROUTES = new Set(['/home', '/agent', '/personas', '/settings', '/pets', '/diary', '/relationship-graph', '/export'])
 
 function App() {
   const navigate = useNavigate()
@@ -735,13 +736,13 @@ function App() {
   }
 
   // 主窗口 - 完整布局
-  const disableContentOverflow = ['/data-management', '/settings', '/mcp', '/agent', '/personas', '/diary', '/pets'].includes(location.pathname)
+  const disableContentOverflow = ['/data-management', '/settings', '/mcp', '/agent', '/personas', '/diary', '/pets', '/relationship-graph'].includes(location.pathname)
   const fullPageRoutes = ['/home']
   const isFullPage = fullPageRoutes.includes(location.pathname)
   const edgeToEdgeRoutes: string[] = []
   const isEdgeToEdge = edgeToEdgeRoutes.includes(location.pathname)
   const isAgentPage = location.pathname === '/agent'
-  const isFlushContentPage = isAgentPage || location.pathname === '/personas'
+  const isFlushContentPage = isAgentPage || location.pathname === '/personas' || location.pathname === '/relationship-graph'
   const pendingMemoryMigrationStatus = !isLocked && memoryMigrationStatus?.needed ? memoryMigrationStatus : null
 
   return (
@@ -867,6 +868,7 @@ function App() {
               <Route path="/agent" element={<AgentPage />} />
               <Route path="/personas" element={<PersonasPage />} />
               <Route path="/diary" element={<DiaryPage />} />
+              <Route path="/relationship-graph" element={<RelationshipGraphPage />} />
               <Route path="/pets" element={<PetsPage />} />
               <Route path="/export" element={<ExportPage />} />
               <Route path="/device-connect" element={<Navigate to="/home" replace />} />
