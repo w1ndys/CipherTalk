@@ -312,6 +312,10 @@ export class AgentConversationStore {
     } else if (options.scope?.kind === 'global') {
       filters.push('scope_kind = @scopeKind')
       params.scopeKind = 'global'
+    } else {
+      // 不带 scope = Agent 页历史列表：分身对话只属于分身窗口（persona:chat 引擎），
+      // 混进 Agent 页会被当普通 Agent 会话续聊，提示词/工具全走错
+      filters.push("scope_kind != 'persona'")
     }
 
     const rows = db.prepare(`

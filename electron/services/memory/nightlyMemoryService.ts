@@ -70,6 +70,53 @@ async function readUnreadSessionMessages(session: ChatSession): Promise<Message[
   return [...result.messages].sort((a, b) => Number(a.createTime || 0) - Number(b.createTime || 0))
 }
 
+const DAY_SESSION_LIMIT = 12
+const DAY_MESSAGES_PER_SESSION = 15
+const DAY_SESSION_FETCH = 80
+
+/**
+ * 目标日的真实聊天摘要（读没读都算）：日记的主素材。
+ * 未读消息只反映"没点开的推送"，用户自己参与过的对话才是这一天的生活。
+ */
+export async function readTodayChatDiarySource(date: string): Promise<string> {
+  const dayStartMs = new Date(`${date}T00:00:00`).getTime()
+  if (!Number.isFinite(dayStartMs)) return ''
+  const dayStartSec = Math.floor(dayStartMs / 1000)
+  const dayEndSec = dayStartSec + 24 * 3600
+
+  const sessionsResult = await chatService.getSessions(0, 300)
+  if (!sessionsResult.success || !Array.isArray(sessionsResult.sessions)) return ''
+  const candidates = sessionsResult.sessions
+    .filter(isPrivateDiarySession)
+    .filter((session) => Number(session.lastTimestamp || 0) >= dayStartSec)
+    .sort((a, b) => Number(b.lastTimestamp || 0) - Number(a.lastTimestamp || 0))
+    .slice(0, DAY_SESSION_LIMIT + 6) // 多取几个候选，窗口内没消息的会被丢掉
+
+  const blocks: Array<{ mine: boolean; count: number; text: string }> = []
+  for (const session of candidates) {
+    const result = await chatService.getMessages(session.username, 0, DAY_SESSION_FETCH)
+    if (!result.success || !Array.isArray(result.messages)) continue
+    const dayMessages = result.messages
+      .filter((m) => Number(m.createTime || 0) >= dayStartSec && Number(m.createTime || 0) < dayEndSec)
+      .sort((a, b) => Number(a.createTime || 0) - Number(b.createTime || 0))
+      .slice(-DAY_MESSAGES_PER_SESSION)
+    if (dayMessages.length === 0) continue
+    const displayName = session.displayName || session.username
+    const mine = dayMessages.some((m) => Boolean(m.isSend))
+    blocks.push({
+      mine,
+      count: dayMessages.length,
+      text: [
+        `### ${displayName}${mine ? '' : '（只有对方在说，我没回）'}`,
+        ...dayMessages.map((m) => `- ${formatDiaryTime(m.createTime)} ${m.isSend ? '我' : displayName}：${messageText(m)}`)
+      ].join('\n')
+    })
+  }
+  // 我参与过的对话排前面：那才是这一天真正的生活
+  blocks.sort((a, b) => Number(b.mine) - Number(a.mine) || b.count - a.count)
+  return blocks.slice(0, DAY_SESSION_LIMIT).map((b) => b.text).join('\n\n').slice(0, 12_000)
+}
+
 class NightlyMemoryService {
   private ctx: MainProcessContext | null = null
   private timer: NodeJS.Timeout | null = null
@@ -111,12 +158,19 @@ class NightlyMemoryService {
     const customPrompt = String(config.get('diaryCustomPrompt') || '').trim()
     this.running = true
     try {
-      const [{ resolveProviderConfig }, { maybeRunDailyConsolidation }] = await Promise.all([
+      const [{ resolveProviderConfig }, { maybeRunDailyConsolidation }, { memoryDatabase }] = await Promise.all([
         import('../agent/resolveProviderConfig'),
-        import('../agent/tools/memory')
+        import('../agent/tools/memory'),
+        import('./memoryDatabase')
       ])
-      const unreadMessages = await readUnreadDiarySource().catch(() => '')
-      await maybeRunDailyConsolidation(resolveProviderConfig(), undefined, { unreadMessages, summaryHour, customPrompt })
+      // 先确认到点要写哪天的日记，没到点就不白读聊天库
+      const date = memoryDatabase.getDailyConsolidationTarget(undefined, summaryHour)
+      if (!date) return
+      const [unreadMessages, dayMessages] = await Promise.all([
+        readUnreadDiarySource().catch(() => ''),
+        readTodayChatDiarySource(date).catch(() => '')
+      ])
+      await maybeRunDailyConsolidation(resolveProviderConfig(), undefined, { unreadMessages, dayMessages, summaryHour, customPrompt })
       this.ctx?.getLogService()?.info('NightlyMemory', '夜间记忆整理检查完成')
     } catch (error) {
       this.ctx?.getLogService()?.warn('NightlyMemory', '夜间记忆整理跳过', { error: error instanceof Error ? error.message : String(error) })

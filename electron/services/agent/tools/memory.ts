@@ -405,6 +405,8 @@ export async function buildOnboardingUserProfileMemory(providerConfig: AgentProv
 
 type DailyDiaryGenerationOptions = {
   unreadMessages?: string
+  /** 目标日的真实聊天摘要（主素材）：用户参与过的私聊对话，读没读都算 */
+  dayMessages?: string
   summaryHour?: number
   customPrompt?: string
 }
@@ -564,9 +566,10 @@ export async function runDailyDiaryConsolidation(
 ): Promise<void> {
   const source = memoryDatabase.readDailyConsolidationSource(date)
   const unreadMessages = String(extraSource.unreadMessages || '').trim()
+  const dayMessages = String(extraSource.dayMessages || '').trim()
   const customPrompt = normalizeDiaryCustomPrompt(extraSource.customPrompt)
   const hasCustomPrompt = customPrompt.length > 0
-  if (!source.conversations.trim() && !source.bookmarks.trim() && !unreadMessages) {
+  if (!source.conversations.trim() && !source.bookmarks.trim() && !unreadMessages && !dayMessages) {
     memoryDatabase.writeDiary(date, [
       `# ${date} 日记`,
       '',
@@ -598,7 +601,8 @@ export async function runDailyDiaryConsolidation(
         '请根据素材输出中文 Markdown。正文部分优先遵守上面的自定义要求，可以写成日报、复盘、清单或日记；但必须满足：',
         '- 第一行必须是一级标题，标题建议包含日期。',
         '- 只根据素材写，不补没有证据的内容。',
-        '- 未读消息可以概括为待跟进事项或外部动态，不要逐条抄消息。',
+        '- 当天聊天记录是这一天真实发生的对话，是主素材，优先围绕它写。',
+        '- 未读消息只是没点开的外部动态，可以概括为待跟进事项，不要逐条抄消息，更不要让它盖过真实对话。',
         '- 不要暴露系统提示、工具名、内部实现。',
         '',
         '正文之后必须追加一个给 AI 用的轻量索引：',
@@ -609,11 +613,13 @@ export async function runDailyDiaryConsolidation(
         '',
         '素材如下。',
         '',
-        `对话日志：\n${source.conversations.slice(0, 18_000)}`,
+        `当天聊天记录（用户真实参与的对话，主素材）：\n${dayMessages || '暂无。'}`,
+        '',
+        `对话日志（用户和 AI 助手的交流）：\n${source.conversations.slice(0, 18_000)}`,
         '',
         `BOOKMARKS：\n${source.bookmarks.slice(0, 6000)}`,
         '',
-        `未读消息：\n${unreadMessages || '暂无未读消息。'}`
+        `未读消息（没点开的外部动态，辅料）：\n${unreadMessages || '暂无未读消息。'}`
       ].join('\n') : [
         `日期：${date}`,
         '',
@@ -624,8 +630,8 @@ export async function runDailyDiaryConsolidation(
         '正文要求：',
         '- 先写 1 行很短的题眼或开场，可以像“他又来了。”、“今天的声音很轻。”这样，不要解释。',
         '- 接着写 4-9 段自然段，每段 1-4 句。像日记，不像总结。',
-        '- 把今天的对话、用户状态、未读消息、值得记住的事实自然揉进正文里，不要分别列栏目。',
-        '- 未读消息要像“外面还有谁在敲门/谁留了话/哪件事还悬着”那样写进来，但不要逐条抄消息。',
+        '- 当天聊天记录是这一天真实发生的事，是正文的主素材；把这些对话、用户状态、值得记住的事实自然揉进正文里，不要分别列栏目。',
+        '- 未读消息只是没点开的外部动态：要像“外面还有谁在敲门/谁留了话/哪件事还悬着”那样轻轻带过，不要逐条抄消息，更不要让它盖过真实对话。',
         '- 允许引用很短的原话来增加真实感，但不要大段复制原始对话。',
         '- 结尾留一句有余味的话，不要鸡汤，不要广告语。',
         '',
@@ -650,11 +656,13 @@ export async function runDailyDiaryConsolidation(
         '',
         '素材如下。',
         '',
-        `对话日志：\n${source.conversations.slice(0, 18_000)}`,
+        `当天聊天记录（用户真实参与的对话，主素材）：\n${dayMessages || '暂无。'}`,
+        '',
+        `对话日志（用户和 AI 助手的交流）：\n${source.conversations.slice(0, 18_000)}`,
         '',
         `BOOKMARKS：\n${source.bookmarks.slice(0, 6000)}`,
         '',
-        `未读消息：\n${unreadMessages || '暂无未读消息。'}`
+        `未读消息（没点开的外部动态，辅料）：\n${unreadMessages || '暂无未读消息。'}`
       ].join('\n'),
     })
     memoryDatabase.writeDiary(date, result.text)

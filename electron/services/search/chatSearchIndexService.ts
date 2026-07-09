@@ -791,6 +791,92 @@ export class ChatSearchIndexService {
     }
   }
 
+  /**
+   * 把已有的部分索引向更早的历史续扫（不推倒重建），直到 indexedCount ≥ targetIndexed 或扫完全部。
+   * 没有索引时按 targetIndexed 建部分索引；已完整或已够深时直接返回现状。
+   * 供搜索命中不足时逐步加深覆盖（Agent 工具用）。
+   */
+  async deepenSessionIndex(
+    sessionId: string,
+    targetIndexed: number,
+    onProgress?: ChatSearchSessionOptions['onProgress']
+  ): Promise<ChatSearchIndexState> {
+    const db = this.getDb()
+    const state = this.getSessionState(db, sessionId)
+    if (!state || state.indexedCount === 0) {
+      return this.ensureSessionIndexed(sessionId, onProgress, { maxMessages: targetIndexed, reusePartial: true })
+    }
+    if (state.isComplete || state.indexedCount >= targetIndexed) return state
+
+    const oldestRow = db.prepare(`
+      SELECT sort_seq, create_time, local_id FROM message_index
+      WHERE session_id = ?
+      ORDER BY sort_seq ASC, create_time ASC, local_id ASC LIMIT 1
+    `).get(sessionId) as { sort_seq: number; create_time: number; local_id: number } | undefined
+    if (!oldestRow) {
+      return this.ensureSessionIndexed(sessionId, onProgress, { maxMessages: targetIndexed })
+    }
+
+    let cursor = {
+      sortSeq: Number(oldestRow.sort_seq),
+      createTime: Number(oldestRow.create_time),
+      localId: Number(oldestRow.local_id)
+    }
+    let indexed = state.indexedCount
+    let scanned = 0
+    let hasMore = true
+
+    await this.report({
+      stage: 'preparing_index',
+      sessionId,
+      message: '正在向更早的聊天记录扩展搜索索引',
+      indexedCount: indexed
+    }, onProgress)
+
+    while (hasMore && indexed < targetIndexed) {
+      const result = await chatService.getMessagesBefore(
+        sessionId,
+        cursor.sortSeq,
+        INDEX_BATCH_SIZE,
+        cursor.createTime,
+        cursor.localId
+      )
+      if (!result.success) {
+        throw new Error(result.error || '扩展搜索索引失败')
+      }
+      const messages = result.messages || []
+      if (messages.length === 0) break
+      await this.upsertMessages(db, sessionId, messages)
+      scanned += messages.length
+      indexed = this.getIndexedCount(db, sessionId)
+      const oldest = messages[0]
+      cursor = { sortSeq: oldest.sortSeq, createTime: oldest.createTime, localId: oldest.localId }
+      hasMore = Boolean(result.hasMore)
+
+      await this.report({
+        stage: 'indexing_messages',
+        sessionId,
+        message: `已向更早扩展 ${scanned} 条消息`,
+        messagesScanned: scanned,
+        indexedCount: indexed
+      }, onProgress)
+      await this.yieldToEventLoop()
+    }
+
+    // newest 传 null：加深只动旧端，新端水位保持不变
+    const nextState = this.updateSessionState(db, sessionId, null, !hasMore)
+    await this.report({
+      stage: 'completed',
+      sessionId,
+      message: nextState.isComplete
+        ? `搜索索引已覆盖全部 ${nextState.indexedCount} 条消息`
+        : `搜索索引已扩展到 ${nextState.indexedCount} 条消息`,
+      messagesScanned: scanned,
+      indexedCount: nextState.indexedCount
+    }, onProgress)
+    return nextState
+  }
+
   private async ensureSessionIndexedOnce(
     sessionId: string,
     onProgress?: ChatSearchSessionOptions['onProgress'],
