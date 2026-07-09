@@ -83,11 +83,13 @@ export class PersonaPairStore {
         pair_time INTEGER NOT NULL,
         user_text TEXT NOT NULL,
         replies_json TEXT NOT NULL,
+        context_text TEXT,
         dim INTEGER NOT NULL DEFAULT 0,
         embedding BLOB
       );
       CREATE INDEX IF NOT EXISTS idx_pp_session ON persona_pairs(account_id, session_id, pair_time);
     `)
+    try { db.exec('ALTER TABLE persona_pairs ADD COLUMN context_text TEXT') } catch { /* 列已存在 */ }
     this.db = db
     this.dbPath = nextDbPath
     return db
@@ -98,12 +100,12 @@ export class PersonaPairStore {
     const db = this.getDb()
     const accountId = this.getAccountId()
     const insert = db.prepare(
-      'INSERT INTO persona_pairs (account_id, session_id, pair_time, user_text, replies_json) VALUES (?, ?, ?, ?, ?)'
+      'INSERT INTO persona_pairs (account_id, session_id, pair_time, user_text, replies_json, context_text) VALUES (?, ?, ?, ?, ?, ?)'
     )
     const tx = db.transaction(() => {
       db.prepare('DELETE FROM persona_pairs WHERE account_id = ? AND session_id = ?').run(accountId, sessionId)
       for (const p of pairs.slice(-PAIRS_CAP)) {
-        insert.run(accountId, sessionId, p.time, p.user, JSON.stringify(p.replies))
+        insert.run(accountId, sessionId, p.time, p.user, JSON.stringify(p.replies), p.context ?? null)
       }
     })
     tx()
@@ -115,10 +117,10 @@ export class PersonaPairStore {
     const db = this.getDb()
     const accountId = this.getAccountId()
     const insert = db.prepare(
-      'INSERT INTO persona_pairs (account_id, session_id, pair_time, user_text, replies_json) VALUES (?, ?, ?, ?, ?)'
+      'INSERT INTO persona_pairs (account_id, session_id, pair_time, user_text, replies_json, context_text) VALUES (?, ?, ?, ?, ?, ?)'
     )
     const tx = db.transaction(() => {
-      for (const p of pairs) insert.run(accountId, sessionId, p.time, p.user, JSON.stringify(p.replies))
+      for (const p of pairs) insert.run(accountId, sessionId, p.time, p.user, JSON.stringify(p.replies), p.context ?? null)
       db.prepare(`
         DELETE FROM persona_pairs
         WHERE account_id = @accountId AND session_id = @sessionId AND id NOT IN (
@@ -184,15 +186,16 @@ export class PersonaPairStore {
   /**
    * 按当前用户输入检索最相似的真实问答对。
    * 嵌入就绪走向量 KNN，否则/失败用二元组重合度兜底；都没有命中返回 []。
+   * contextQuery（近几轮拼接）只用于向量路径；二元组兜底仍用单句 query，长文本会稀释重合度得分。
    */
-  async search(sessionId: string, query: string, limit: number): Promise<PersonaPairHit[]> {
+  async search(sessionId: string, query: string, limit: number, contextQuery?: string): Promise<PersonaPairHit[]> {
     const q = query.trim()
     if (!q) return []
     const db = this.getDb()
     const rows = db.prepare(
-      'SELECT pair_time, user_text, replies_json, dim, embedding FROM persona_pairs WHERE account_id = ? AND session_id = ?'
+      'SELECT pair_time, user_text, replies_json, context_text, dim, embedding FROM persona_pairs WHERE account_id = ? AND session_id = ?'
     ).all(this.getAccountId(), sessionId) as Array<{
-      pair_time: number; user_text: string; replies_json: string; dim: number; embedding: Buffer | null
+      pair_time: number; user_text: string; replies_json: string; context_text: string | null; dim: number; embedding: Buffer | null
     }>
     if (rows.length === 0) return []
 
@@ -200,6 +203,7 @@ export class PersonaPairStore {
       time: r.pair_time,
       user: r.user_text,
       replies: JSON.parse(r.replies_json) as string[],
+      ...(r.context_text ? { context: r.context_text } : {}),
       score,
     })
 
@@ -207,7 +211,7 @@ export class PersonaPairStore {
       const { getEmbeddingConfig, embedQuery } = await import('../../ai/embeddingService')
       const cfg = getEmbeddingConfig()
       if (cfg?.enabled && cfg.apiKey && cfg.model) {
-        const queryVec = await embedQuery(q, cfg)
+        const queryVec = await embedQuery(contextQuery?.trim() || q, cfg)
         const scored: Array<{ r: (typeof rows)[number]; score: number }> = []
         for (const r of rows) {
           if (!r.embedding || r.dim !== queryVec.length) continue

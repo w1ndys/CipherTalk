@@ -216,31 +216,52 @@ async function emitCompleteTextAsUiChunks(
   return true
 }
 
-function lastUserText(messages: ModelMessage[]): string {
-  for (let i = messages.length - 1; i >= 0; i -= 1) {
-    const m = messages[i]
-    if (m.role !== 'user') continue
-    if (typeof m.content === 'string') return m.content
-    if (Array.isArray(m.content)) {
-      return m.content
-        .map((p) => (p && typeof p === 'object' && 'type' in p && p.type === 'text' ? String(p.text || '') : ''))
-        .filter(Boolean)
-        .join('\n')
-    }
-    return ''
+function messageTextOf(m: ModelMessage): string {
+  if (typeof m.content === 'string') return m.content
+  if (Array.isArray(m.content)) {
+    return m.content
+      .map((p) => (p && typeof p === 'object' && 'type' in p && p.type === 'text' ? String(p.text || '') : ''))
+      .filter(Boolean)
+      .join('\n')
   }
   return ''
 }
 
-/** 记忆预检索：嵌入就绪走会话片段向量（首聊触发懒构建，进度上报），否则/失败关键词兜底。 */
-async function retrieveMemories(sessionId: string, query: string, outputMode: PersonaChatInput['outputMode'] = 'app'): Promise<string[]> {
+function lastUserText(messages: ModelMessage[]): string {
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    if (messages[i].role !== 'user') continue
+    return messageTextOf(messages[i])
+  }
+  return ''
+}
+
+/** 向量检索用的近几轮对话拼接（截尾 capChars）：「那你觉得呢」这类承接句单独拿去检索等于抽奖。 */
+function recentConversationText(messages: ModelMessage[], capChars = 300): string {
+  const parts: string[] = []
+  let used = 0
+  for (let i = messages.length - 1; i >= 0 && used < capChars; i -= 1) {
+    const m = messages[i]
+    if (m.role !== 'user' && m.role !== 'assistant') continue
+    const text = messageTextOf(m).trim()
+    if (!text) continue
+    parts.push(text)
+    used += text.length
+  }
+  return parts.reverse().join('\n').slice(-capChars)
+}
+
+/**
+ * 记忆预检索：嵌入就绪走会话片段向量（首聊触发懒构建，进度上报），否则/失败关键词兜底。
+ * contextQuery（近几轮拼接）只喂向量路径；关键词兜底仍用单句 query，长文本会稀释 FTS 命中。
+ */
+async function retrieveMemories(sessionId: string, query: string, outputMode: PersonaChatInput['outputMode'] = 'app', contextQuery?: string): Promise<string[]> {
   const lineJoiner = outputMode === 'wechat' ? BURST_JOINER : ' / '
   try {
     const { getEmbeddingConfig } = await import('../../ai/embeddingService')
     const { messageVectorService, embedQuery } = await import('../../search/messageVectorService')
     const cfg = getEmbeddingConfig()
     if (messageVectorService.isReady(cfg)) {
-      const queryVec = await embedQuery(query, cfg)
+      const queryVec = await embedQuery(contextQuery?.trim() || query, cfg)
       await messageVectorService.ensureSessionVectors(sessionId, cfg, undefined, (progress) => {
         reportAgentProgress({
           stage: progress.stage === 'embedding' ? 'indexing' : 'searching',
@@ -265,11 +286,11 @@ async function retrieveMemories(sessionId: string, query: string, outputMode: Pe
 }
 
 /** 检索式 few-shot：按当前输入找 TA 过去遇到类似话时的真实回复（失败静默）。 */
-async function retrieveSimilarPairs(sessionId: string, query: string): Promise<PersonaFewShot[]> {
+async function retrieveSimilarPairs(sessionId: string, query: string, contextQuery?: string): Promise<PersonaFewShot[]> {
   try {
     const { personaPairStore } = await import('./personaPairStore')
-    const hits = await personaPairStore.search(sessionId, query, PAIR_TOP_K)
-    return hits.map((h) => ({ user: h.user, replies: h.replies }))
+    const hits = await personaPairStore.search(sessionId, query, PAIR_TOP_K, contextQuery)
+    return hits.map((h) => ({ user: h.user, replies: h.replies, ...(h.context ? { context: h.context } : {}) }))
   } catch {
     return []
   }
@@ -343,7 +364,8 @@ export function buildPersonaSystemPrompt(
     lines.push(
       '',
       '【你过去遇到类似话题时的真实回复】（最值得参考的范例：当时就是这么回的，语气、长度、分条都照这个感觉来）',
-      ...freshPairs.map((s) => `对方: ${s.user}\n你: ${s.replies.join(replyJoiner)}`),
+      ...freshPairs.map((s) =>
+        `${s.context ? `(之前聊到: ${s.context})\n` : ''}对方: ${s.user}\n你: ${s.replies.join(replyJoiner)}`),
     )
   }
 
@@ -408,10 +430,11 @@ export async function runPersonaChat(
     const userText = lastUserText(input.messages)
     const outputMode = input.outputMode || 'app'
     reportAgentProgress({ stage: 'run_started', title: '正在回忆相关聊天' })
+    const contextQuery = recentConversationText(input.messages)
     const [memories, similarPairs] = userText
       ? await Promise.all([
-          retrieveMemories(input.persona.sessionId, userText, outputMode),
-          retrieveSimilarPairs(input.persona.sessionId, userText),
+          retrieveMemories(input.persona.sessionId, userText, outputMode, contextQuery),
+          retrieveSimilarPairs(input.persona.sessionId, userText, contextQuery),
         ])
       : [[], []]
 

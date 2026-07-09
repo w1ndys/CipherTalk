@@ -26,6 +26,8 @@ export interface PersonaCard {
 export interface PersonaFewShot {
   user: string
   replies: string[]
+  /** 问句的前一轮话题（截断），接梗/回调类回复靠它还原语境；旧数据/黄金样本无此字段 */
+  context?: string
 }
 
 /**
@@ -51,6 +53,8 @@ export interface PersonaPair {
   time: number
   user: string
   replies: string[]
+  /** user 的再前一轮（截断）：还原「接的是什么话」，旧数据无此字段 */
+  context?: string
 }
 
 /**
