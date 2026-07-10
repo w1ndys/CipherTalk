@@ -11,9 +11,19 @@ import {
   MOMENT_EMOJI_TYPE,
   MOMENT_IMAGE_TYPE,
   MOMENT_TEXT_TYPE,
+  MOMENT_VOICE_TYPE,
   type RandomMomentSnippet
 } from '../features/home/randomMoment'
 import './HomePage.css'
+
+// 刷新按钮是 32px 圆形，玻璃贴图用全圆角 + 折射带铺满（edgeSize 盖过半径）
+const REFRESH_BTN_GLASS = {
+  radii: { topLeft: 16, topRight: 16, bottomRight: 16, bottomLeft: 16 },
+  edgeSize: 14,
+  edgeStrength: 7,
+  surface: 0,
+  strength: 6,
+}
 
 function HomePage() {
   const { isDbConnected } = useAppStore()
@@ -132,6 +142,7 @@ function HomePage() {
 
   const momentLt = randomSnippet?.message.localType
   const isTextBubble = momentLt === MOMENT_TEXT_TYPE
+  const isVoiceBubble = momentLt === MOMENT_VOICE_TYPE
   const isImageOrEmojiBare = momentLt === MOMENT_IMAGE_TYPE || momentLt === MOMENT_EMOJI_TYPE
   const customBackgroundKey = `${homeBackground.customType}:${homeBackground.customUrl}`
   const presetBackgroundSrc = getHomeBackgroundPresetSrc(homeBackground.preset)
@@ -238,22 +249,28 @@ function HomePage() {
                       <LiquidGlassBubble>
                         <RandomMomentBubble sessionId={randomSnippet.sessionId} message={randomSnippet.message} />
                       </LiquidGlassBubble>
+                    ) : isVoiceBubble ? (
+                      <LiquidGlassBubble as="div" className="random-message-body random-message-body--glass random-message-body--media">
+                        <RandomMomentBubble sessionId={randomSnippet.sessionId} message={randomSnippet.message} />
+                      </LiquidGlassBubble>
                     ) : (
                       <div className="random-message-body random-message-body--media">
                         <RandomMomentBubble sessionId={randomSnippet.sessionId} message={randomSnippet.message} />
                       </div>
                     )}
                   </div>
-                  <button
+                  <LiquidGlassBubble
+                    as="button"
                     type="button"
-                    className="random-message-refresh-btn"
+                    glass={REFRESH_BTN_GLASS}
+                    className="random-message-refresh-btn random-message-refresh-btn--glass"
                     onClick={() => fetchRandomSnippet()}
                     disabled={randomSnippetLoading}
                     data-tooltip="换一条"
                     aria-label="换一条"
                   >
                     <ArrowsRotateLeft width={15} height={15} className={randomSnippetLoading ? 'spinning' : undefined} aria-hidden />
-                  </button>
+                  </LiquidGlassBubble>
                 </div>
               </div>
             </div>
